@@ -1,24 +1,48 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
 <meta charset="UTF-8">
 <title>MacroMap — Hit your macros. Stay on budget. Without the spreadsheets.</title>
 <meta name="description" content="MacroMap turns a weekly macro and budget goal into a full meal plan, a deduped grocery list, and a nutrition dashboard.">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg: #0e0e10;
-    --surface: #16161a;
-    --surface2: #1e1e23;
-    --border: #2a2a32;
-    --accent: #7c6af7;
-    --accent2: #a594ff;
+    /* Status Colors */
     --green: #22c55e;
     --yellow: #f59e0b;
-    --orange: #f97316;
     --red: #ef4444;
+
+    /* Dark Theme (Default) */
+    --bg: #0e0e10;
+    --surface: rgba(22, 22, 26, 0.65);
+    --surface2: rgba(30, 30, 35, 0.65);
+    --border: rgba(255, 255, 255, 0.1);
+    --accent: #ff5a1f; 
+    --accent-bg: rgba(255, 90, 31, 0.15);
+    --accent2: #ff8a66; 
     --text: #f2f2f4;
     --muted: #9a9aa5;
     --subtle: #5b5b66;
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  [data-theme="light"] {
+    --bg: #f3f4f6;
+    --surface: rgba(255, 255, 255, 0.85);
+    --surface2: rgba(255, 255, 255, 0.5);
+    --border: rgba(0, 0, 0, 0.08);
+    --accent: #e04a14; 
+    --accent-bg: rgba(224, 74, 20, 0.1);
+    --accent2: #ff5a1f;
+    --text: #111827;
+    --muted: #4b5563;
+    --subtle: #9ca3af;
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.04);
   }
 
   html { scroll-behavior: smooth; }
@@ -26,406 +50,234 @@
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     line-height: 1.5;
     overflow-x: hidden;
+    transition: background 0.3s ease, color 0.3s ease;
   }
 
+  /* Custom Premium Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--subtle); border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  .mono { font-family: 'JetBrains Mono', monospace; }
   a { color: inherit; }
+  svg { flex-shrink: 0; }
 
-  .container {
-    max-width: 1120px;
-    margin: 0 auto;
-    padding: 0 24px;
+  /* Glassmorphism Utility */
+  .glass {
+    background: var(--surface);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    box-shadow: var(--glass-shadow);
   }
 
-  section { padding: 96px 0; border-bottom: 1px solid var(--border); }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 96px 0; border-bottom: 1px solid var(--border); transition: border-color 0.3s; }
   section:last-of-type { border-bottom: none; }
 
   .eyebrow {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--accent2);
-    margin-bottom: 12px;
-    display: block;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent2); margin-bottom: 12px; display: block;
   }
-
   h1, h2, h3, h4 { font-weight: 700; letter-spacing: -0.02em; }
   h2 { font-size: 34px; margin-bottom: 16px; }
   .section-sub { color: var(--muted); font-size: 16px; max-width: 640px; margin-bottom: 48px; }
 
   /* ─── Nav ─── */
   header.nav {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    background: rgba(14,14,16,0.85);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 50;
+    background: var(--surface); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border); transition: background 0.3s ease, border-color 0.3s ease;
   }
+  .nav-inner { max-width: 1120px; margin: 0 auto; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-size: 19px; font-weight: 800; color: var(--text); letter-spacing: -0.03em; display: flex; align-items: center; gap: 6px; }
+  .logo svg { color: var(--accent); }
 
-  .nav-inner {
-    max-width: 1120px;
-    margin: 0 auto;
-    padding: 16px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  .nav-links { display: flex; align-items: center; gap: 32px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .nav-links a:hover { color: var(--text); transition: color 0.2s; }
+
+  #themeToggle {
+    background: transparent; border: 1px solid var(--border); border-radius: 50%; width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text); transition: all 0.2s;
   }
-
-  .logo { font-size: 19px; font-weight: 800; color: var(--text); letter-spacing: -0.03em; }
-  .logo span { color: var(--accent2); }
-
-  .nav-links {
-    display: flex;
-    gap: 32px;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--muted);
-  }
-
-  .nav-links a:hover { color: var(--text); }
+  #themeToggle:hover { border-color: var(--accent); background: var(--surface2); }
+  #themeToggle:active { transform: scale(0.92); }
 
   .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    border-radius: 10px;
-    padding: 11px 20px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    border: none;
-    text-decoration: none;
-    transition: all 0.15s;
-    white-space: nowrap;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border-radius: 10px; padding: 11px 20px; font-size: 14px; font-weight: 600;
+    cursor: pointer; border: none; text-decoration: none; transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1); white-space: nowrap;
   }
-
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: var(--accent2); }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 4px 14px rgba(255, 90, 31, 0.3); }
+  .btn-primary:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(255, 90, 31, 0.4); }
   .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
-  .btn-outline:hover { border-color: var(--accent); color: var(--accent2); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent2); background: var(--accent-bg); }
   .btn-sm { padding: 8px 14px; font-size: 13px; }
-
-  @media (max-width: 760px) {
-    .nav-links { display: none; }
+  
+  /* Global Tactile Micro-interaction */
+  .btn:active, .demo-step-btn:active, .demo-mini-btn:active, .mock-goal-btn:active, .demo-check:active {
+    transform: scale(0.96) !important;
   }
+
+  @media (max-width: 760px) { .nav-links a { display: none; } }
 
   /* ─── Hero ─── */
   .hero {
-    padding: 100px 0 80px;
-    text-align: center;
-    border-bottom: 1px solid var(--border);
-    background:
-      radial-gradient(600px 300px at 50% -10%, rgba(124,106,247,0.18), transparent 70%);
+    padding: 100px 0 80px; text-align: center;
+    background: radial-gradient(800px 400px at 50% -10%, rgba(255, 90, 31, 0.15), rgba(245, 158, 11, 0.05), transparent 70%);
   }
+  [data-theme="light"] .hero { background: radial-gradient(800px 400px at 50% -10%, rgba(255, 90, 31, 0.08), rgba(245, 158, 11, 0.05), transparent 70%); }
 
-  .hero h1 {
-    font-size: 56px;
-    line-height: 1.08;
-    max-width: 780px;
-    margin: 0 auto 20px;
-  }
-
-  .hero h1 .grad {
-    background: linear-gradient(135deg, var(--accent2), #6ee7b7);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  .hero p.lead {
-    font-size: 18px;
-    color: var(--muted);
-    max-width: 560px;
-    margin: 0 auto 36px;
-  }
-
+  .hero h1 { font-size: 56px; line-height: 1.08; max-width: 780px; margin: 0 auto 20px; font-weight: 800; letter-spacing: -0.03em;}
+  .hero h1 .grad { background: linear-gradient(135deg, var(--accent), #f59e0b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.lead { font-size: 18px; color: var(--muted); max-width: 560px; margin: 0 auto 36px; }
   .hero-ctas { display: flex; gap: 14px; justify-content: center; margin-bottom: 72px; }
-  .hero-ctas .btn { padding: 13px 26px; font-size: 15px; }
 
-  /* Pipeline strip */
-  .pipeline {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    max-width: 900px;
-    margin: 0 auto;
-  }
+  /* Orchestrator Diagram */
+  .orchestrator-diagram { display: flex; align-items: center; justify-content: center; gap: 32px; max-width: 700px; margin: 0 auto; position: relative; }
+  .node { border-radius: 12px; padding: 16px 20px; position: relative; z-index: 2; transition: transform 0.3s ease; }
+  .node:hover { transform: translateY(-2px); }
+  
+  .central-node { border-color: var(--accent); background: var(--accent-bg); text-align: center; width: 200px; box-shadow: 0 0 24px rgba(255, 90, 31, 0.15); }
+  .central-node .title { font-weight: 700; color: var(--text); margin-bottom: 4px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .central-node .sub { font-size: 11px; color: var(--accent2); text-transform: uppercase; letter-spacing: 0.05em; }
 
-  .pipe-step {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 18px 22px;
-    min-width: 150px;
-    text-align: left;
-  }
+  .agent-nodes { display: flex; flex-direction: column; gap: 16px; }
+  .agent-node { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 600; color: var(--text); width: 170px; padding: 12px 16px; cursor: default;}
+  .agent-node svg { color: var(--accent); }
 
-  .pipe-step .n { font-size: 22px; margin-bottom: 8px; display: block; }
-  .pipe-step .t { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
-  .pipe-step .d { font-size: 11px; color: var(--muted); }
+  .data-line { position: absolute; height: 2px; background: linear-gradient(90deg, var(--accent) 0%, transparent 100%); width: 40px; right: 152px; z-index: 1; opacity: 0.6; }
+  .line-1 { top: 30%; transform: rotate(-15deg); }
+  .line-2 { top: 50%; width: 32px; right: 160px;}
+  .line-3 { top: 70%; transform: rotate(15deg); }
 
-  .pipe-arrow { color: var(--subtle); font-size: 18px; }
-
-  @media (max-width: 760px) {
-    .hero h1 { font-size: 36px; }
-    .pipe-arrow { display: none; }
-    .pipe-step { width: 100%; }
-  }
+  @media (max-width: 760px) { .hero h1 { font-size: 36px; } .orchestrator-diagram { flex-direction: column; } .data-line { display: none; } }
 
   /* ─── Problem ─── */
-  .problem-grid {
-    display: grid;
-    grid-template-columns: 1.1fr 0.9fr;
-    gap: 56px;
-    align-items: center;
-  }
-
+  .problem-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: center; }
   .problem-grid p { color: var(--muted); font-size: 16px; margin-bottom: 16px; }
+  .quote-card { border-left: 3px solid var(--accent); border-radius: 12px; padding: 24px; font-size: 15px; color: var(--text); font-style: italic; }
+  .broken-apps { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+  .app-chip { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 7px 14px; font-size: 12px; color: var(--muted); }
+  @media (max-width: 860px) { .problem-grid { grid-template-columns: 1fr; } }
 
-  .quote-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: 12px;
-    padding: 24px;
-    font-size: 15px;
-    color: var(--text);
-    font-style: italic;
-  }
-
-  .broken-apps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 24px;
-  }
-
-  .app-chip {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 7px 14px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  @media (max-width: 860px) {
-    .problem-grid { grid-template-columns: 1fr; }
-  }
-
-  /* ─── How it works: interactive demo ─── */
+  /* ─── Interactive Demo ─── */
   .step-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-  .step-tag {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 3px 9px;
-    font-size: 11.5px;
-    color: var(--muted);
-    font-weight: 600;
-  }
+  .step-tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+  
+  .fallback-note { display: flex; gap: 10px; background: var(--accent-bg); border: 1px solid rgba(255, 90, 31, 0.25); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--accent2); max-width: 480px; margin-top: 6px; }
+  .fallback-note svg { flex-shrink: 0; margin-top: 2px; }
 
-  .fallback-note {
-    display: flex;
-    gap: 10px;
-    background: rgba(124,106,247,0.08);
-    border: 1px solid rgba(124,106,247,0.25);
-    border-radius: 10px;
-    padding: 12px 14px;
-    font-size: 13px;
-    color: var(--accent2);
-    max-width: 480px;
-    margin-top: 6px;
-  }
-
-  .fallback-note .ic { flex-shrink: 0; }
-
-  .demo-stepper {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 36px;
-  }
-
-  .demo-step-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 22px;
-    padding: 6px 14px 6px 6px;
-    cursor: pointer;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--muted);
-    transition: all 0.15s;
-  }
-
-  .demo-step-btn .num {
-    width: 24px; height: 24px; border-radius: 50%;
-    background: var(--surface2);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700; color: var(--muted);
-    transition: all 0.15s;
-    flex-shrink: 0;
-  }
-
-  .demo-step-btn.active { border-color: var(--accent); color: var(--text); background: rgba(124,106,247,0.1); }
+  .demo-stepper { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 36px; }
+  .demo-step-btn { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 6px 14px 6px 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+  .demo-step-btn .num { width: 24px; height: 24px; border-radius: 50%; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--muted); transition: all 0.2s; flex-shrink: 0; }
+  .demo-step-btn.active { border-color: var(--accent); color: var(--text); background: rgba(255, 90, 31, 0.1); box-shadow: 0 4px 12px rgba(255, 90, 31, 0.15); }
   .demo-step-btn.active .num { background: var(--accent); color: #fff; }
   .demo-step-btn.done .num { background: var(--accent2); color: #fff; }
-  .demo-step-btn:hover { border-color: var(--accent); color: var(--text); }
+  .demo-step-btn:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+  @media (max-width: 760px) { .demo-step-btn .lbl { display: none; } .demo-step-btn { padding: 4px; } }
 
-  @media (max-width: 760px) {
-    .demo-step-btn .lbl { display: none; }
-    .demo-step-btn { padding: 4px; }
-  }
-
-  .demo-stage { position: relative; min-height: 420px; }
-
+  .demo-stage { position: relative; min-height: 440px; }
   .demo-panel { display: none; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
   .demo-panel.active { display: grid; animation: demoFade 0.3s ease; }
-
   @keyframes demoFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  
+  /* Staggered Element Entrance */
+  @keyframes slideUpFade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .demo-panel.active .stagger-1 { animation: slideUpFade 0.4s ease backwards 0.05s; }
+  .demo-panel.active .stagger-2 { animation: slideUpFade 0.4s ease backwards 0.15s; }
+  .demo-panel.active .stagger-3 { animation: slideUpFade 0.4s ease backwards 0.25s; }
+  .demo-panel.active .stagger-4 { animation: slideUpFade 0.4s ease backwards 0.35s; }
 
-  @media (max-width: 800px) {
-    .demo-panel { grid-template-columns: 1fr; }
-    .demo-visual { order: -1; }
-  }
+  @media (max-width: 800px) { .demo-panel { grid-template-columns: 1fr; } .demo-visual { order: -1; } }
 
-  .demo-visual {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 26px;
-  }
-
+  .demo-visual { border-radius: 24px; padding: 26px; }
   .demo-copy h3 { font-size: 21px; margin-bottom: 8px; }
   .demo-copy > p { color: var(--muted); font-size: 14.5px; margin-bottom: 14px; max-width: 480px; }
 
-  .demo-nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 32px;
-  }
-
+  .demo-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 32px; }
   .demo-dots { display: flex; gap: 6px; }
   .demo-dot { width: 7px; height: 7px; border-radius: 4px; background: var(--border); transition: all 0.2s; }
-  .demo-dot.active { background: var(--accent); width: 20px; }
+  .demo-dot.active { background: var(--accent); width: 20px; box-shadow: 0 0 8px rgba(255, 90, 31, 0.4); }
 
-  .demo-toast {
-    position: absolute;
-    bottom: -8px;
-    left: 50%;
-    transform: translateX(-50%) translateY(20px);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 16px;
-    font-size: 13px;
-    white-space: nowrap;
-    opacity: 0;
-    transition: all 0.25s;
-    pointer-events: none;
-    z-index: 20;
-  }
-
+  .demo-toast { position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; font-size: 13px; font-weight: 600; white-space: nowrap; opacity: 0; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); pointer-events: none; z-index: 20; box-shadow: 0 10px 25px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 8px;}
   .demo-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  /* mock UI primitives, shared across demo panels */
-  .mock-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
-
+  /* UI Primitives */
+  .mock-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
   .mock-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
   .mock-field label { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-  .mock-field input, .mock-field select {
-    width: 100%;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-    color: var(--text);
-    font-size: 13.5px;
-  }
+  
+  /* Premium Input Focus States */
+  .mock-field input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--text); font-size: 13.5px; transition: all 0.2s; }
+  .mock-field input:focus, .mock-field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255, 90, 31, 0.15); background: var(--surface); }
 
   .unit-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .unit-btn { background: transparent; border: none; color: var(--muted); padding: 2px 8px; font-size: 10px; font-weight: 700; cursor: pointer; }
+  .unit-btn { background: transparent; border: none; color: var(--muted); padding: 2px 8px; font-size: 10px; font-weight: 700; cursor: pointer; transition: 0.2s; }
   .unit-btn.active { background: var(--accent); color: #fff; }
 
   .mock-goal-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
-  .mock-goal-btn {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 6px;
-    text-align: center;
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-  }
-  .mock-goal-btn.selected { border-color: var(--accent); color: var(--accent2); background: rgba(124,106,247,0.1); }
+  .mock-goal-btn { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; transition: 0.2s; }
+  .mock-goal-btn.selected { border-color: var(--accent); color: var(--accent2); background: rgba(255, 90, 31, 0.1); }
 
   .mock-bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 12.5px; }
   .mock-bar-row .lbl { width: 62px; color: var(--muted); flex-shrink: 0; }
   .mock-bar-wrap { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
   .mock-bar { height: 100%; border-radius: 3px; }
-  .mock-bar-row .val { font-weight: 700; min-width: 44px; text-align: right; flex-shrink: 0; }
+  .bar-green { background: var(--green); box-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
+  .bar-yellow { background: var(--yellow); box-shadow: 0 0 10px rgba(245, 158, 11, 0.5); }
+  .bar-orange { background: var(--accent); box-shadow: 0 0 10px rgba(255, 90, 31, 0.6); }
 
-  .demo-meal-card {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 13px;
-    margin-bottom: 10px;
+  .ai-ticker-wrap { display: flex; align-items: center; gap: 8px; background: var(--accent-bg); border: 1px solid rgba(255, 90, 31, 0.2); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--accent2); margin-bottom: 16px; font-weight: 600; }
+  .ticker-dot { width: 6px; height: 6px; background: var(--accent2); border-radius: 50%; animation: pulse 1.5s infinite; box-shadow: 0 0 6px var(--accent2); }
+  @keyframes pulse { 0% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0.3; transform: scale(0.8); } }
+
+  .demo-meal-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 13px; margin-bottom: 10px; transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; cursor: default;}
+  .demo-meal-card:hover { border-color: rgba(255, 255, 255, 0.2); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  [data-theme="light"] .demo-meal-card:hover { border-color: rgba(0, 0, 0, 0.15); }
+  
+  .demo-meal-type { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent2); margin-bottom: 6px; display: flex; justify-content: space-between;}
+  .demo-meal-main { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+  
+  .meal-thumb {
+    width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(135deg, rgba(255,90,31,0.2), rgba(245,158,11,0.1));
+    display: flex; align-items: center; justify-content: center; color: var(--accent);
+    border: 1px solid rgba(255,90,31,0.1);
   }
-  .demo-meal-card:last-child { margin-bottom: 0; }
-  .demo-meal-type { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent2); margin-bottom: 5px; }
-  .demo-meal-name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
-  .demo-meal-foot { display: flex; justify-content: space-between; align-items: center; }
-  .demo-meal-macros { font-size: 11px; color: var(--muted); }
-  .demo-meal-actions { display: flex; gap: 6px; }
+  
+  .demo-meal-name { font-size: 14px; font-weight: 600; line-height: 1.2; letter-spacing:-0.01em;}
+  .demo-meal-macros { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .demo-meal-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
   .demo-mini-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 4px 9px;
-    font-size: 10.5px;
-    color: var(--muted);
-    cursor: pointer;
-    text-decoration: none;
-    transition: all 0.15s;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+    padding: 5px 10px; font-size: 10.5px; color: var(--text); cursor: pointer; text-decoration: none;
+    transition: all 0.15s; font-weight: 600; display: flex; align-items: center; gap: 4px;
   }
-  .demo-mini-btn:hover { border-color: var(--accent); color: var(--accent2); }
+  .demo-mini-btn:hover { border-color: var(--accent); color: var(--accent2); background: var(--accent-bg); }
 
-  .demo-budget-bar { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; font-size: 13px; }
+  .demo-budget-bar { background: var(--surface2); border: 1px dashed var(--muted); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; font-size: 13px; }
   .demo-budget-bar .amt { font-weight: 700; }
-  .demo-budget-bar .amt.ok { color: var(--green); }
+  .demo-budget-bar .amt.ok { color: var(--green); text-shadow: 0 0 10px rgba(34,197,94,0.3); }
 
-  .demo-list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .demo-list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
   .demo-list-row:last-child { border-bottom: none; }
-  .demo-check {
-    width: 19px; height: 19px; border: 2px solid var(--border); border-radius: 5px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;
-  }
-  .demo-check.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .demo-check { width: 19px; height: 19px; border: 2px solid var(--border); border-radius: 5px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all 0.15s; color: transparent; }
+  .demo-check.checked { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 8px rgba(255, 90, 31, 0.4); }
   .demo-list-row .name { flex: 1; }
   .demo-list-row .name.struck { text-decoration: line-through; color: var(--subtle); }
   .demo-list-row .meta { color: var(--muted); font-size: 11.5px; margin-right: 4px; }
-  .demo-list-row .price { font-weight: 600; min-width: 44px; text-align: right; }
+  .demo-list-row .price { font-weight: 600; min-width: 50px; text-align: right; }
 
   .demo-ring-card { display: flex; gap: 20px; align-items: center; margin-bottom: 18px; }
   .demo-ring-wrap { position: relative; width: 78px; height: 78px; flex-shrink: 0; }
   .demo-ring-wrap svg { width: 78px; height: 78px; transform: rotate(-90deg); }
+  .demo-ring-wrap svg circle.progress { stroke: var(--accent); filter: drop-shadow(0 0 5px rgba(255, 90, 31, 0.5)); transition: stroke-dashoffset 1s ease-out; }
   .demo-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
   .demo-ring-kcal { font-size: 16px; font-weight: 700; }
   .demo-ring-label { font-size: 8.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -436,140 +288,95 @@
   .demo-rating-row .excluded { color: var(--subtle); text-decoration: line-through; }
 
   /* ─── Features ─── */
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 18px;
-  }
-
-  .feature-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 22px;
-    position: relative;
-  }
-
-  .feature-card .icon { font-size: 22px; margin-bottom: 12px; display: block; }
+  .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .feature-card { border-radius: 20px; padding: 24px; position: relative; transition: transform 0.2s, box-shadow 0.2s; }
+  .feature-card:hover { transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.15);}
+  [data-theme="light"] .feature-card:hover { box-shadow: 0 12px 40px rgba(0,0,0,0.08); border-color: rgba(0,0,0,0.12);}
+  .feature-card .icon { font-size: 24px; margin-bottom: 12px; display: block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1)); }
   .feature-card h4 { font-size: 15px; margin-bottom: 6px; }
   .feature-card p { font-size: 13px; color: var(--muted); }
-
-  .tier-badge {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 3px 8px;
-    border-radius: 6px;
-    letter-spacing: 0.04em;
-  }
-
+  .tier-badge { position: absolute; top: 20px; right: 20px; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.04em; }
   .tier-v2 { background: rgba(245,158,11,0.12); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
-
-  @media (max-width: 860px) {
-    .feature-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-  @media (max-width: 560px) {
-    .feature-grid { grid-template-columns: 1fr; }
-  }
+  .badge-roadmap { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 6px; letter-spacing: 0.04em; background: rgba(245,158,11,0.12); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
+  @media (max-width: 860px) { .feature-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .feature-grid { grid-template-columns: 1fr; } }
 
   /* ─── Personas ─── */
-  .persona-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-  }
-
-  .persona-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 24px;
-  }
-
+  .persona-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .persona-card { border-radius: 20px; padding: 24px; }
   .persona-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
   .persona-avatar {
-    width: 46px; height: 46px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 800; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 4px 12px rgba(255, 90, 31, 0.4);
   }
   .persona-name { font-size: 16px; font-weight: 700; }
   .persona-goal { font-size: 12px; color: var(--muted); }
-
-  .persona-card blockquote {
-    font-size: 13.5px;
-    font-style: italic;
-    color: var(--text);
-    border-left: 2px solid var(--accent);
-    padding-left: 12px;
-    margin: 14px 0;
-  }
-
+  .persona-card blockquote { font-size: 13.5px; font-style: italic; color: var(--text); border-left: 2px solid var(--accent); padding-left: 12px; margin: 14px 0; }
   .persona-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
-
-  @media (max-width: 860px) {
-    .persona-grid { grid-template-columns: 1fr; }
-  }
+  @media (max-width: 860px) { .persona-grid { grid-template-columns: 1fr; } }
 
   /* ─── Footer ─── */
-  footer {
-    padding: 56px 0 40px;
-    text-align: center;
-  }
-
+  footer { padding: 56px 0 40px; text-align: center; }
   footer .logo { justify-content: center; margin-bottom: 12px; }
   footer p { color: var(--subtle); font-size: 13px; margin-bottom: 4px; }
   footer .foot-links { display: flex; gap: 24px; justify-content: center; margin-top: 20px; font-size: 13px; color: var(--muted); }
-
-  ::selection { background: rgba(124,106,247,0.35); }
+  ::selection { background: rgba(255, 90, 31, 0.35); }
 </style>
+</head>
+<body>
 
 <header class="nav">
   <div class="nav-inner">
-    <div class="logo">Macro<span>Map</span></div>
+    <div class="logo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      Macro<span>Map</span>
+    </div>
     <nav class="nav-links">
       <a href="#how-it-works">How it works</a>
       <a href="#features">Features</a>
       <a href="#personas">Who it's for</a>
+      <button id="themeToggle" onclick="toggleTheme()" aria-label="Toggle Mode">
+        <svg id="themeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </button>
     </nav>
   </div>
 </header>
 
 <section class="hero">
   <div class="container">
-    <span class="eyebrow">AI-powered meal planning · Product workflow</span>
+    <span class="eyebrow">AI-powered meal planning</span>
     <h1>From weekly goal to <span class="grad">grocery bag</span> — without the spreadsheets.</h1>
     <p class="lead">Tell MacroMap your macro target and budget. It builds your week of meals, your shopping list, and tracks your progress — all in one place.</p>
     <div class="hero-ctas">
       <a href="#how-it-works" class="btn btn-primary">Explore the workflow</a>
-      <a href="#features" class="btn btn-outline">View all features</a>
+      <a href="#features" class="btn btn-outline glass">View all features</a>
     </div>
 
-    <div class="pipeline">
-      <div class="pipe-step">
-        <span class="n">🎯</span>
-        <div class="t">Set Goal</div>
-        <div class="d">Macros, budget, allergies</div>
+    <div class="orchestrator-diagram">
+      <div class="node central-node glass">
+        <div class="title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 7.1"/><path d="M12 12l9.9 4.9"/></svg>
+          Claude
+        </div>
+        <div class="sub mono">Core Orchestrator</div>
       </div>
-      <span class="pipe-arrow">→</span>
-      <div class="pipe-step">
-        <span class="n">🍽️</span>
-        <div class="t">Meal Plan</div>
-        <div class="d">7 days, AI-matched</div>
-      </div>
-      <span class="pipe-arrow">→</span>
-      <div class="pipe-step">
-        <span class="n">🛒</span>
-        <div class="t">Grocery List</div>
-        <div class="d">Deduped, priced</div>
-      </div>
-      <span class="pipe-arrow">→</span>
-      <div class="pipe-step">
-        <span class="n">📊</span>
-        <div class="t">Track</div>
-        <div class="d">Daily & weekly vs. target</div>
+      <div class="data-line line-1"></div>
+      <div class="data-line line-2"></div>
+      <div class="data-line line-3"></div>
+      <div class="agent-nodes">
+        <div class="node agent-node glass">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+          Recipe Agent
+        </div>
+        <div class="node agent-node glass">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          Price Agent
+        </div>
+        <div class="node agent-node glass">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+          Pantry Agent
+        </div>
       </div>
     </div>
   </div>
@@ -588,7 +395,7 @@
         <span class="app-chip">📱 Mental math for budget</span>
       </div>
     </div>
-    <div class="quote-card">
+    <div class="quote-card glass">
       "I use a lot of websites and personal notes to track everything. It takes so much time just to make sure I'm hitting my protein and staying in budget."
     </div>
   </div>
@@ -613,9 +420,9 @@
       <div class="demo-stage">
         <!-- STEP 1 — Onboarding -->
         <div class="demo-panel active" id="demoStep1">
-          <div class="demo-visual">
-            <div class="mock-title">Let's calculate your targets</div>
-            <div class="mock-row">
+          <div class="demo-visual glass">
+            <div class="mock-title stagger-1">Let's calculate your targets</div>
+            <div class="mock-row stagger-2">
               <div class="mock-field">
                 <label>Weight
                   <span class="unit-toggle">
@@ -623,15 +430,15 @@
                     <button class="unit-btn" id="duKg" onclick="setDemoUnit('kg')">kg</button>
                   </span>
                 </label>
-                <input type="number" value="185" id="demoWeight" readonly>
+                <input type="number" class="mono" value="185" id="demoWeight" readonly>
               </div>
-              <div class="mock-field"><label>Height</label><input type="text" value="5'11&quot;" readonly></div>
+              <div class="mock-field"><label>Height</label><input type="text" class="mono" value="5'11&quot;" readonly></div>
             </div>
-            <div class="mock-row">
-              <div class="mock-field"><label>Age</label><input type="number" value="26" readonly></div>
+            <div class="mock-row stagger-2">
+              <div class="mock-field"><label>Age</label><input type="number" class="mono" value="26" readonly></div>
               <div class="mock-field"><label>Activity</label><input type="text" value="Active" readonly></div>
             </div>
-            <div class="mock-field">
+            <div class="mock-field stagger-3">
               <label>Goal</label>
               <div class="mock-goal-grid">
                 <div class="mock-goal-btn" onclick="selectDemoGoal(this)">📉 Cut</div>
@@ -639,9 +446,12 @@
                 <div class="mock-goal-btn" onclick="selectDemoGoal(this)">⚖️ Maintain</div>
               </div>
             </div>
-            <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="nextDemoStep()">Calculate my macros →</button>
+            <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="nextDemoStep()">
+              Calculate my macros 
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Onboarding</h3>
             <p>Weight, height, age, activity level, and goal (cut / bulk / maintain) — entered once. MacroMap calculates your TDEE with the Mifflin-St Jeor formula and suggests daily macro targets. Accept them or nudge any value yourself.</p>
             <div class="step-tags">
@@ -653,17 +463,20 @@
 
         <!-- STEP 2 — Set Weekly Goal -->
         <div class="demo-panel" id="demoStep2">
-          <div class="demo-visual">
-            <div class="mock-title">Your suggested daily targets — Bulk</div>
-            <div class="mock-bar-row"><span class="lbl">Calories</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:100%;background:var(--accent)"></div></div><span class="val">3,200</span></div>
-            <div class="mock-bar-row"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:75%;background:var(--green)"></div></div><span class="val">200g</span></div>
-            <div class="mock-bar-row"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:90%;background:var(--yellow)"></div></div><span class="val">380g</span></div>
-            <div class="mock-bar-row"><span class="lbl">Fat</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:40%;background:var(--orange)"></div></div><span class="val">90g</span></div>
-            <div class="mock-field" style="margin-top:18px"><label>Weekly grocery budget (optional)</label><input type="text" value="$120" readonly></div>
-            <div class="mock-field" style="margin-top:10px"><label>Zip code</label><input type="text" value="94103" readonly></div>
-            <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="nextDemoStep()">Looks good →</button>
+          <div class="demo-visual glass">
+            <div class="mock-title stagger-1">Your suggested daily targets — Bulk</div>
+            <div class="mock-bar-row stagger-2"><span class="lbl">Calories</span><div class="mock-bar-wrap"><div class="mock-bar bar-orange" style="width:100%;"></div></div><span class="val mono">3,200</span></div>
+            <div class="mock-bar-row stagger-2"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar bar-green" style="width:75%;"></div></div><span class="val mono">200g</span></div>
+            <div class="mock-bar-row stagger-2"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar bar-yellow" style="width:90%;"></div></div><span class="val mono">380g</span></div>
+            <div class="mock-bar-row stagger-2"><span class="lbl">Fat</span><div class="mock-bar-wrap"><div class="mock-bar bar-orange" style="width:40%;"></div></div><span class="val mono">90g</span></div>
+            <div class="mock-field stagger-3" style="margin-top:18px"><label>Weekly grocery budget (optional)</label><input type="text" class="mono" value="$120" readonly></div>
+            <div class="mock-field stagger-3" style="margin-top:10px"><label>Zip code</label><input type="text" class="mono" value="94103" readonly></div>
+            <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="nextDemoStep()">
+              Looks good 
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Set Weekly Goal</h3>
             <p>Confirm your weekly macro targets, an optional grocery budget, and your zip code — used to localize grocery price estimates. Budget is optional — leave it blank and MacroMap just shows you the total cost with no filtering applied.</p>
             <div class="step-tags">
@@ -676,43 +489,77 @@
 
         <!-- STEP 3 — Generate Meal Plan -->
         <div class="demo-panel" id="demoStep3">
-          <div class="demo-visual">
-            <div class="mock-title">Friday · Day 5 of 7</div>
-            <div class="demo-meal-card">
+          <div class="demo-visual glass">
+            <div class="mock-title stagger-1"><span>Friday · Day 5 of 7</span></div>
+            <div class="ai-ticker-wrap stagger-1">
+              <span class="ticker-dot"></span>
+              <span id="aiTickerStep3" class="mono">Orchestrator: Resolving 21 slots concurrently...</span>
+            </div>
+            
+            <div class="demo-meal-card stagger-2">
               <div class="demo-meal-type">Breakfast</div>
-              <div class="demo-meal-name" id="mealName-b">Oatmeal &amp; Scrambled Eggs</div>
-              <div class="demo-meal-foot">
-                <span class="demo-meal-macros">42g P · 68g C · 18g F · 610 kcal</span>
-                <span class="demo-meal-actions">
-                  <a href="https://www.youtube.com/results?search_query=Oatmeal+Scrambled+Eggs+recipe" target="_blank" class="demo-mini-btn">▶ Watch</a>
-                  <button class="demo-mini-btn" onclick="swapDemoMeal('b',this)">↺ Swap</button>
-                </span>
+              <div class="demo-meal-main">
+                <div class="meal-thumb">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <div>
+                  <div class="demo-meal-name" id="mealName-b">Oatmeal &amp; Scrambled Eggs</div>
+                  <div class="demo-meal-macros mono">42g P · 68g C · 18g F · 610 kcal</div>
+                </div>
+              </div>
+              <div class="demo-meal-actions">
+                <a href="#" class="demo-mini-btn">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
+                </a>
+                <button class="demo-mini-btn" onclick="swapDemoMeal('b',this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
+                </button>
               </div>
             </div>
-            <div class="demo-meal-card">
+
+            <div class="demo-meal-card stagger-3">
               <div class="demo-meal-type">Lunch</div>
-              <div class="demo-meal-name" id="mealName-l">Chicken Stir Fry with Rice</div>
-              <div class="demo-meal-foot">
-                <span class="demo-meal-macros">55g P · 82g C · 20g F · 730 kcal</span>
-                <span class="demo-meal-actions">
-                  <a href="https://www.youtube.com/results?search_query=Chicken+Stir+Fry+Rice+recipe" target="_blank" class="demo-mini-btn">▶ Watch</a>
-                  <button class="demo-mini-btn" onclick="swapDemoMeal('l',this)">↺ Swap</button>
-                </span>
+              <div class="demo-meal-main">
+                <div class="meal-thumb">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                </div>
+                <div>
+                  <div class="demo-meal-name" id="mealName-l">Chicken Stir Fry with Rice</div>
+                  <div class="demo-meal-macros mono">55g P · 82g C · 20g F · 730 kcal</div>
+                </div>
+              </div>
+              <div class="demo-meal-actions">
+                <a href="#" class="demo-mini-btn">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
+                </a>
+                <button class="demo-mini-btn" onclick="swapDemoMeal('l',this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
+                </button>
               </div>
             </div>
-            <div class="demo-meal-card">
+
+            <div class="demo-meal-card stagger-4">
               <div class="demo-meal-type">Dinner</div>
-              <div class="demo-meal-name" id="mealName-d">Beef Bolognese Pasta</div>
-              <div class="demo-meal-foot">
-                <span class="demo-meal-macros">45g P · 110g C · 20g F · 800 kcal</span>
-                <span class="demo-meal-actions">
-                  <a href="https://www.youtube.com/results?search_query=Beef+Bolognese+Pasta+recipe" target="_blank" class="demo-mini-btn">▶ Watch</a>
-                  <button class="demo-mini-btn" onclick="swapDemoMeal('d',this)">↺ Swap</button>
-                </span>
+              <div class="demo-meal-main">
+                <div class="meal-thumb">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 14v4M12 14v4M7.5 14v4M3 20h9M12 4a8 8 0 0 1 8 8H4a8 8 0 0 1 8-8z"/></svg>
+                </div>
+                <div>
+                  <div class="demo-meal-name" id="mealName-d">Beef Bolognese Pasta</div>
+                  <div class="demo-meal-macros mono">45g P · 110g C · 20g F · 800 kcal</div>
+                </div>
+              </div>
+              <div class="demo-meal-actions">
+                <a href="#" class="demo-mini-btn">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
+                </a>
+                <button class="demo-mini-btn" onclick="swapDemoMeal('d',this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
+                </button>
               </div>
             </div>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Generate Meal Plan</h3>
             <p>21 meals — 3 a day, 7 days — matched to your macros, dietary preferences, allergies, and budget. Don't like a meal? Tap "Swap" for an alternative — try it on the left.</p>
             <div class="step-tags">
@@ -721,94 +568,122 @@
               <span class="step-tag">Allergy-safe</span>
             </div>
             <div class="fallback-note">
-              <span class="ic">🛡️</span>
-              <span><strong>Never a dead end:</strong> if nothing matches exactly, MacroMap automatically widens the tolerance in steps until it finds a close match — and always tells you what changed. If a budget can't be hit alongside your macros, it shows the closest option and exactly how far over you are.</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span><strong>Never a dead end:</strong> if nothing matches exactly, MacroMap automatically widens the tolerance in steps until it finds a close match — and always tells you what changed.</span>
             </div>
           </div>
         </div>
 
         <!-- STEP 4 — Grocery List -->
         <div class="demo-panel" id="demoStep4">
-          <div class="demo-visual">
-            <div class="demo-budget-bar">
-              <span>Estimated total <strong>$87.40</strong></span>
+          <div class="demo-visual glass">
+            <div class="demo-budget-bar mono stagger-1">
+              <span>Est. total <strong>$87.40</strong></span>
               <span class="amt ok">$32.60 under budget ✓</span>
             </div>
-            <div class="demo-list-row">
-              <div class="demo-check" onclick="toggleDemoCheck(this)"></div>
+            <div class="demo-list-row stagger-2">
+              <div class="demo-check" onclick="toggleDemoCheck(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <span class="name">Chicken breast</span>
               <span class="meta">2.5 lbs</span>
-              <span class="price">$12.50</span>
+              <span class="price mono">$12.50</span>
             </div>
-            <div class="demo-list-row">
-              <div class="demo-check" onclick="toggleDemoCheck(this)"></div>
+            <div class="demo-list-row stagger-2">
+              <div class="demo-check" onclick="toggleDemoCheck(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <span class="name">Lean ground beef</span>
               <span class="meta">1.5 lbs</span>
-              <span class="price">$10.25</span>
+              <span class="price mono">$10.25</span>
             </div>
-            <div class="demo-list-row">
-              <div class="demo-check checked" onclick="toggleDemoCheck(this)">✓</div>
+            <div class="demo-list-row stagger-3">
+              <div class="demo-check checked" onclick="toggleDemoCheck(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <span class="name struck">Eggs</span>
               <span class="meta">12 pack</span>
-              <span class="price">$4.50</span>
+              <span class="price mono">$4.50</span>
             </div>
-            <div class="demo-list-row">
-              <div class="demo-check" onclick="toggleDemoCheck(this)"></div>
+            <div class="demo-list-row stagger-3">
+              <div class="demo-check" onclick="toggleDemoCheck(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <span class="name">Broccoli</span>
               <span class="meta">1 head</span>
-              <span class="price">$2.50</span>
+              <span class="price mono">$2.50</span>
             </div>
-            <div class="demo-list-row">
-              <div class="demo-check" onclick="toggleDemoCheck(this)"></div>
+            <div class="demo-list-row stagger-4">
+              <div class="demo-check" onclick="toggleDemoCheck(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <span class="name">Olive oil</span>
               <span class="meta">16 oz</span>
-              <span class="price" style="color:var(--red)">$—</span>
+              <span class="price mono" style="color:var(--red)">$—</span>
             </div>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Grocery List</h3>
-            <p>Every ingredient across all 21 meals, deduplicated and summed into one list — no more "3 lbs of chicken breast" split across four separate lines, plus live price estimates per item and a running weekly total. Try checking off an item.</p>
+            <p>Every ingredient across all 21 meals, deduplicated and summed into one list — no more "3 lbs of chicken breast" split across four lines, plus live price estimates and a running weekly total.</p>
             <div class="step-tags">
               <span class="step-tag">Deduped quantities</span>
               <span class="step-tag">Live price estimates</span>
             </div>
             <div class="fallback-note">
-              <span class="ic">💵</span>
-              <span><strong>Price you can trust:</strong> if an estimate isn't available (like olive oil above), the item still shows up with an "add manually" prompt rather than vanishing. Correct a price once and MacroMap remembers it next time.</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              <span><strong>Price you can trust:</strong> if an estimate isn't available, the item still shows up with an "add manually" prompt. Correct a price once and MacroMap remembers it next time.</span>
             </div>
           </div>
         </div>
 
         <!-- STEP 5 — Track -->
         <div class="demo-panel" id="demoStep5">
-          <div class="demo-visual">
-            <div class="demo-ring-card">
+          <div class="demo-visual glass">
+            <div class="demo-ring-card stagger-1">
               <div class="demo-ring-wrap">
                 <svg viewBox="0 0 78 78">
                   <circle cx="39" cy="39" r="33" fill="none" stroke="var(--border)" stroke-width="7"/>
-                  <circle cx="39" cy="39" r="33" fill="none" stroke="var(--accent)" stroke-width="7" stroke-dasharray="207" stroke-dashoffset="62" stroke-linecap="round"/>
+                  <circle class="progress" cx="39" cy="39" r="33" fill="none" stroke-width="7" stroke-dasharray="207" stroke-dashoffset="62" stroke-linecap="round"/>
                 </svg>
-                <div class="demo-ring-center">
+                <div class="demo-ring-center mono">
                   <div class="demo-ring-kcal">2,140</div>
-                  <div class="demo-ring-label">/ 3,200</div>
+                  <div class="demo-ring-label" style="font-family:'Inter'">/ 3,200</div>
                 </div>
               </div>
               <div style="flex:1">
-                <div class="mock-bar-row"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:71%;background:var(--green)"></div></div><span class="val">142g</span></div>
-                <div class="mock-bar-row"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar" style="width:68%;background:var(--yellow)"></div></div><span class="val">260g</span></div>
+                <div class="mock-bar-row"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar bar-green" style="width:71%;"></div></div><span class="val mono">142g</span></div>
+                <div class="mock-bar-row"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar bar-yellow" style="width:68%;"></div></div><span class="val mono">260g</span></div>
               </div>
             </div>
-            <div class="mock-title" style="margin-bottom:8px">Today's meals</div>
-            <div id="demoMealLog">
-              <div class="demo-list-row"><div class="demo-check checked" onclick="toggleDemoCheck(this)">✓</div><span class="name struck">Oatmeal &amp; Scrambled Eggs</span></div>
-              <div class="demo-list-row"><div class="demo-check checked" onclick="toggleDemoCheck(this)">✓</div><span class="name struck">Chicken Stir Fry with Rice</span></div>
-              <div class="demo-list-row"><div class="demo-check" onclick="toggleDemoCheck(this)"></div><span class="name">Beef Bolognese Pasta</span></div>
+            <div class="mock-title stagger-2" style="margin-bottom:8px">Today's meals</div>
+            <div id="demoMealLog" class="stagger-2">
+              <div class="demo-list-row">
+                <div class="demo-check checked" onclick="toggleDemoCheck(this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <span class="name struck">Oatmeal &amp; Scrambled Eggs</span>
+              </div>
+              <div class="demo-list-row">
+                <div class="demo-check checked" onclick="toggleDemoCheck(this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <span class="name struck">Chicken Stir Fry with Rice</span>
+              </div>
+              <div class="demo-list-row">
+                <div class="demo-check" onclick="toggleDemoCheck(this)">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <span class="name">Beef Bolognese Pasta</span>
+              </div>
             </div>
-            <button class="demo-mini-btn" style="margin-top:10px" onclick="logOffPlanMeal()">+ Log something off-plan</button>
+            <button class="demo-mini-btn stagger-3" style="margin-top:10px" onclick="logOffPlanMeal()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 
+              Log something off-plan
+            </button>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Track</h3>
-            <p>A daily and weekly nutrition dashboard shows actual vs. target the moment you log a meal as eaten. Went off-plan for takeout mid-week? Log it anyway — the dashboard stays accurate instead of going stale. Try the button on the left.</p>
+            <p>A daily and weekly nutrition dashboard shows actual vs. target the moment you log a meal as eaten. Went off-plan for takeout mid-week? Log it anyway — the dashboard stays accurate.</p>
             <div class="step-tags">
               <span class="step-tag">Daily + weekly view</span>
               <span class="step-tag">Off-plan logging supported</span>
@@ -818,38 +693,57 @@
 
         <!-- STEP 6 — Weekly Cycle -->
         <div class="demo-panel" id="demoStep6">
-          <div class="demo-visual">
-            <div class="mock-title">Week 7 — ready when you are</div>
-            <div class="demo-cycle-card">
+          <div class="demo-visual glass">
+            <div class="mock-title stagger-1">Week 7 — ready when you are</div>
+            <div class="demo-cycle-card stagger-1">
               <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Pre-filled from your profile</div>
-              <div style="font-size:14px;font-weight:600">3,200 kcal · 200g protein · $120 budget</div>
+              <div style="font-size:14px;font-weight:600" class="mono">3,200 kcal · 200g P · $120</div>
             </div>
-            <div class="mock-title" style="margin-bottom:8px">Last week's ratings</div>
-            <div class="demo-rating-row"><span>Chicken Stir Fry with Rice</span><span>👍</span></div>
-            <div class="demo-rating-row"><span>Oatmeal &amp; Scrambled Eggs</span><span>👍</span></div>
-            <div class="demo-rating-row"><span class="excluded">Beef Bolognese Pasta</span><span>👎 excluded next time</span></div>
-            <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="generateNextWeek()">Generate next week's plan →</button>
+            <div class="mock-title stagger-2" style="margin-bottom:8px">Last week's ratings <span class="badge-roadmap">ROADMAP</span></div>
+            <div class="demo-rating-row stagger-2">
+              <span>Chicken Stir Fry with Rice</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+            </div>
+            <div class="demo-rating-row stagger-3">
+              <span>Oatmeal &amp; Scrambled Eggs</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+            </div>
+            <div class="demo-rating-row stagger-3">
+              <span class="excluded">Beef Bolognese Pasta</span>
+              <span style="display:flex;align-items:center;gap:6px;color:var(--subtle)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>
+                excluded next time
+              </span>
+            </div>
+            <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="generateNextWeek()">
+              Generate next week's plan 
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
           </div>
-          <div class="demo-copy">
+          <div class="demo-copy stagger-1">
             <h3>Weekly Cycle</h3>
-            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week from your saved profile. Any meal you rated low is automatically excluded from future plans — the app gets a little better at knowing your taste every week. Try generating next week — it loops back to Meal Plan.</p>
+            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week's macros, budget, and dietary constraints from your saved profile — no re-onboarding needed. Coming in a future release: meals you rate low will be automatically excluded from future plans.</p>
             <div class="step-tags">
               <span class="step-tag">Auto pre-filled</span>
-              <span class="step-tag">Ratings improve future plans</span>
+              <span class="step-tag">Ratings improve future plans — roadmap</span>
             </div>
           </div>
         </div>
 
-        <div class="demo-toast" id="demoToast"></div>
+        <div class="demo-toast glass" id="demoToast"></div>
       </div>
 
       <div class="demo-nav">
-        <button class="btn btn-outline btn-sm" id="demoBackBtn" onclick="prevDemoStep()">← Back</button>
+        <button class="btn btn-outline btn-sm glass" id="demoBackBtn" onclick="prevDemoStep()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Back
+        </button>
         <div class="demo-dots" id="demoDots">
           <div class="demo-dot active"></div><div class="demo-dot"></div><div class="demo-dot"></div>
           <div class="demo-dot"></div><div class="demo-dot"></div><div class="demo-dot"></div>
         </div>
-        <button class="btn btn-primary btn-sm" id="demoNextBtn" onclick="nextDemoStep()">Next →</button>
+        <button class="btn btn-primary btn-sm" id="demoNextBtn" onclick="nextDemoStep()">
+          Next <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
       </div>
     </div>
   </div>
@@ -862,55 +756,55 @@
     <p class="section-sub">Ten features across four connected data sources: recipes, nutrition, prices, and your own preferences.</p>
 
     <div class="feature-grid">
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">🎯</span>
         <h4>TDEE &amp; Macro Onboarding</h4>
         <p>Mifflin-St Jeor calculation with an editable suggested macro split for cut, bulk, or maintain.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">🥗</span>
         <h4>Preferences &amp; Constraints</h4>
         <p>Dietary style, allergy flags, and dislikes — safety filtering that's always applied.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">🍽️</span>
         <h4>Meal Plan Generation</h4>
         <p>21 macro-matched meals a week, sourced from a 5,000+ recipe library, with budget-aware filtering.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">🛒</span>
         <h4>Grocery List</h4>
         <p>Deduped shopping list with live price estimates, manual overrides that stick, and one-tap copy.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">📊</span>
         <h4>Nutrition Dashboard</h4>
         <p>Daily and 7-day trend views vs. target, plus off-plan meal logging so the numbers stay honest.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="tier-badge tier-v2">ROADMAP</span>
         <span class="icon">🧂</span>
         <h4>Pantry Log</h4>
         <p>Log what's already at home so your grocery list never suggests buying it again.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="tier-badge tier-v2">ROADMAP</span>
         <span class="icon">⭐</span>
         <h4>Meal Ratings</h4>
         <p>Thumbs up or down after eating — low-rated meals quietly stop appearing in future plans.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="tier-badge tier-v2">ROADMAP</span>
         <span class="icon">📷</span>
         <h4>Barcode Scanning</h4>
         <p>Point your camera at a barcode to add it to your pantry — no manual typing.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">▶️</span>
         <h4>Recipe Videos</h4>
         <p>A "watch how to cook this" link on every meal card, for recipes you haven't made before.</p>
       </div>
-      <div class="feature-card">
+      <div class="feature-card glass">
         <span class="icon">📅</span>
         <h4>Calendar Export</h4>
         <p>One tap turns your weekly plan into a downloadable calendar file — Google, Apple, or Outlook.</p>
@@ -926,9 +820,9 @@
     <p class="section-sub">Every feature maps back to one of these weekly patterns.</p>
 
     <div class="persona-grid">
-      <div class="persona-card">
+      <div class="persona-card glass">
         <div class="persona-head">
-          <div class="persona-avatar">💪</div>
+          <div class="persona-avatar">M</div>
           <div>
             <div class="persona-name">Marcus, 26</div>
             <div class="persona-goal">Bulking · Austin, TX</div>
@@ -936,12 +830,12 @@
         </div>
         <p style="font-size:13.5px;color:var(--muted)">Software engineer, 3 years lifting. Knows his numbers cold but loses 2–3 hours every Sunday cross-referencing protein-per-dollar across four apps.</p>
         <blockquote>"I know exactly what I need to eat. I just don't want to spend my Sunday figuring out how to get there."</blockquote>
-        <div class="persona-meta"><span>3,200 kcal · 200g protein</span><span>Pro, day one</span></div>
+        <div class="persona-meta mono"><span>3,200 kcal · 200g P</span><span style="font-family:'Inter'">Pro, day one</span></div>
       </div>
 
-      <div class="persona-card">
+      <div class="persona-card glass">
         <div class="persona-head">
-          <div class="persona-avatar">🏃</div>
+          <div class="persona-avatar">P</div>
           <div>
             <div class="persona-name">Priya, 31</div>
             <div class="persona-goal">Cutting · San Francisco, CA</div>
@@ -949,12 +843,12 @@
         </div>
         <p style="font-size:13.5px;color:var(--muted)">Marketing manager, long hours. Adherence collapses mid-week when the plan isn't laid out clearly and she ends up ordering takeout.</p>
         <blockquote>"I don't have time to be my own nutritionist. Just tell me what to buy."</blockquote>
-        <div class="persona-meta"><span>1,650 kcal · 140g protein</span><span>Pro, if it saves time</span></div>
+        <div class="persona-meta mono"><span>1,650 kcal · 140g P</span><span style="font-family:'Inter'">Pro, if it saves time</span></div>
       </div>
 
-      <div class="persona-card">
+      <div class="persona-card glass">
         <div class="persona-head">
-          <div class="persona-avatar">🎓</div>
+          <div class="persona-avatar" style="background: linear-gradient(135deg, var(--subtle), var(--muted)); box-shadow:none;">J</div>
           <div>
             <div class="persona-name">Jordan, 21</div>
             <div class="persona-goal">Maintaining · Columbus, OH</div>
@@ -962,7 +856,7 @@
         </div>
         <p style="font-size:13.5px;color:var(--muted)">Kinesiology student on a hard $50/week limit. Knows the theory, struggles to apply it without wasting money on ingredients that go unused.</p>
         <blockquote>"I know eggs and rice are cheap and healthy. I just want someone to make it less boring without blowing my budget."</blockquote>
-        <div class="persona-meta"><span>$50/week hard limit</span><span>Free → slow convert</span></div>
+        <div class="persona-meta mono"><span>$50/week limit</span><span style="font-family:'Inter'">Free → slow convert</span></div>
       </div>
     </div>
   </div>
@@ -970,7 +864,10 @@
 
 <footer>
   <div class="container">
-    <div class="logo">Macro<span>Map</span></div>
+    <div class="logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      Macro<span>Map</span>
+    </div>
     <p>From weekly goal to grocery bag — without the spreadsheets.</p>
     <p>MacroMap · Pre-seed · Confidential</p>
     <div class="foot-links">
@@ -982,13 +879,55 @@
 </footer>
 
 <script>
+  // Theme Toggle Logic
+  function toggleTheme() {
+    const html = document.documentElement;
+    const icon = document.getElementById('themeIcon');
+    if (html.getAttribute('data-theme') === 'dark') {
+      html.setAttribute('data-theme', 'light');
+      // Sun to Moon
+      icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+    } else {
+      html.setAttribute('data-theme', 'dark');
+      // Moon to Sun
+      icon.innerHTML = '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
+    }
+  }
+
+  // Demo Logic
   const DEMO_TOTAL = 6;
   let demoStep = 1;
   let demoUnit = 'lbs';
+  let tickerTimer;
+
+  const tickerMsgs = [
+    "Orchestrator: Resolving 21 slots concurrently...",
+    "Spoonacular: Fetching macro-matched candidates...",
+    "Orchestrator: Reconciling weekly ±5% band...",
+    "Tavily: Estimating ingredient prices...",
+    "Orchestrator: Deduping ingredient IDs..."
+  ];
+
+  function startTicker() {
+    let i = 0;
+    const el = document.getElementById('aiTickerStep3');
+    clearInterval(tickerTimer);
+    tickerTimer = setInterval(() => {
+      i = (i + 1) % tickerMsgs.length;
+      if (el) el.textContent = tickerMsgs[i];
+    }, 2500);
+  }
 
   function goDemoStep(n) {
     n = Math.max(1, Math.min(DEMO_TOTAL, n));
-    document.querySelectorAll('.demo-panel').forEach(p => p.classList.remove('active'));
+    
+    // Remove active class to trigger re-paint of CSS animations
+    document.querySelectorAll('.demo-panel').forEach(p => {
+      p.classList.remove('active');
+      // Hack to trigger reflow so the staggered animation replays
+      void p.offsetWidth;
+    });
+    
     document.getElementById('demoStep' + n).classList.add('active');
 
     document.querySelectorAll('.demo-step-btn').forEach(btn => {
@@ -1002,14 +941,26 @@
     });
 
     document.getElementById('demoBackBtn').style.visibility = n === 1 ? 'hidden' : 'visible';
-    document.getElementById('demoNextBtn').textContent = n === DEMO_TOTAL ? 'Restart loop ↺' : 'Next →';
+    
+    // Update next button text
+    const nextBtn = document.getElementById('demoNextBtn');
+    if (n === DEMO_TOTAL) {
+      nextBtn.innerHTML = 'Restart loop <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>';
+    } else {
+      nextBtn.innerHTML = 'Next <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+    }
 
     demoStep = n;
+    if (n === 3) startTicker();
+    else clearInterval(tickerTimer);
   }
 
   function nextDemoStep() {
     if (demoStep < DEMO_TOTAL) goDemoStep(demoStep + 1);
-    else { goDemoStep(1); showDemoToast('🔁 Back to the top of the loop'); }
+    else {
+      goDemoStep(3);
+      showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Back to the top of the loop — no re-onboarding needed');
+    }
   }
 
   function prevDemoStep() { goDemoStep(demoStep - 1); }
@@ -1031,8 +982,8 @@
 
   const demoSwapOptions = {
     b: ['Protein Smoothie Bowl', 'Cottage Cheese Toast', 'Egg White Veggie Omelette'],
-    l: ['Turkey &amp; Avocado Wrap', 'Grilled Chicken Salad', 'Tuna Rice Bowl'],
-    d: ['Salmon &amp; Roasted Veg', 'Lamb Chops &amp; Sweet Potato', 'Shrimp Stir Fry'],
+    l: ['Turkey & Avocado Wrap', 'Grilled Chicken Salad', 'Tuna Rice Bowl'],
+    d: ['Salmon & Roasted Veg', 'Lamb Chops & Sweet Potato', 'Shrimp Stir Fry'],
   };
 
   function swapDemoMeal(slot, btn) {
@@ -1042,18 +993,20 @@
     nameEl.innerHTML = next;
     const card = btn.closest('.demo-meal-card');
     card.style.opacity = '0.4';
-    setTimeout(() => { card.style.opacity = '1'; }, 250);
-    showDemoToast('↺ Swapped to ' + next.replace(/&amp;/g, '&'));
+    card.style.transform = 'scale(0.98)';
+    setTimeout(() => { 
+      card.style.opacity = '1'; 
+      card.style.transform = 'scale(1)';
+    }, 250);
+    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swapped to ' + next);
   }
 
   function toggleDemoCheck(el) {
     el.classList.toggle('checked');
     const nameEl = el.parentElement.querySelector('.name');
     if (el.classList.contains('checked')) {
-      el.textContent = '✓';
       if (nameEl) nameEl.classList.add('struck');
     } else {
-      el.textContent = '';
       if (nameEl) nameEl.classList.remove('struck');
     }
   }
@@ -1062,21 +1015,23 @@
     const log = document.getElementById('demoMealLog');
     const row = document.createElement('div');
     row.className = 'demo-list-row';
-    row.innerHTML = '<div class="demo-check checked">✓</div><span class="name struck">Takeout — logged manually</span>';
+    row.innerHTML = '<div class="demo-check checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div><span class="name struck">Takeout — logged manually</span>';
     log.appendChild(row);
-    showDemoToast('📝 Logged — dashboard totals updated');
+    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Logged — dashboard totals updated');
   }
 
   function generateNextWeek() {
-    showDemoToast('🚀 New plan generated — 1 low-rated meal excluded');
+    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg> New plan generated — 1 meal excluded');
     setTimeout(() => goDemoStep(3), 900);
   }
 
   function showDemoToast(msg) {
     const t = document.getElementById('demoToast');
-    t.textContent = msg;
+    t.innerHTML = msg;
     t.classList.add('show');
     clearTimeout(t._hideTimer);
     t._hideTimer = setTimeout(() => t.classList.remove('show'), 2200);
   }
 </script>
+</body>
+</html>
