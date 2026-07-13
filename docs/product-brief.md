@@ -136,7 +136,7 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 - ~~What is the final product name?~~ **Resolved: MacroMap.**
 - ~~What is the geographic launch market?~~ **Resolved: United States.** Price estimates, recipe defaults, and regulatory considerations scoped to US market at launch.
 - ~~Is there a B2B angle worth pursuing early?~~ **Resolved: Pure consumer for now.** Revisit after achieving meaningful consumer traction.
-- ~~What does onboarding look like?~~ **Resolved: Hybrid onboarding.** User enters weight, height, age, activity level, and goal (cut / bulk / maintain). App calculates TDEE via Mifflin-St Jeor formula and suggests macro targets. User can accept or manually override. Available on free tier — no API cost, no reason to gate it.
+- ~~What does onboarding look like?~~ **Resolved: Hybrid onboarding.** User enters weight, height, age, biological sex, activity level, and goal (cut / bulk / maintain). App calculates TDEE via Mifflin-St Jeor formula and suggests macro targets. User can accept or manually override. Available on free tier — no API cost, no reason to gate it. (Biological sex added during implementation — Mifflin-St Jeor's BMR constant requires it and earlier drafts omitted the field.)
 - ~~What macro split does the app use?~~ **Resolved: Fixed defaults for MVP, user can nudge values.** No custom split UI — reduces complexity and decision fatigue. Dietary style presets (keto, high-carb, plant-based) are Post-MVP.
 
 | Goal | Protein | Fat | Carbs |

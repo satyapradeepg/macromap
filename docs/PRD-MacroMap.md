@@ -167,9 +167,9 @@ Features are grouped into six epics. Each epic maps to a coherent unit of user v
 ### 7.3 Key Features
 
 #### F1 — TDEE Calculator & Macro Onboarding (P0) · E1 Onboarding & Goal Setting
-- Inputs: weight (lbs **or** kg — user selects unit, app converts to kg immediately for all calculations), height (ft/in **or** cm — same unit-toggle pattern as weight, converts to cm immediately), age, activity level (sedentary / lightly active / active / very active), goal (cut / bulk / maintain)
+- Inputs: weight (lbs **or** kg — user selects unit, app converts to kg immediately for all calculations), height (ft/in **or** cm — same unit-toggle pattern as weight, converts to cm immediately), age, biological sex (male/female — required input to the Mifflin-St Jeor formula's BMR constant; a gap discovered and resolved during implementation, not present in earlier drafts of this section), activity level (sedentary / lightly active / active / very active), goal (cut / bulk / maintain)
 - All internal calculations use kg/cm — Mifflin-St Jeor formula and macro targets (g/kg bodyweight) both operate in metric
-- Formula: Mifflin-St Jeor, activity multiplier applied to BMR:
+- Formula: BMR = 10 × weight_kg + 6.25 × height_cm − 5 × age + (5 if male, −161 if female); TDEE = BMR × activity multiplier:
 
 | Activity level | Multiplier |
 |---|---|

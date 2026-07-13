@@ -1,0 +1,611 @@
+"use client";
+
+import { useState } from "react";
+import {
+  ACTIVITY_MULTIPLIERS,
+  AGE_RANGE,
+  HEIGHT_CM_RANGE,
+  WEIGHT_KG_RANGE,
+  calculateBmr,
+  calculateMacroTargets,
+  calculateTdee,
+  type ActivityLevel,
+  type BiologicalSex,
+  type Goal,
+} from "@/lib/tdee";
+import {
+  cmToFeetInches,
+  feetInchesToCm,
+  kgToLbs,
+  lbsToKg,
+} from "@/lib/units";
+import { saveProfile } from "./actions";
+
+const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
+  { value: "sedentary", label: "Sedentary" },
+  { value: "lightly_active", label: "Lightly active" },
+  { value: "active", label: "Active" },
+  { value: "very_active", label: "Very active" },
+];
+
+const GOAL_OPTIONS: { value: Goal; label: string; emoji: string }[] = [
+  { value: "cut", label: "Cut", emoji: "📉" },
+  { value: "bulk", label: "Bulk", emoji: "💪" },
+  { value: "maintain", label: "Maintain", emoji: "⚖️" },
+];
+
+const DIETARY_STYLE_OPTIONS = [
+  "vegetarian",
+  "vegan",
+  "gluten_free",
+  "dairy_free",
+  "halal",
+  "kosher",
+] as const;
+
+const ALLERGY_PRESET_OPTIONS = ["nuts", "shellfish", "eggs", "soy"] as const;
+
+type WeightUnit = "lbs" | "kg";
+type HeightUnit = "ftin" | "cm";
+
+function toggleInArray(value: string, list: string[]): string[] {
+  return list.includes(value)
+    ? list.filter((v) => v !== value)
+    : [...list, value];
+}
+
+export function OnboardingWizard() {
+  const [step, setStep] = useState<1 | 2>(1);
+
+  // Step 1 (F1) state
+  const [weightUnit, setWeightUnit] = useState<WeightUnit>("lbs");
+  const [weightInput, setWeightInput] = useState("185");
+  const [heightUnit, setHeightUnit] = useState<HeightUnit>("ftin");
+  const [heightFeet, setHeightFeet] = useState("5");
+  const [heightInches, setHeightInches] = useState("11");
+  const [heightCmInput, setHeightCmInput] = useState("180");
+  const [age, setAge] = useState("26");
+  const [biologicalSex, setBiologicalSex] = useState<BiologicalSex | null>(
+    null,
+  );
+  const [activityLevel, setActivityLevel] = useState<ActivityLevel | null>(
+    null,
+  );
+  const [goal, setGoal] = useState<Goal | null>(null);
+  const [step1Error, setStep1Error] = useState<string | null>(null);
+
+  // Metric snapshot taken when Step 1 is submitted, reused on final save
+  const [metrics, setMetrics] = useState<{
+    weightKg: number;
+    heightCm: number;
+    age: number;
+  } | null>(null);
+
+  // Step 2 (F1 review + F2) state. Targets pre-fill from the calculation but
+  // are editable — PRD 7.3 F1: "user can nudge any value manually."
+  const [calories, setCalories] = useState("");
+  const [protein, setProtein] = useState("");
+  const [carbs, setCarbs] = useState("");
+  const [fat, setFat] = useState("");
+  const [dietaryStyles, setDietaryStyles] = useState<string[]>([]);
+  const [allergyPresets, setAllergyPresets] = useState<string[]>([]);
+  const [otherAllergies, setOtherAllergies] = useState("");
+  const [dislikes, setDislikes] = useState("");
+  const [weeklyBudget, setWeeklyBudget] = useState("");
+  const [zipCode, setZipCode] = useState("");
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  function handleCalculate() {
+    const weightKg =
+      weightUnit === "lbs"
+        ? lbsToKg(parseFloat(weightInput))
+        : parseFloat(weightInput);
+    const heightCm =
+      heightUnit === "ftin"
+        ? feetInchesToCm(
+            parseFloat(heightFeet) || 0,
+            parseFloat(heightInches) || 0,
+          )
+        : parseFloat(heightCmInput);
+    const ageNum = parseInt(age, 10);
+
+    if (!biologicalSex) return setStep1Error("Select a biological sex.");
+    if (!activityLevel) return setStep1Error("Select an activity level.");
+    if (!goal) return setStep1Error("Select a goal.");
+    if (
+      Number.isNaN(weightKg) ||
+      weightKg < WEIGHT_KG_RANGE.min ||
+      weightKg > WEIGHT_KG_RANGE.max
+    ) {
+      return setStep1Error(
+        `Weight must be between ${Math.round(kgToLbs(WEIGHT_KG_RANGE.min))} and ${Math.round(kgToLbs(WEIGHT_KG_RANGE.max))} lbs.`,
+      );
+    }
+    if (
+      Number.isNaN(heightCm) ||
+      heightCm < HEIGHT_CM_RANGE.min ||
+      heightCm > HEIGHT_CM_RANGE.max
+    ) {
+      return setStep1Error(
+        `Height must be between ${HEIGHT_CM_RANGE.min} and ${HEIGHT_CM_RANGE.max} cm.`,
+      );
+    }
+    if (
+      Number.isNaN(ageNum) ||
+      ageNum < AGE_RANGE.min ||
+      ageNum > AGE_RANGE.max
+    ) {
+      return setStep1Error(
+        `Age must be between ${AGE_RANGE.min} and ${AGE_RANGE.max}.`,
+      );
+    }
+
+    setStep1Error(null);
+
+    const bmr = calculateBmr({
+      weightKg,
+      heightCm,
+      age: ageNum,
+      biologicalSex,
+    });
+    const tdee = calculateTdee(bmr, activityLevel);
+    const targets = calculateMacroTargets(tdee, weightKg, goal);
+
+    setMetrics({ weightKg, heightCm, age: ageNum });
+    setCalories(String(targets.dailyCalories));
+    setProtein(String(targets.dailyProteinG));
+    setCarbs(String(targets.dailyCarbsG));
+    setFat(String(targets.dailyFatG));
+    setStep(2);
+  }
+
+  async function handleSave() {
+    if (!metrics || !biologicalSex || !activityLevel || !goal) return;
+    setSaving(true);
+    setSaveError(null);
+
+    const allergies = [...allergyPresets];
+    if (otherAllergies.trim()) {
+      allergies.push(
+        ...otherAllergies
+          .split(",")
+          .map((a) => a.trim())
+          .filter(Boolean),
+      );
+    }
+
+    const result = await saveProfile({
+      weightKg: metrics.weightKg,
+      heightCm: metrics.heightCm,
+      age: metrics.age,
+      biologicalSex,
+      activityLevel,
+      goal,
+      dailyCalories: parseInt(calories, 10),
+      dailyProteinG: parseInt(protein, 10),
+      dailyCarbsG: parseInt(carbs, 10),
+      dailyFatG: parseInt(fat, 10),
+      dietaryStyles,
+      allergies,
+      dislikes: dislikes
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean),
+      weeklyBudgetUsd: weeklyBudget ? parseFloat(weeklyBudget) : null,
+      zipCode: zipCode.trim() || null,
+    });
+
+    setSaving(false);
+    if (result.error) {
+      setSaveError(result.error);
+    } else {
+      setSaved(true);
+    }
+  }
+
+  if (saved) {
+    return (
+      <main className="mx-auto max-w-md px-6 py-24 text-center">
+        <h1 className="text-2xl font-bold">Profile saved</h1>
+        <p className="mt-2 text-muted">
+          {calories} kcal · {protein}g protein · {carbs}g carbs · {fat}g fat,
+          daily.
+        </p>
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-lg px-6 py-16">
+      <h1 className="text-2xl font-bold">
+        {step === 1
+          ? "Let's calculate your targets"
+          : "Your suggested daily targets"}
+      </h1>
+
+      {step === 1 ? (
+        <div className="mt-8 flex flex-col gap-5">
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-muted">
+                Weight
+              </label>
+              <UnitToggle
+                options={[
+                  { value: "lbs", label: "lbs" },
+                  { value: "kg", label: "kg" },
+                ]}
+                value={weightUnit}
+                onChange={(u) => {
+                  const kg =
+                    weightUnit === "lbs"
+                      ? lbsToKg(parseFloat(weightInput) || 0)
+                      : parseFloat(weightInput) || 0;
+                  setWeightUnit(u as WeightUnit);
+                  setWeightInput(
+                    u === "kg"
+                      ? String(Math.round(kg))
+                      : String(Math.round(kgToLbs(kg))),
+                  );
+                }}
+              />
+            </div>
+            <input
+              type="number"
+              value={weightInput}
+              onChange={(e) => setWeightInput(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-muted">
+                Height
+              </label>
+              <UnitToggle
+                options={[
+                  { value: "ftin", label: "ft/in" },
+                  { value: "cm", label: "cm" },
+                ]}
+                value={heightUnit}
+                onChange={(u) => {
+                  if (u === "cm") {
+                    setHeightCmInput(
+                      String(
+                        Math.round(
+                          feetInchesToCm(
+                            parseFloat(heightFeet) || 0,
+                            parseFloat(heightInches) || 0,
+                          ),
+                        ),
+                      ),
+                    );
+                  } else {
+                    const { feet, inches } = cmToFeetInches(
+                      parseFloat(heightCmInput) || 0,
+                    );
+                    setHeightFeet(String(feet));
+                    setHeightInches(String(inches));
+                  }
+                  setHeightUnit(u as HeightUnit);
+                }}
+              />
+            </div>
+            {heightUnit === "ftin" ? (
+              <div className="mt-1 flex gap-2">
+                <input
+                  type="number"
+                  value={heightFeet}
+                  onChange={(e) => setHeightFeet(e.target.value)}
+                  placeholder="ft"
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+                />
+                <input
+                  type="number"
+                  value={heightInches}
+                  onChange={(e) => setHeightInches(e.target.value)}
+                  placeholder="in"
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+                />
+              </div>
+            ) : (
+              <input
+                type="number"
+                value={heightCmInput}
+                onChange={(e) => setHeightCmInput(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              />
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">Age</label>
+            <input
+              type="number"
+              value={age}
+              onChange={(e) => setAge(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Biological sex
+            </label>
+            <p className="text-xs text-muted">
+              Used only to calculate your BMR accurately.
+            </p>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {(["male", "female"] as BiologicalSex[]).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setBiologicalSex(s)}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${
+                    biologicalSex === s
+                      ? "border-accent bg-accent/10 text-accent-2"
+                      : "border-border text-muted"
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Activity level
+            </label>
+            <select
+              value={activityLevel ?? ""}
+              onChange={(e) =>
+                setActivityLevel(
+                  (e.target.value || null) as ActivityLevel | null,
+                )
+              }
+              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+            >
+              <option value="" disabled>
+                Select…
+              </option>
+              {ACTIVITY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label} ({ACTIVITY_MULTIPLIERS[o.value]}×)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">Goal</label>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {GOAL_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => setGoal(o.value)}
+                  className={`rounded-lg border px-2 py-2 text-center text-sm font-semibold ${
+                    goal === o.value
+                      ? "border-accent bg-accent/10 text-accent-2"
+                      : "border-border text-muted"
+                  }`}
+                >
+                  {o.emoji} {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {step1Error && <p className="text-sm text-red-500">{step1Error}</p>}
+
+          <button
+            type="button"
+            onClick={handleCalculate}
+            className="mt-2 w-full rounded-lg bg-accent px-4 py-3 font-semibold text-white"
+          >
+            Calculate my macros
+          </button>
+        </div>
+      ) : (
+        <div className="mt-8 flex flex-col gap-5">
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label="Calories"
+              value={calories}
+              onChange={setCalories}
+            />
+            <NumberField
+              label="Protein (g)"
+              value={protein}
+              onChange={setProtein}
+            />
+            <NumberField label="Carbs (g)" value={carbs} onChange={setCarbs} />
+            <NumberField label="Fat (g)" value={fat} onChange={setFat} />
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Dietary style (optional)
+            </label>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {DIETARY_STYLE_OPTIONS.map((option) => (
+                <Chip
+                  key={option}
+                  label={option.replace("_", " ")}
+                  active={dietaryStyles.includes(option)}
+                  onClick={() =>
+                    setDietaryStyles(toggleInArray(option, dietaryStyles))
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Allergies
+            </label>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {ALLERGY_PRESET_OPTIONS.map((option) => (
+                <Chip
+                  key={option}
+                  label={option}
+                  active={allergyPresets.includes(option)}
+                  onClick={() =>
+                    setAllergyPresets(toggleInArray(option, allergyPresets))
+                  }
+                />
+              ))}
+            </div>
+            <input
+              type="text"
+              value={otherAllergies}
+              onChange={(e) => setOtherAllergies(e.target.value)}
+              placeholder="Other allergies, comma separated"
+              className="mt-2 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Dislikes
+            </label>
+            <input
+              type="text"
+              value={dislikes}
+              onChange={(e) => setDislikes(e.target.value)}
+              placeholder="e.g. Brussels sprouts, cilantro"
+              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-semibold text-muted">
+                Weekly budget (optional)
+              </label>
+              <input
+                type="number"
+                value={weeklyBudget}
+                onChange={(e) => setWeeklyBudget(e.target.value)}
+                placeholder="$"
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-muted">
+                Zip code
+              </label>
+              <input
+                type="text"
+                value={zipCode}
+                onChange={(e) => setZipCode(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              />
+            </div>
+          </div>
+
+          {saveError && <p className="text-sm text-red-500">{saveError}</p>}
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setStep(1)}
+              className="rounded-lg border border-border px-4 py-3 font-semibold text-muted"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-accent px-4 py-3 font-semibold text-white disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Looks good"}
+            </button>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function UnitToggle({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-md border border-border">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`px-2 py-0.5 text-[10px] font-bold ${
+            value === o.value ? "bg-accent text-white" : "text-muted"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="text-xs font-semibold tracking-wide text-muted uppercase">
+        {label}
+      </label>
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-foreground"
+      />
+    </div>
+  );
+}
+
+function Chip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${
+        active
+          ? "border-accent bg-accent/10 text-accent-2"
+          : "border-border text-muted"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}

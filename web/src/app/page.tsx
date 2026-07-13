@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function Home() {
@@ -9,7 +10,7 @@ export default async function Home() {
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       <h1 className="text-3xl font-bold tracking-tight">MacroMap</h1>
-      <p className="max-w-md text-[var(--muted)]">
+      <p className="max-w-md text-muted">
         Scaffold check: Supabase {user ? "connected" : "not connected"}
         {user && (
           <>
@@ -20,9 +21,12 @@ export default async function Home() {
         )}
         .
       </p>
-      <p className="max-w-md text-sm text-[var(--muted)]">
-        Epic E1 (Onboarding &amp; Goal Setting) starts here.
-      </p>
+      <Link
+        href="/onboarding"
+        className="mt-2 rounded-lg bg-accent px-4 py-2 font-semibold text-white"
+      >
+        Start onboarding
+      </Link>
     </main>
   );
 }
