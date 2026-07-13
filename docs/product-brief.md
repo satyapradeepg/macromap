@@ -67,6 +67,7 @@ Built as an AI agent orchestrating four distinct data sources via the Model Cont
 | **Barcode MCP** | Open Food Facts API — free, no API key required. Browser camera scanning via ZXing-js. Lets users scan grocery items to instantly populate the pantry log, removing manual entry friction. |
 | **Video Layer** | YouTube deep-link per meal (MVP: link to YouTube search results, no API needed). Post-MVP: in-app embed via YouTube Data API v3 free tier (10,000 units/day). |
 | **Calendar Export** | `.ics` file generation via the `ics` npm package. One-tap export of the weekly meal plan to Google Calendar or Apple Calendar — no OAuth, no API quota. |
+| **App & Auth Layer** | Next.js (App Router, TypeScript) on Vercel — one codebase for frontend and the API routes that call Spoonacular/Tavily, keeping those keys server-side only. Supabase (Postgres) holds user profiles, pantry/constraints, ratings, and both plan-generation caches; its built-in anonymous auth converts a guest session straight into a permanent account at Step 5, with no manual data migration. Net infra cost pre-revenue: $0 beyond Spoonacular's $29/month. |
 
 ---
 
@@ -107,7 +108,7 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 - Weekly meal plan generation
 - Deduped shopping list
 - Web search price estimates + manual override
-- Pantry & constraints MCP
+- Pantry & constraints MCP — constraints layer only (dietary restrictions, allergies, dislikes, budget); pantry *inventory* tracking is V2, see below
 - Basic nutrition dashboard
 - Dietary preference & allergy filtering
 - Recipe video links (YouTube deep-link per meal — no API required)
@@ -115,7 +116,9 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 - "Get inspiration" deep-link to r/MealPrepSunday and r/EatCheapAndHealthy filtered by goal
 
 **V2**
-- Barcode scanning for pantry (Open Food Facts API + ZXing-js browser camera)
+- Pantry log (F6) — track what's already in stock so grocery lists exclude it
+- Meal ratings (F7) — thumbs up/down after eating; low-rated meals excluded from future plans
+- Barcode scanning for pantry (F8) (Open Food Facts API + ZXing-js browser camera)
 - In-app recipe video embeds (YouTube Data API v3 free tier)
 
 **Post-MVP**

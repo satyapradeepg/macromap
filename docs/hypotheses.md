@@ -112,22 +112,24 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 ---
 
-## H6 — Pantry engagement: users will log their pantry without barcode scanning (MVP)
+## H6 — Pantry engagement: users will log their pantry without barcode scanning (V2)
 
-**Hypothesis:** Users will manually enter 3+ pantry items in the first two weeks, enough for the pantry layer to meaningfully affect meal plan generation.
+**Hypothesis:** Once the pantry log (F6) ships in V2, users will manually enter 3+ pantry items in the first two weeks it's available, enough for the pantry layer to meaningfully affect meal plan generation.
 
 **Source:** PRD Assumption A4 — *"if friction is too high, pantry feature won't be used"*
 
+**Note:** Pantry log (F6) itself, not just barcode scanning (F8), ships in V2 — there is no MVP pantry feature to test. This hypothesis can only be run after V2 launches, not in MVP's first two weeks.
+
 **Test method:**
-- Measure pantry log completion rate: % of users who add ≥1 item in first 2 weeks
-- Track average pantry size at end of week 2
-- Note: barcode scanning ships V2 — this tests the manual-entry baseline
+- Measure pantry log completion rate: % of users who add ≥1 item in first 2 weeks after F6 ships
+- Track average pantry size at end of that 2-week window
+- F8 (barcode scanning) ships alongside F6 in V2 — this tests the manual-entry baseline before barcode is prioritized
 
 **Success threshold:**
-- ≥40% of users add ≥3 pantry items in first 2 weeks
-- Average pantry size ≥5 items at end of week 2
+- ≥40% of users add ≥3 pantry items in the first 2 weeks after F6 ships
+- Average pantry size ≥5 items at end of that window
 
-**Failure action:** If completion <20%, ship barcode scanning (F8) earlier than V2 timeline, or surface a pantry onboarding prompt immediately after first meal plan generation.
+**Failure action:** If completion <20%, prioritize barcode scanning (F8) within the V2 build, or surface a pantry onboarding prompt immediately after first meal plan generation.
 
 ---
 
@@ -158,7 +160,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 | H7 | Weekly retention | Week 4 post-launch | High — business model |
 | H5 | Price accuracy | Week 2 post-launch | Medium — Pro feature risk |
 | H4 | Recipe variety | Month 1 post-launch | Medium — variety drives retention |
-| H6 | Pantry engagement | Week 2 post-launch | Medium — V2 feature timing |
+| H6 | Pantry engagement | Week 2 post-V2-launch | Medium — no MVP pantry feature to test |
 
 ---
 
