@@ -1,0 +1,147 @@
+// Epic E2 (F3) — deterministic candidate ranking (OQ2/OQ7). No LLM: this is
+// a plain weighted-deviation score, budget-first ordering for Pro, and a
+// cheapest-macro-match fallback when no candidate is budget-compliant.
+
+import { classifyTier, type ToleranceTier } from "./tolerance";
+
+export interface CandidateIngredient {
+  id: number;
+  name: string;
+  amount: number;
+  unit: string;
+  metricAmount: number;
+  metricUnit: string;
+}
+
+export interface RecipeCandidate {
+  id: number;
+  title: string;
+  imageUrl: string | null;
+  servings: number;
+  proteinG: number; // per serving
+  caloriesKcal: number; // per serving
+  carbsG: number; // per serving
+  fatG: number; // per serving
+  pricePerServingCents: number | null;
+  aggregateLikes: number;
+  ingredients: CandidateIngredient[];
+}
+
+export interface RankedCandidate extends RecipeCandidate {
+  score: number;
+  budgetCompliant: boolean;
+  // Real p10/p20/p30 classification against the true per-meal target
+  // (null if outside even p30) — independent of which tier's bounds the
+  // candidate happened to be fetched with (cascade.ts fetches at the
+  // widest tier by default, so a fetched pool mixes candidates of
+  // different real qualities; this is what makes the persisted label
+  // honest per-candidate rather than per-fetch).
+  actualTier: ToleranceTier | null;
+  isFallbackOfLastResort: boolean;
+}
+
+// Protein weighted 2x, carbs/fat weighted 0.5x, per F1's macro-split
+// priority (PRD 7.3) plus a live-data-informed carb/fat weight. Lower is
+// better; 0 = exact match.
+//
+// An earlier version scored protein/calories only, with carb/fat handled
+// as a separate discrete "compliant" preference that only broke near-ties.
+// Verified live that this was too weak to matter in practice: real
+// carb/fat-compliant candidates and top protein/calorie matches turned out
+// to be almost entirely disjoint sets for a real "cut" profile, so the
+// preference never actually promoted them — 0/21 claimed slots ended up
+// carb/fat compliant despite 6/40 being available in the pool. Blending
+// carb/fat directly into the score (this version) is what actually moved
+// the needle: simulated against the real cached pool, weight 0 → carbs
+// -44%/fat +48% off target; weight 0.5 → fat +2%, carbs -10%, with
+// protein/calories giving up only ~5-6 points of precision in exchange.
+// 0.5 was chosen as a round, generalizable value over a profile-specific
+// grid-search optimum (which risked overfitting one data point).
+const CARB_FAT_WEIGHT = 0.5;
+
+export function macroDeviationScore(
+  candidate: { proteinG: number; caloriesKcal: number; carbsG: number; fatG: number },
+  target: { proteinG: number; calories: number; carbsG: number; fatG: number },
+): number {
+  const proteinDeviation =
+    (Math.abs(candidate.proteinG - target.proteinG) / target.proteinG) * 2;
+  const caloriesDeviation =
+    Math.abs(candidate.caloriesKcal - target.calories) / target.calories;
+  const carbsDeviation =
+    (Math.abs(candidate.carbsG - target.carbsG) / target.carbsG) * CARB_FAT_WEIGHT;
+  const fatDeviation = (Math.abs(candidate.fatG - target.fatG) / target.fatG) * CARB_FAT_WEIGHT;
+  return proteinDeviation + caloriesDeviation + carbsDeviation + fatDeviation;
+}
+
+export interface RankCandidatesOptions {
+  tier: "free" | "pro";
+  budgetPerMealUsd: number | null;
+}
+
+// Budget-compliant candidates ranked first (Pro only, and only when a
+// budget is actually set); ties broken by cheapest then highest
+// aggregateLikes. Non-compliant candidates are demoted to the back of the
+// list, never dropped — claim-resolution (OQ7) needs the full pool to step
+// through on collisions across 21 slots, and discarding non-compliant
+// candidates whenever at least one compliant one exists would starve every
+// slot but the first few once the compliant subset is exhausted (this was
+// the actual cause of a "only 2 of 21 meals generated" bug: a tight budget
+// left only 1-2 compliant candidates, and the rest of the pool used to get
+// thrown away entirely). If literally none are budget-compliant, the single
+// cheapest macro-matching candidate is still flagged as the fallback of
+// last resort so budget alone never blocks generation (PRD OQ2/F3 budget
+// cascade) — but again, without discarding the rest of the pool.
+export function rankCandidates(
+  candidates: RecipeCandidate[],
+  target: { proteinG: number; calories: number; carbsG: number; fatG: number },
+  opts: RankCandidatesOptions,
+): RankedCandidate[] {
+  const budgetAware = opts.tier === "pro" && opts.budgetPerMealUsd !== null;
+  const budgetLimitCents = budgetAware ? opts.budgetPerMealUsd! * 100 : null;
+
+  const scored = candidates.map((candidate) => ({
+    ...candidate,
+    score: macroDeviationScore(candidate, target),
+    budgetCompliant:
+      !budgetAware ||
+      candidate.pricePerServingCents === null ||
+      candidate.pricePerServingCents <= budgetLimitCents!,
+    actualTier: classifyTier(candidate, target),
+    isFallbackOfLastResort: false,
+  }));
+
+  if (!budgetAware) {
+    return sortCandidates(scored, budgetAware);
+  }
+
+  const compliant = scored.filter((c) => c.budgetCompliant);
+  const nonCompliant = scored.filter((c) => !c.budgetCompliant);
+
+  if (compliant.length > 0) {
+    return [
+      ...sortCandidates(compliant, budgetAware),
+      ...sortCandidates(nonCompliant, budgetAware),
+    ];
+  }
+
+  // None budget-compliant: fall back to the single cheapest macro-matching
+  // candidate rather than blocking on budget alone.
+  const rest = [...scored].sort(
+    (a, b) => (a.pricePerServingCents ?? Infinity) - (b.pricePerServingCents ?? Infinity),
+  );
+  if (rest.length === 0) return [];
+  const [cheapest, ...others] = rest;
+  return [{ ...cheapest, isFallbackOfLastResort: true }, ...sortCandidates(others, budgetAware)];
+}
+
+function sortCandidates(candidates: RankedCandidate[], budgetAware: boolean): RankedCandidate[] {
+  return [...candidates].sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    if (budgetAware) {
+      const priceA = a.pricePerServingCents ?? Infinity;
+      const priceB = b.pricePerServingCents ?? Infinity;
+      if (priceA !== priceB) return priceA - priceB;
+    }
+    return b.aggregateLikes - a.aggregateLikes;
+  });
+}
