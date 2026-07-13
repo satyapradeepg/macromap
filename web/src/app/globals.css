@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* Design tokens ported from docs/macromap-prototype.html so the real app
+   matches the already-validated look. Light is default; dark overrides via
+   prefers-color-scheme AND a [data-theme] attribute for a future manual toggle. */
+:root {
+  --background: #f3f4f6;
+  --surface: #ffffff;
+  --border: #e5e7eb;
+  --accent: #e04a14;
+  --accent-2: #ff5a1f;
+  --foreground: #111827;
+  --muted: #4b5563;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0e0e10;
+    --surface: #16161a;
+    --border: #2a2a32;
+    --accent: #ff5a1f;
+    --accent-2: #ff8a66;
+    --foreground: #f2f2f4;
+    --muted: #9a9aa5;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0e0e10;
+  --surface: #16161a;
+  --border: #2a2a32;
+  --accent: #ff5a1f;
+  --accent-2: #ff8a66;
+  --foreground: #f2f2f4;
+  --muted: #9a9aa5;
+}
+
+:root[data-theme="light"] {
+  --background: #f3f4f6;
+  --surface: #ffffff;
+  --border: #e5e7eb;
+  --accent: #e04a14;
+  --accent-2: #ff5a1f;
+  --foreground: #111827;
+  --muted: #4b5563;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}

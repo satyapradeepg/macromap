@@ -19,6 +19,22 @@ MacroMap is an AI meal planning app. A user states a weekly goal — *"hit 150g 
 
 To view the prototype, download `docs/macromap-prototype.html` and open it directly in any browser — no build step required.
 
+## Repo layout
+
+- **`docs/`** — planning artifacts (product brief, PRD, personas, hypotheses, AI agent design, interactive prototype). Nothing here runs.
+- **`web/`** — the actual application: Next.js (App Router, TypeScript) + Supabase. See [`web/README.md`](web/README.md) for the standard Next.js commands, and below for MacroMap-specific setup.
+
+### Running the app
+
+```
+cd web
+pnpm install
+cp .env.local.example .env.local   # fill in your Supabase project's URL + anon key
+pnpm dev
+```
+
+You'll also need to run `web/supabase/migrations/0001_profiles.sql` once in your Supabase project's SQL editor, and enable **Authentication → Sign In / Providers → Anonymous** — MacroMap lets guests complete onboarding through the grocery list with no account (see PRD Section 7.1), which relies on Supabase anonymous auth.
+
 ## The core workflow
 
 ```
@@ -42,6 +58,8 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Track
 | Barcode scanning (V2) | Open Food Facts + ZXing-js | Free, no API key |
 | Recipe videos | YouTube deep-link | Zero API cost for MVP |
 | Calendar export | `ics` npm package | No OAuth, works with Google/Apple/Outlook |
+| App framework + hosting | Next.js (App Router) on Vercel | One codebase for frontend + API routes; API keys stay server-side |
+| Database + auth | Supabase (Postgres) | Profiles, pantry/ratings, plan-generation caches; built-in anonymous auth powers the guest→account flow |
 
 ## Tiers
 
