@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getMostRecentPlan } from "./data";
+import { getPantryItems } from "./pantryData";
 import { PlanBoard } from "./PlanView";
 
 // 21 concurrent Spoonacular calls + up to 3 sequential tolerance widenings
@@ -30,6 +31,13 @@ export default async function PlanPage() {
   }
 
   const initialPlan = await getMostRecentPlan(supabase, user.id);
+  const initialPantryItems = await getPantryItems(supabase, user.id);
 
-  return <PlanBoard initialPlan={initialPlan} dietaryStyles={profile.dietary_styles ?? []} />;
+  return (
+    <PlanBoard
+      initialPlan={initialPlan}
+      dietaryStyles={profile.dietary_styles ?? []}
+      initialPantryItems={initialPantryItems}
+    />
+  );
 }

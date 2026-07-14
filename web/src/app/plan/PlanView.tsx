@@ -6,6 +6,8 @@ import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { recipeVideoSearchUrl } from "@/lib/youtube";
 import { generatePlan, swapMeal } from "./actions";
 import type { BlockedSlotView, PlanSlotView, PlanView } from "./data";
+import { PantryPanel } from "./PantryPanel";
+import type { PantryItemView } from "./pantryData";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -16,9 +18,11 @@ function slotMapKey(dayIndex: number, mealType: MealType): string {
 export function PlanBoard({
   initialPlan,
   dietaryStyles,
+  initialPantryItems,
 }: {
   initialPlan: PlanView | null;
   dietaryStyles: string[];
+  initialPantryItems: PantryItemView[];
 }) {
   const [plan, setPlan] = useState<PlanView | null>(initialPlan);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlotView[]>(initialPlan?.blockedSlots ?? []);
@@ -90,6 +94,10 @@ export function PlanBoard({
         >
           {generating ? "Generating…" : plan ? "Regenerate" : "Generate my meal plan"}
         </button>
+      </div>
+
+      <div className="mt-6">
+        <PantryPanel initialItems={initialPantryItems} />
       </div>
 
       {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
