@@ -87,6 +87,18 @@ export function dominantDirection(gaps: MacroGapDirection[]): "increase" | "decr
   return [...gaps].sort((a, b) => b.overshootPct - a.overshootPct)[0].direction;
 }
 
+// F3 snack/add-on gap-closer: an add-on can only ever ADD macros, so it's
+// only useful for "increase" gaps (weekly actual too low) — a "decrease"
+// gap (too high) can't be helped by adding food, only by swapping to a
+// leaner recipe (the existing slack-meal requery). Returns the single
+// largest-overshoot "increase" gap to target, or null if every current gap
+// is a "decrease" (add-on phase should be skipped entirely for this round).
+export function dominantIncreaseGap(gaps: MacroGapDirection[]): MacroGapDirection | null {
+  const increaseGaps = gaps.filter((g) => g.direction === "increase");
+  if (increaseGaps.length === 0) return null;
+  return [...increaseGaps].sort((a, b) => b.overshootPct - a.overshootPct)[0];
+}
+
 // Up to `max` slots with the most "slack" — furthest from their own
 // per-meal target, in the direction that would help move the weekly total
 // toward its band for the given gap directions.

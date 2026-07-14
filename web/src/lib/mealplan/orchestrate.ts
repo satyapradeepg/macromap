@@ -24,14 +24,39 @@ import {
   sumActuals,
   macroGapDirections,
   dominantDirection,
+  dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
 } from "./reconciliation";
+import { buildAddonForSlot, type SlotAddon } from "./addon";
 import { recipeCacheKey, isStale } from "./cacheKey";
-import { complexSearch, SpoonacularQuotaError, SpoonacularRequestError } from "@/lib/spoonacular";
+import {
+  complexSearch,
+  lookupIngredientMacros,
+  SpoonacularQuotaError,
+  SpoonacularRequestError,
+} from "@/lib/spoonacular";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export { SpoonacularQuotaError, SpoonacularRequestError };
+
+// Recomputed fresh from claimResult.claimed + the addons map every time,
+// rather than incrementally tracked — sumActuals(claimResult.claimed) alone
+// silently drops add-on macros whenever it's called again later (e.g. after
+// phase 2's recipe swaps), which is exactly the kind of staleness bug this
+// avoids by never trusting a previously-incremented running total.
+function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
+  let total = sumActuals(claimed);
+  for (const addon of addons.values()) {
+    total = {
+      calories: total.calories + addon.caloriesKcal,
+      proteinG: total.proteinG + addon.proteinG,
+      carbsG: total.carbsG + addon.carbsG,
+      fatG: total.fatG + addon.fatG,
+    };
+  }
+  return total;
+}
 
 // All 21 slots share the identical per-meal target in this MVP's model
 // (daily macros divided equally across breakfast/lunch/dinner), so ONE
@@ -62,6 +87,7 @@ export interface OrchestratedSlot {
   candidate: ClaimedSlot["candidate"];
   tier: ToleranceTier;
   matchLabel: string | null;
+  addon?: SlotAddon;
 }
 
 export interface OrchestrateResult {
@@ -128,13 +154,56 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     }
   }
 
-  // Weekly reconciliation — single targeted re-fetch per slack slot, not a
-  // fresh 3-tier cascade, so it doesn't burn the retry budget on widening.
-  let actual = sumActuals(claimResult.claimed);
-  const gaps = macroGapDirections(actual, weeklyBand(weekly));
+  // Weekly reconciliation. Two phases sharing the same capped retry budget
+  // (PRD: "capped at 3 extra queries per plan to protect API quota"):
+  //
+  // 1. Snack/add-on gap-closer (F3, tried first) — an add-on can only ever
+  //    ADD macros, so it's only useful for "increase" gaps (weekly actual
+  //    too low); a "decrease" gap (too high) skips straight to phase 2.
+  //    Sized to the slot's own 17.5%-of-calories cap (addon.ts), so one
+  //    attempt rarely closes a whole weekly gap by itself — the loop keeps
+  //    attaching add-ons to different slack slots (never the same slot
+  //    twice) until the gap closes or the budget runs out.
+  // 2. Full recipe requery (existing, single targeted re-fetch per slack
+  //    slot rather than a fresh 3-tier cascade) — for whatever's left
+  //    after phase 1, on both remaining "increase" gaps and any "decrease"
+  //    gaps. Slots already given an add-on this round are excluded here,
+  //    so a slot never gets both an add-on and a full recipe swap in the
+  //    same reconciliation pass (would leave a stale, no-longer-relevant
+  //    add-on attached to a newly-swapped recipe).
+  const addons = new Map<string, SlotAddon>();
+  const addonedThisRound = new Set<string>();
+
+  let gaps = macroGapDirections(sumWithAddons(claimResult.claimed, addons), weeklyBand(weekly));
+  let increaseGap = dominantIncreaseGap(gaps);
+  while (increaseGap && trySpend(retryBudget)) {
+    retryQueriesUsed++;
+
+    const eligible = claimResult.claimed.filter((c) => !addonedThisRound.has(slotKey(c.slotId)));
+    const [targetSlotId] = pickSlackSlots(eligible, perMeal, [increaseGap], 1);
+    if (!targetSlotId) break; // no slot left to try an add-on on this round
+
+    const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
+    if (!existing) break;
+
+    const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacros);
+    addonedThisRound.add(slotKey(targetSlotId));
+    if (addon) {
+      addons.set(slotKey(targetSlotId), addon);
+    }
+    // If no addon was returned (ingredient unresolved or too small to
+    // matter), the slot is still marked addonedThisRound so the next
+    // iteration tries a different slot rather than repeating the same
+    // failure — never fakes progress that didn't happen.
+
+    gaps = macroGapDirections(sumWithAddons(claimResult.claimed, addons), weeklyBand(weekly));
+    increaseGap = dominantIncreaseGap(gaps);
+  }
+
   if (gaps.length > 0) {
     const direction = dominantDirection(gaps)!;
-    const slackSlotIds = pickSlackSlots(claimResult.claimed, perMeal, gaps, 3);
+    const eligible = claimResult.claimed.filter((c) => !addonedThisRound.has(slotKey(c.slotId)));
+    const slackSlotIds = pickSlackSlots(eligible, perMeal, gaps, retryBudget.remaining);
 
     for (const slotId of slackSlotIds) {
       if (!trySpend(retryBudget)) break;
@@ -171,9 +240,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       // If nothing found, leave the existing claim unchanged — the gap
       // simply isn't closed for that slot (never fakes an exact match).
     }
-    actual = sumActuals(claimResult.claimed);
   }
 
+  const actual = sumWithAddons(claimResult.claimed, addons);
   const stillOutside = macroGapDirections(actual, weeklyBand(weekly));
   const reconciliationStatus = stillOutside.length === 0 ? "within_band" : "outside_band_after_retries";
 
@@ -182,6 +251,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     candidate: c.candidate,
     tier: c.tier,
     matchLabel: matchLabelFor(c.tier, c.candidate, perMeal),
+    addon: addons.get(slotKey(c.slotId)),
   }));
 
   const blockedSlots = [...blockedHints.entries()].map(([key, blockingHint]) => ({

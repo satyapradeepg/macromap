@@ -135,28 +135,64 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       };
     }
 
+    // .select() to get back each inserted row's id + slot identity — needed
+    // to attach any F3 snack/add-on to the right meal_plan_slot_id below
+    // (the addon table's FK requires the real DB row, not the in-memory
+    // orchestration result).
+    let insertedSlots: Array<{ id: string; day_index: number; meal_type: string }> = [];
     if (result.slots.length > 0) {
-      const { error: slotsError } = await supabase.from("meal_plan_slots").insert(
-        result.slots.map((s) => ({
-          meal_plan_id: insertedPlan.id,
-          day_index: s.slotId.dayIndex,
-          meal_type: s.slotId.mealType,
-          recipe_id: s.candidate.id,
-          recipe_title: s.candidate.title,
-          image_url: s.candidate.imageUrl,
-          servings: s.candidate.servings,
-          calories: s.candidate.caloriesKcal,
-          protein_g: s.candidate.proteinG,
-          carbs_g: s.candidate.carbsG,
-          fat_g: s.candidate.fatG,
-          price_per_serving_cents: s.candidate.pricePerServingCents,
-          tolerance_tier: s.tier,
-          match_label: s.matchLabel,
-          ingredients: s.candidate.ingredients,
-        })),
-      );
+      const { data: slotsData, error: slotsError } = await supabase
+        .from("meal_plan_slots")
+        .insert(
+          result.slots.map((s) => ({
+            meal_plan_id: insertedPlan.id,
+            day_index: s.slotId.dayIndex,
+            meal_type: s.slotId.mealType,
+            recipe_id: s.candidate.id,
+            recipe_title: s.candidate.title,
+            image_url: s.candidate.imageUrl,
+            servings: s.candidate.servings,
+            calories: s.candidate.caloriesKcal,
+            protein_g: s.candidate.proteinG,
+            carbs_g: s.candidate.carbsG,
+            fat_g: s.candidate.fatG,
+            price_per_serving_cents: s.candidate.pricePerServingCents,
+            tolerance_tier: s.tier,
+            match_label: s.matchLabel,
+            ingredients: s.candidate.ingredients,
+          })),
+        )
+        .select("id, day_index, meal_type");
       if (slotsError) {
         return { plan: null, usingCachedFallback: false, error: slotsError.message };
+      }
+      insertedSlots = slotsData ?? [];
+
+      const addonRows = result.slots.flatMap((s) => {
+        if (!s.addon) return [];
+        const row = insertedSlots.find(
+          (r) => r.day_index === s.slotId.dayIndex && r.meal_type === s.slotId.mealType,
+        );
+        if (!row) return [];
+        return [
+          {
+            meal_plan_slot_id: row.id,
+            ingredient_name: s.addon.ingredientName,
+            spoonacular_ingredient_id: s.addon.spoonacularIngredientId,
+            amount: s.addon.amountG,
+            unit: "g",
+            calories: s.addon.caloriesKcal,
+            protein_g: s.addon.proteinG,
+            carbs_g: s.addon.carbsG,
+            fat_g: s.addon.fatG,
+          },
+        ];
+      });
+      if (addonRows.length > 0) {
+        const { error: addonsError } = await supabase.from("meal_plan_slot_addons").insert(addonRows);
+        if (addonsError) {
+          return { plan: null, usingCachedFallback: false, error: addonsError.message };
+        }
       }
     }
 
@@ -180,6 +216,16 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         pricePerServingCents: s.candidate.pricePerServingCents,
         toleranceTier: s.tier,
         matchLabel: s.matchLabel,
+        addon: s.addon
+          ? {
+              ingredientName: s.addon.ingredientName,
+              amountG: s.addon.amountG,
+              caloriesKcal: s.addon.caloriesKcal,
+              proteinG: s.addon.proteinG,
+              carbsG: s.addon.carbsG,
+              fatG: s.addon.fatG,
+            }
+          : null,
       })),
       blockedSlots: result.blockedSlots.map((b) => ({
         dayIndex: b.slotId.dayIndex,
@@ -285,7 +331,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     return { slot: null, blocked: true, blockingHint: swapResult.blockingHint, error: null };
   }
 
-  const { error: updateError } = await supabase
+  const { data: updatedSlot, error: updateError } = await supabase
     .from("meal_plan_slots")
     .update({
       recipe_id: swapResult.candidate.id,
@@ -303,10 +349,19 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     })
     .eq("meal_plan_id", input.mealPlanId)
     .eq("day_index", input.dayIndex)
-    .eq("meal_type", input.mealType);
+    .eq("meal_type", input.mealType)
+    .select("id")
+    .single();
 
   if (updateError) {
     return { slot: null, blocked: false, blockingHint: null, error: updateError.message };
+  }
+
+  // A swapped recipe invalidates any F3 snack/add-on that was sized/chosen
+  // for the meal it's replacing — clear it rather than leaving a stale
+  // add-on attached to an unrelated new recipe.
+  if (updatedSlot) {
+    await supabase.from("meal_plan_slot_addons").delete().eq("meal_plan_slot_id", updatedSlot.id);
   }
 
   const slot: PlanSlotView = {
@@ -323,6 +378,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     pricePerServingCents: swapResult.candidate.pricePerServingCents,
     toleranceTier: swapResult.tier!,
     matchLabel: swapResult.matchLabel,
+    addon: null,
   };
 
   return { slot, blocked: false, blockingHint: null, error: null };

@@ -177,6 +177,12 @@ function MealCard({
             {Math.round(slot.calories)} cal · {Math.round(slot.proteinG)}g protein · {Math.round(slot.carbsG)}g
             carbs · {Math.round(slot.fatG)}g fat
           </p>
+          {slot.addon && (
+            <p className="mt-1 text-xs text-accent-2">
+              + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} added to help hit this week&apos;s
+              targets ({Math.round(slot.addon.caloriesKcal)} cal)
+            </p>
+          )}
           <div className="mt-3 flex items-center justify-between">
             <a
               href={recipeVideoSearchUrl(slot.recipeTitle)}

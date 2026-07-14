@@ -5,6 +5,7 @@ import {
   outsideMacros,
   macroGapDirections,
   dominantDirection,
+  dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
 } from "./reconciliation";
@@ -73,6 +74,29 @@ describe("dominantDirection", () => {
       { macro: "proteinG" as const, direction: "increase" as const, overshootPct: 0.3 },
     ];
     expect(dominantDirection(gaps)).toBe("increase");
+  });
+});
+
+describe("dominantIncreaseGap", () => {
+  it("returns null when there are no gaps", () => {
+    expect(dominantIncreaseGap([])).toBeNull();
+  });
+
+  it("returns null when every gap is 'decrease' (an add-on can't help)", () => {
+    const gaps = [
+      { macro: "calories" as const, direction: "decrease" as const, overshootPct: 0.2 },
+      { macro: "fatG" as const, direction: "decrease" as const, overshootPct: 0.1 },
+    ];
+    expect(dominantIncreaseGap(gaps)).toBeNull();
+  });
+
+  it("picks the largest-overshoot 'increase' gap, ignoring 'decrease' gaps", () => {
+    const gaps = [
+      { macro: "fatG" as const, direction: "decrease" as const, overshootPct: 0.5 },
+      { macro: "proteinG" as const, direction: "increase" as const, overshootPct: 0.1 },
+      { macro: "carbsG" as const, direction: "increase" as const, overshootPct: 0.3 },
+    ];
+    expect(dominantIncreaseGap(gaps)).toEqual({ macro: "carbsG", direction: "increase", overshootPct: 0.3 });
   });
 });
 

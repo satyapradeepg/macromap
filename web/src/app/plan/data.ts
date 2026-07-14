@@ -7,6 +7,15 @@ import type { MealType } from "@/lib/mealplan/targets";
 import type { ToleranceTier } from "@/lib/mealplan/tolerance";
 import type { MacroTargets } from "@/lib/mealplan/targets";
 
+export interface PlanSlotAddonView {
+  ingredientName: string;
+  amountG: number;
+  caloriesKcal: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+}
+
 export interface PlanSlotView {
   dayIndex: number;
   mealType: MealType;
@@ -21,6 +30,7 @@ export interface PlanSlotView {
   pricePerServingCents: number | null;
   toleranceTier: ToleranceTier;
   matchLabel: string | null;
+  addon: PlanSlotAddonView | null;
 }
 
 export interface BlockedSlotView {
@@ -61,6 +71,13 @@ export async function getMostRecentPlan(
     .select("*")
     .eq("meal_plan_id", plan.id);
 
+  const slotIds = (slots ?? []).map((s) => s.id);
+  const { data: addonRows } =
+    slotIds.length > 0
+      ? await supabase.from("meal_plan_slot_addons").select("*").in("meal_plan_slot_id", slotIds)
+      : { data: [] };
+  const addonsBySlotId = new Map((addonRows ?? []).map((a) => [a.meal_plan_slot_id, a]));
+
   return {
     id: plan.id,
     generatedAt: plan.generated_at,
@@ -77,21 +94,34 @@ export async function getMostRecentPlan(
       carbsG: plan.weekly_actual_carbs_g,
       fatG: plan.weekly_actual_fat_g,
     },
-    slots: (slots ?? []).map((s) => ({
-      dayIndex: s.day_index,
-      mealType: s.meal_type,
-      recipeId: s.recipe_id,
-      recipeTitle: s.recipe_title,
-      imageUrl: s.image_url,
-      servings: s.servings,
-      calories: s.calories,
-      proteinG: s.protein_g,
-      carbsG: s.carbs_g,
-      fatG: s.fat_g,
-      pricePerServingCents: s.price_per_serving_cents,
-      toleranceTier: s.tolerance_tier,
-      matchLabel: s.match_label,
-    })),
+    slots: (slots ?? []).map((s) => {
+      const addonRow = addonsBySlotId.get(s.id);
+      return {
+        dayIndex: s.day_index,
+        mealType: s.meal_type,
+        recipeId: s.recipe_id,
+        recipeTitle: s.recipe_title,
+        imageUrl: s.image_url,
+        servings: s.servings,
+        calories: s.calories,
+        proteinG: s.protein_g,
+        carbsG: s.carbs_g,
+        fatG: s.fat_g,
+        pricePerServingCents: s.price_per_serving_cents,
+        toleranceTier: s.tolerance_tier,
+        matchLabel: s.match_label,
+        addon: addonRow
+          ? {
+              ingredientName: addonRow.ingredient_name,
+              amountG: addonRow.amount,
+              caloriesKcal: addonRow.calories,
+              proteinG: addonRow.protein_g,
+              carbsG: addonRow.carbs_g,
+              fatG: addonRow.fat_g,
+            }
+          : null,
+      };
+    }),
     blockedSlots: [],
   };
 }

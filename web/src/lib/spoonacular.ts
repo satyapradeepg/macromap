@@ -141,6 +141,80 @@ function nutrientAmount(recipe: SpoonacularRecipe, name: string): number {
   return nutrient?.amount ?? 0;
 }
 
+// F3 snack/add-on gap-closer — Spoonacular's ingredient-level endpoints,
+// live-confirmed (July 2026) to exist and cost a flat 1.0pt/call each, and
+// to return full macro data via the same nutrition.nutrients shape as
+// complexSearch above (reuses nutrientAmount below). Grounding rule (PRD
+// 7.3 F3): the add-on's macros always come from here, never LLM-estimated.
+export interface IngredientMacroLookup {
+  id: number;
+  name: string;
+  caloriesPer100g: number;
+  proteinGPer100g: number;
+  carbsGPer100g: number;
+  fatGPer100g: number;
+}
+
+interface SpoonacularIngredientSearchResponse {
+  results: Array<{ id: number; name: string }>;
+}
+
+interface SpoonacularIngredientInformationResponse {
+  id: number;
+  name: string;
+  nutrition?: {
+    nutrients: Array<{ name: string; amount: number }>;
+  };
+}
+
+function nutrientAmountFrom(nutrients: Array<{ name: string; amount: number }>, name: string): number {
+  const nutrient = nutrients.find((n) => n.name.toLowerCase() === name.toLowerCase());
+  return nutrient?.amount ?? 0;
+}
+
+// Combines search + information into the one lookup the add-on mechanism
+// actually needs — returns null (not a thrown error) on quota/request
+// failure or a zero-result search, since a missing add-on ingredient is an
+// expected, handled case (reconciliation falls through to the slack-meal
+// requery), not an outage.
+export async function lookupIngredientMacros(query: string): Promise<IngredientMacroLookup | null> {
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey) {
+    throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
+  }
+
+  const searchParams = new URLSearchParams({ apiKey, query, number: "1" });
+  const searchRes = await fetch(`https://api.spoonacular.com/food/ingredients/search?${searchParams.toString()}`);
+  if (searchRes.status === 402 || searchRes.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${searchRes.status})`);
+  }
+  if (!searchRes.ok) return null;
+
+  const searchBody = (await searchRes.json()) as SpoonacularIngredientSearchResponse;
+  const match = searchBody.results[0];
+  if (!match) return null;
+
+  const infoParams = new URLSearchParams({ apiKey, amount: "100", unit: "grams" });
+  const infoRes = await fetch(
+    `https://api.spoonacular.com/food/ingredients/${match.id}/information?${infoParams.toString()}`,
+  );
+  if (infoRes.status === 402 || infoRes.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${infoRes.status})`);
+  }
+  if (!infoRes.ok) return null;
+
+  const info = (await infoRes.json()) as SpoonacularIngredientInformationResponse;
+  const nutrients = info.nutrition?.nutrients ?? [];
+  return {
+    id: info.id,
+    name: info.name,
+    caloriesPer100g: nutrientAmountFrom(nutrients, "Calories"),
+    proteinGPer100g: nutrientAmountFrom(nutrients, "Protein"),
+    carbsGPer100g: nutrientAmountFrom(nutrients, "Carbohydrates"),
+    fatGPer100g: nutrientAmountFrom(nutrients, "Fat"),
+  };
+}
+
 function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
   return {
     id: recipe.id,
