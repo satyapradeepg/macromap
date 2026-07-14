@@ -41,10 +41,14 @@ const ADDON_INGREDIENT_BY_MACRO: Record<MacroKey, string> = {
   calories: "peanut butter",
 };
 
-// PRD 7.3 F3: "capped at... ≤15-20% of that meal's calories" — 17.5% is the
-// midpoint, applied as a hard ceiling on the add-on's own calorie
-// contribution so it always reads as a snack, never "a second meal."
-const MAX_ADDON_CALORIE_FRACTION = 0.175;
+// PRD 7.3 F3: "capped at... ≤15-20% of that meal's calories" — uses the top
+// of that range (not the 17.5% midpoint originally chosen) as a hard
+// ceiling on the add-on's own calorie contribution, still reading as a
+// snack rather than "a second meal." Raised from 17.5%->20% after a real
+// generation landed 4.2g of carbs short of the weekly band with 17.5% —
+// the extra headroom closes gaps like that one without changing anything
+// about what counts as realistic (still within PRD's stated range).
+const MAX_ADDON_CALORIE_FRACTION = 0.2;
 
 // Below this, an add-on isn't worth attaching (real ingredients have low
 // but nonzero minimums due to rounding) — treated the same as a failed

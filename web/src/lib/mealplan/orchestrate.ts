@@ -17,7 +17,7 @@ import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
 import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, type PantryItem, type RecipeCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
-import { createRetryBudget, trySpend } from "./retryBudget";
+import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
 import {
   weeklyBand,
@@ -133,13 +133,13 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     blockedHints.set(slotKey(slotId), cascade.blockingHint ?? "No recipe matched this meal's targets.");
   }
 
-  const retryBudget = createRetryBudget(3);
+  const retryBudget = createRetryBudget();
   let retryQueriesUsed = 0;
 
   // Exhaustion re-queries first (rare) — one attempt each, excluding every
   // recipe already claimed elsewhere in this plan.
   for (const slotId of claimResult.exhaustedSlots) {
-    if (!trySpend(retryBudget)) break;
+    if (!trySpend(retryBudget, RECIPE_ACTION_COST)) break;
     retryQueriesUsed++;
     const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
     const cascade = await runCascadeForSlot(perMeal, makeFetcher(claimedIds), rankOpts);
@@ -155,12 +155,14 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   }
 
   // Weekly reconciliation. Two phases sharing the same capped retry budget
-  // (PRD: "capped at 3 extra queries per plan to protect API quota"):
+  // (retryBudget.ts: points-weighted, not flat actions — a recipe requery
+  // costs RECIPE_ACTION_COST, an add-on attempt costs the cheaper
+  // ADDON_ATTEMPT_COST, reflecting their real Spoonacular cost difference):
   //
   // 1. Snack/add-on gap-closer (F3, tried first) — an add-on can only ever
   //    ADD macros, so it's only useful for "increase" gaps (weekly actual
   //    too low); a "decrease" gap (too high) skips straight to phase 2.
-  //    Sized to the slot's own 17.5%-of-calories cap (addon.ts), so one
+  //    Sized to the slot's own 20%-of-calories cap (addon.ts), so one
   //    attempt rarely closes a whole weekly gap by itself — the loop keeps
   //    attaching add-ons to different slack slots (never the same slot
   //    twice) until the gap closes or the budget runs out.
@@ -176,7 +178,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
   let gaps = macroGapDirections(sumWithAddons(claimResult.claimed, addons), weeklyBand(weekly));
   let increaseGap = dominantIncreaseGap(gaps);
-  while (increaseGap && trySpend(retryBudget)) {
+  while (increaseGap && trySpend(retryBudget, ADDON_ATTEMPT_COST)) {
     retryQueriesUsed++;
 
     const eligible = claimResult.claimed.filter((c) => !addonedThisRound.has(slotKey(c.slotId)));
@@ -203,10 +205,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   if (gaps.length > 0) {
     const direction = dominantDirection(gaps)!;
     const eligible = claimResult.claimed.filter((c) => !addonedThisRound.has(slotKey(c.slotId)));
-    const slackSlotIds = pickSlackSlots(eligible, perMeal, gaps, retryBudget.remaining);
+    const affordableRequeries = Math.floor(retryBudget.remaining / RECIPE_ACTION_COST);
+    const slackSlotIds = pickSlackSlots(eligible, perMeal, gaps, affordableRequeries);
 
     for (const slotId of slackSlotIds) {
-      if (!trySpend(retryBudget)) break;
+      if (!trySpend(retryBudget, RECIPE_ACTION_COST)) break;
       retryQueriesUsed++;
 
       const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));

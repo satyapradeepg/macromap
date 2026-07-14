@@ -16,17 +16,17 @@ function proteinGap(overshootPct = 0.1): MacroGapDirection {
 }
 
 describe("buildAddonForSlot", () => {
-  it("sizes the add-on to the 17.5% calorie cap for the slot", async () => {
+  it("sizes the add-on to the 20% calorie cap for the slot", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
-    const slotCalories = 700; // cap = 122.5 kcal
+    const slotCalories = 700; // cap = 140 kcal
     const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher);
 
     expect(fetcher).toHaveBeenCalledWith("greek yogurt");
     expect(addon).not.toBeNull();
-    // 122.5 kcal / 61 kcal per 100g = ~200.8g, rounded to nearest 5g = 200g
-    expect(addon!.amountG).toBe(200);
-    expect(addon!.caloriesKcal).toBeCloseTo((61 * 200) / 100, 5);
-    expect(addon!.proteinG).toBeCloseTo((10.3 * 200) / 100, 5);
+    // 140 kcal / 61 kcal per 100g = ~229.5g, floored to nearest 5g = 225g
+    expect(addon!.amountG).toBe(225);
+    expect(addon!.caloriesKcal).toBeCloseTo((61 * 225) / 100, 5);
+    expect(addon!.proteinG).toBeCloseTo((10.3 * 225) / 100, 5);
     expect(addon!.spoonacularIngredientId).toBe(1256);
   });
 
@@ -34,7 +34,7 @@ describe("buildAddonForSlot", () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
     const slotCalories = 500;
     const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher);
-    expect(addon!.caloriesKcal).toBeLessThanOrEqual(slotCalories * 0.175);
+    expect(addon!.caloriesKcal).toBeLessThanOrEqual(slotCalories * 0.2);
   });
 
   it("picks the ingredient matching the targeted macro", async () => {
@@ -57,7 +57,7 @@ describe("buildAddonForSlot", () => {
 
   it("returns null when a tiny meal's calorie cap rounds below the minimum add-on size", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
-    // cap = 30 * 0.175 = 5.25 kcal -> well under MIN_ADDON_AMOUNT_G worth of yogurt
+    // cap = 30 * 0.2 = 6 kcal -> well under MIN_ADDON_AMOUNT_G worth of yogurt
     const addon = await buildAddonForSlot(30, proteinGap(), fetcher);
     expect(addon).toBeNull();
   });
