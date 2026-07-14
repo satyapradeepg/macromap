@@ -218,13 +218,17 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     blockedHints.set(slotKey(slotId), cascade.blockingHint ?? "No recipe matched this meal's targets.");
   }
 
-  const retryBudget = createRetryBudget();
+  // Own small budget, separate from each day's reconciliation budget below —
+  // exhaustion is rare (claim-resolution collisions across 21 slots), so
+  // this shouldn't compete with every day's macro gap-closing for the same
+  // pool (see the per-day budget note further down for why that matters).
+  const exhaustionBudget = createRetryBudget();
   let retryQueriesUsed = 0;
 
   // Exhaustion re-queries first (rare) — one attempt each, excluding every
   // recipe already claimed elsewhere in this plan.
   for (const slotId of claimResult.exhaustedSlots) {
-    if (!trySpend(retryBudget, RECIPE_ACTION_COST)) break;
+    if (!trySpend(exhaustionBudget, RECIPE_ACTION_COST)) break;
     retryQueriesUsed++;
     const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
     const cascade = await runCascadeForSlot(
@@ -274,12 +278,18 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
   // Daily reconciliation (reworked from weekly-only — a plan can look fine
   // on a whole-week average while individual days swing wildly; Prospre-
-  // style plans reconcile per day). Runs once per day, days 0-6 in order,
-  // all 7 days sharing ONE retry budget (not a per-day slice) — so a day
-  // processed earlier can use more of the budget if it needs it, at the
-  // cost of less being left for later days. Each day's pass has the same
-  // two phases as before, just scoped to that day's 3 slots and its own
-  // daily target instead of all 21 slots and the weekly target:
+  // style plans reconcile per day). Runs once per day, days 0-6 in order.
+  //
+  // Each day gets its OWN fresh retry budget (PRD F3 backlog item, closed
+  // July 2026) rather than all 7 days sharing one pool — the shared-pool
+  // design dated back to when reconciliation was a single weekly pass (the
+  // budget's own default sizing, retryBudget.ts, was never rescaled when
+  // reconciliation moved to per-day), and in practice let day 0 (processed
+  // first) consume most of the budget, leaving later days with little or
+  // no gap-closing help. Giving every day the same starting allowance means
+  // day 6 gets the same shot at hitting its band as day 0. Each day's pass
+  // has the same two phases as before, just scoped to that day's 3 slots
+  // and its own daily target instead of all 21 slots and the weekly target:
   //
   // 1. Snack/add-on gap-closer (F3, tried first) — an add-on can only ever
   //    ADD macros, so it's only useful for "increase" gaps (this day's
@@ -310,10 +320,14 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   for (let dayIndex = 0; dayIndex < DAYS_PER_WEEK; dayIndex++) {
     const daySlots = () => claimResult.claimed.filter((c) => c.slotId.dayIndex === dayIndex);
     const addonedThisDay = new Set<string>();
+    // Fresh per-day budget (see the comment above the loop) — not shared
+    // with any other day, only with this day's own protein-floor
+    // enforcement pass further down.
+    const dayRetryBudget = createRetryBudget();
 
     let gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
     let increaseGap = dominantIncreaseGap(gaps);
-    while (increaseGap && trySpend(retryBudget, ADDON_ATTEMPT_COST)) {
+    while (increaseGap && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
       retryQueriesUsed++;
 
       const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
@@ -346,11 +360,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       const eligible = daySlots().filter(
         (c) => !addonedThisDay.has(slotKey(c.slotId)) && slotMechanism(c.slotId.mealType) === "recipe",
       );
-      const affordableRequeries = Math.floor(retryBudget.remaining / RECIPE_ACTION_COST);
+      const affordableRequeries = Math.floor(dayRetryBudget.remaining / RECIPE_ACTION_COST);
       const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
 
       for (const slotId of slackSlotIds) {
-        if (!trySpend(retryBudget, RECIPE_ACTION_COST)) break;
+        if (!trySpend(dayRetryBudget, RECIPE_ACTION_COST)) break;
         retryQueriesUsed++;
 
         const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
@@ -412,7 +426,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       // Prefer an add-on (protein powder/yogurt) — but PRD F3 caps one
       // add-on per slot for realism, so only attempt this if phases 1/2
       // above didn't already attach one to this exact slot.
-      if (!addonedThisDay.has(slotKey(slotId)) && trySpend(retryBudget, ADDON_ATTEMPT_COST)) {
+      if (!addonedThisDay.has(slotKey(slotId)) && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
         retryQueriesUsed++;
         const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
         addonedThisDay.add(slotKey(slotId));
@@ -429,7 +443,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       // to requery, same constraint as phase 2).
       const existingNow = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
       const proteinNow = (existingNow?.candidate.proteinG ?? 0) + (addons.get(slotKey(slotId))?.proteinG ?? 0);
-      if (existingNow && proteinNow < proteinFloor && slotMechanism(mealType) === "recipe" && trySpend(retryBudget, RECIPE_ACTION_COST)) {
+      if (existingNow && proteinNow < proteinFloor && slotMechanism(mealType) === "recipe" && trySpend(dayRetryBudget, RECIPE_ACTION_COST)) {
         retryQueriesUsed++;
         const claimedIds = claimResult.claimed
           .filter((c) => slotKey(c.slotId) !== slotKey(slotId))

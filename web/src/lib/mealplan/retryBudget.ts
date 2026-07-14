@@ -17,6 +17,16 @@
 // of quota" (preserved exactly: 3 x RECIPE_ACTION_COST = 9) rather than
 // "3 actions of any kind," so add-ons (the common path; exhaustion is
 // rare) get proportionally more attempts for the same real quota spend.
+//
+// This 9-unit default was sized for a single WEEKLY reconciliation pass.
+// When reconciliation later moved to per-day (orchestrate.ts), one budget
+// this size was, for a while, shared across all 7 days plus exhaustion
+// retries — under-provisioned for 7 independent passes instead of 1, and
+// let day 0 (processed first) starve later days of any gap-closing help.
+// Fixed (PRD F3 backlog item, closed July 2026): orchestrate.ts now calls
+// createRetryBudget() fresh for each day (and separately for exhaustion),
+// so every day gets this same 9-unit allowance rather than splitting one
+// pool 7 ways.
 
 export interface RetryBudget {
   remaining: number;
