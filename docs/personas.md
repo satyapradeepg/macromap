@@ -71,6 +71,7 @@ A frictionless Sunday routine: input her goal, get a plan, get a list, shop, don
 | F5 Nutrition dashboard | Mid-week protein alerts catch adherence drift before it's too late |
 | F9 Recipe video links | Reduces drop-off when she encounters an unfamiliar recipe |
 | F4 Grocery list with prices | Budget awareness without having to track manually |
+| F11 Conversational plan assistant | When mid-week takeout breaks the plan, she can just tell the assistant to swap a meal or adjust rather than starting over — directly addresses her adherence-collapse pain point |
 
 ### Quote
 > "I don't have time to be my own nutritionist. Just tell me what to buy."
@@ -104,9 +105,10 @@ Free tier is the entry point. Would convert to Pro if the budget-aware grocery l
 ### Features That Map to His Needs
 | Feature | Why it helps Jordan |
 |---|---|
+| F6 Pantry log (Free, MVP) | Builds meals around what's already at home from day one — directly fixes his "no awareness of what's in the pantry" pain point, no longer a V2 wait |
 | F4 Grocery list (Free tier) | Stops him re-buying ingredients he already has |
+| F11 Conversational plan assistant (Free) | Can just tell it what's in his fridge instead of filling out a form — lowers the entry friction that made him bounce off other apps |
 | F8 Barcode scanning (V2) | Scans items after shopping to auto-populate pantry — removes manual entry friction |
-| F6 Pantry log (V2) | Builds meals around what's already at home, reducing waste |
 | Reddit deep-link | Free inspiration from r/EatCheapAndHealthy without leaving the app |
 | F3 Budget-aware planning (Pro) | The conversion trigger — if it demonstrably saves him money, he upgrades |
 

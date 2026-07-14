@@ -36,12 +36,12 @@ Set Goal → Meal Plan → Grocery List → Track
 
 | Step | Description |
 |------|-------------|
-| 01 Set Goal | Macro targets, weekly budget, preferences, allergies |
-| 02 Meal Plan | AI-generated weekly plan matched to requirements |
+| 01 Set Goal | Macro targets, weekly budget, preferences, allergies, optional pantry contents |
+| 02 Meal Plan | AI-generated weekly plan matched to requirements — pantry-aware from the start, with a conversational assistant to adjust it in plain language |
 | 03 Grocery List | Deduped shopping list with price estimates |
 | 04 Track | Nutrition dashboard vs. weekly targets |
 
-Users can optionally log what's already in their pantry, so the app avoids redundant purchases and builds meals around existing inventory.
+Users can optionally log what's already in their pantry — active from day one, not a later add-on — so the app builds meals around existing inventory and avoids redundant purchases. A persistent chat assistant runs alongside every step, so pantry edits, meal swaps, and constraint changes can happen in plain language instead of only through forms.
 
 ---
 
@@ -61,10 +61,11 @@ Built as an AI agent orchestrating four distinct data sources via the Model Cont
 
 | MCP Layer | Description |
 |-----------|-------------|
-| **Recipe + Nutrition MCP** | **Spoonacular API** (paid, $29/month — 1,500 points/day). Single API call returns recipe + per-ingredient nutrition data together via `/recipes/complexSearch`. Accepts macro targets and dietary filters directly, eliminating any custom ingredient parsing layer. 5,000+ recipes. Evaluated against Edamam ($38/month minimum for equivalent functionality) — Spoonacular wins on value. |
+| **Recipe + Nutrition MCP** | **Spoonacular API** (paid, $29/month — 1,500 points/day). Single API call returns recipe + per-ingredient nutrition data together via `/recipes/complexSearch`. Accepts macro targets and dietary filters directly, eliminating any custom ingredient parsing layer. 5,000+ recipes. Evaluated against Edamam ($38/month minimum for equivalent functionality) — Spoonacular wins on value. Also backs the AI composition fallback below: when no recipe matches (or ignores pantry ingredients), Claude proposes one, but every ingredient's macros are still pulled from Spoonacular's ingredient-level endpoint, never estimated. |
 | **Price MCP** | Web search MCP — **Tavily preferred over Brave** (1,000 free credits/month, no credit card required vs. Brave's credit card requirement). Both have the same grocery pricing limitations — estimates only, not real-time retail data. Manual override essential. Upgrade path: Kroger API. |
-| **Pantry MCP** | Custom-authored MCP: pantry inventory, dietary constraints, dislikes, allergies, weekly budget. The personalization layer. |
-| **Barcode MCP** | Open Food Facts API — free, no API key required. Browser camera scanning via ZXing-js. Lets users scan grocery items to instantly populate the pantry log, removing manual entry friction. |
+| **Pantry MCP** | Custom-authored MCP: pantry inventory, dietary constraints, dislikes, allergies, weekly budget. The personalization layer — now read *before* meal generation from day one (moved up from V2), biasing recipe selection toward what's on hand, not just excluding it from the grocery list afterward. |
+| **Conversational Agent Layer** | The same orchestrator (Claude, Sonnet tier) held as a persistent chat session across the whole flow, not just a one-shot generation trigger. Lets users edit pantry contents, swap meals, or change constraints in plain language — every chat action calls the same underlying mutation the UI buttons already call. No separate infrastructure; this is a session-state change to the existing orchestrator, not a new agent. |
+| **Barcode MCP** | Open Food Facts API — free, no API key required. Browser camera scanning via ZXing-js. Lets users scan grocery items to instantly populate the pantry log, removing manual entry friction. V2 — manual pantry entry itself now ships in MVP; this adds a lower-friction entry method. |
 | **Video Layer** | YouTube deep-link per meal (MVP: link to YouTube search results, no API needed). Post-MVP: in-app embed via YouTube Data API v3 free tier (10,000 units/day). |
 | **Calendar Export** | `.ics` file generation via the `ics` npm package. One-tap export of the weekly meal plan to Google Calendar or Apple Calendar — no OAuth, no API quota. |
 | **App & Auth Layer** | Next.js (App Router, TypeScript) on Vercel — one codebase for frontend and the API routes that call Spoonacular/Tavily, keeping those keys server-side only. Supabase (Postgres) holds user profiles, pantry/constraints, ratings, and both plan-generation caches; its built-in anonymous auth converts a guest session straight into a permanent account at Step 5, with no manual data migration. Net infra cost pre-revenue: $0 beyond Spoonacular's $29/month. |
@@ -81,9 +82,9 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 | **Pro** | $9/month | Serious gym-goers cutting or bulking |
 | **Coach** | $20/month | PTs and nutrition coaches |
 
-**Free includes:** Weekly meal plan (3 meals/day, no budget constraint), allergy + dietary filtering (safety feature — never gated), basic macro tracking, grocery list without price estimates, recipe video links, calendar export.
+**Free includes:** Weekly meal plan (3 meals/day, no budget constraint), allergy + dietary filtering (safety feature — never gated), basic macro tracking, grocery list without price estimates, recipe video links, calendar export, manual pantry entry (F6, local — generation-time biasing, grocery-list exclusion), and the conversational plan assistant (F11) — these two add no *Spoonacular/Tavily* cost beyond what Free's generation/swap calls already include, but F11's chat parsing and the F3 AI composition fallback are real Sonnet-tier Claude calls whose volume isn't yet budgeted (see PRD OQ8). *(Tier placement is a default, not yet user-validated — revisit if either turns out to be a meaningful cost or differentiation lever once usage data comes in.)*
 
-**Pro includes:** Budget-aware meal planning, real-time price estimates (Tavily), pantry sync & inventory (V2), full nutrition dashboard with weekly analytics, shopping list export.
+**Pro includes:** Budget-aware meal planning, real-time price estimates (Tavily), pantry cloud sync across devices (V2 — local-only pantry storage is Free/MVP), full nutrition dashboard with weekly analytics, shopping list export.
 
 **Coach includes:** Multiple client profiles, client-facing meal plan sharing, advanced analytics, priority support.
 
@@ -94,9 +95,10 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 | Level | Risk | Mitigation |
 |-------|------|------------|
 | **Medium** | User research is informal only | Early demand signal validated: founder conversations with friends and forum posts show genuine interest and willingness to pay. Risk is not zero — informal interest doesn't guarantee conversion or retention. Mitigation: run 5–10 structured interviews before full build to validate macro-vs-budget priority, willingness to pay at $9/month, and which features matter most. |
-| **Medium** | Spoonacular API cost & capacity dependency | Spoonacular is a paid dependency from day one ($29/month; ~49 full-plan generations/day ceiling once real per-recipe costs are accounted for — see PRD OQ6). This tier is deliberately scoped for development and an early/small production cohort, not KR1's full 1,000-subscriber target — reaching that target requires proactively upgrading the tier before capacity is hit (trigger: ~75% of the measured ceiling, see PRD Section 7.3). Revenue break-even is 4 Pro subscribers at this tier, resetting once the tier changes. Mitigation: Edamam is a validated fallback vendor ($38/month); MCP architecture makes the recipe layer swappable. |
+| **Low-Medium** | Spoonacular API cost & capacity dependency | Spoonacular is a paid dependency from day one ($29/month). A July 2026 recompute — grounded in the actual shipped code (all 21 meals share one query per plan, not three) plus live-confirmed point costs — found the real ceiling is likely ~134-268 full-plan generations/day, well above what KR1's 1,000-subscriber target needs (~600/week), reversing the prior "this tier can't carry KR1" conclusion (see PRD OQ6). Not yet confirmed against a real production run, so downgraded from Medium but not closed out. Revenue break-even is 4 Pro subscribers at this tier. Mitigation if the recompute doesn't hold up in production: Edamam is a validated fallback vendor ($38/month); MCP architecture makes the recipe layer swappable. |
 | **Medium** | Price estimate accuracy | Web search prices (Tavily) are approximate. Mitigated by manual override; upgrade path is Kroger API for real-time retail prices. |
 | **Medium** | Single point of failure on Spoonacular for plan generation | If the API is down or the daily quota is exhausted, serve the user's cached last-successful plan with a "temporarily unavailable" banner rather than a blank or error state — never a dead end. |
+| **Medium** | AI-composed/edited recipes and snack add-ons might feel unrealistic or lower-quality even when macro-accurate | Ground every ingredient's macros in Spoonacular's ingredient-level nutrition data, never LLM-estimated; cap snack add-ons at ≤15–20% of a meal's calories and one per slot; only trigger AI composition after Spoonacular's cascade fallback is exhausted, not as a default path. Track acceptance/swap rate by meal source and tighten the trigger threshold if AI-touched meals underperform (see hypotheses.md H8). |
 | **Low** | Search API rate limits | Free tiers cap daily queries. Gate price lookups behind Pro plan to align cost with revenue. |
 
 ---
@@ -105,10 +107,13 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 
 **In MVP**
 - Macro target input
-- Weekly meal plan generation
+- Weekly meal plan generation — pantry-aware from day one
+- Pantry log — manual entry, generation-time biasing, grocery-list exclusion (moved up from V2)
+- Conversational plan assistant — chat-driven pantry/meal/constraint edits alongside the existing UI
+- AI recipe composition/edit fallback and snack/add-on gap-closer, grounded in Spoonacular's ingredient nutrition data, for when no Spoonacular recipe fits
 - Deduped shopping list
 - Web search price estimates + manual override
-- Pantry & constraints MCP — constraints layer only (dietary restrictions, allergies, dislikes, budget); pantry *inventory* tracking is V2, see below
+- Dietary restrictions, allergies, dislikes, budget (constraints layer, unchanged)
 - Basic nutrition dashboard
 - Dietary preference & allergy filtering
 - Recipe video links (YouTube deep-link per meal — no API required)
@@ -116,9 +121,9 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 - "Get inspiration" deep-link to r/MealPrepSunday and r/EatCheapAndHealthy filtered by goal
 
 **V2**
-- Pantry log (F6) — track what's already in stock so grocery lists exclude it
 - Meal ratings (F7) — thumbs up/down after eating; low-rated meals excluded from future plans
-- Barcode scanning for pantry (F8) (Open Food Facts API + ZXing-js browser camera)
+- Barcode scanning for pantry (F8) (Open Food Facts API + ZXing-js browser camera) — manual pantry entry itself ships in MVP
+- Pantry item auto-expiry (7 days) unless refreshed
 - In-app recipe video embeds (YouTube Data API v3 free tier)
 
 **Post-MVP**

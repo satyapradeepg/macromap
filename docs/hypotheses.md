@@ -22,6 +22,8 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Source:** PRD Assumption A1 — *"if users don't trust the numbers, retention collapses"*
 
+**Note:** Originally scoped to TDEE/macro-target trust only. Now higher-stakes: with AI-composed/edited recipes and snack add-ons (see PRD F3), some meals are no longer pure Spoonacular lookups — trust risk extends from "are these numbers right" to "did the AI actually build a real, cookable meal." See H8 for the recipe-composition-specific test.
+
 **Test method:**
 - Track "macro override rate" during onboarding: what % of users change the suggested values by >20%?
 - Run a post-week-1 in-app survey: "Did you trust the macros MacroMap gave you?" (1–5 scale)
@@ -112,24 +114,44 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 ---
 
-## H6 — Pantry engagement: users will log their pantry without barcode scanning (V2)
+## H6 — Pantry engagement: users will log their pantry without barcode scanning
 
-**Hypothesis:** Once the pantry log (F6) ships in V2, users will manually enter 3+ pantry items in the first two weeks it's available, enough for the pantry layer to meaningfully affect meal plan generation.
+**Hypothesis:** Given manual pantry entry is available from MVP (F6, moved up from V2 — see PRD), users will enter 3+ pantry items within their first two plan-generation sessions, enough for the pantry layer to meaningfully bias meal selection.
 
 **Source:** PRD Assumption A4 — *"if friction is too high, pantry feature won't be used"*
 
-**Note:** Pantry log (F6) itself, not just barcode scanning (F8), ships in V2 — there is no MVP pantry feature to test. This hypothesis can only be run after V2 launches, not in MVP's first two weeks.
+**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6) — only barcode scanning (F8) remains V2. This hypothesis is testable from MVP launch, not gated on V2.
 
 **Test method:**
-- Measure pantry log completion rate: % of users who add ≥1 item in first 2 weeks after F6 ships
-- Track average pantry size at end of that 2-week window
-- F8 (barcode scanning) ships alongside F6 in V2 — this tests the manual-entry baseline before barcode is prioritized
+- Measure pantry log completion rate: % of users who add ≥1 item before or during their first plan generation
+- Track average pantry size at end of the user's first two plan-generation sessions
+- Track what % of a generated plan's 21 meals actually use ≥1 pantry item — measures whether entry translates into real generation impact, not just data entry
 
 **Success threshold:**
-- ≥40% of users add ≥3 pantry items in the first 2 weeks after F6 ships
+- ≥40% of users add ≥3 pantry items within their first two plan-generation sessions
 - Average pantry size ≥5 items at end of that window
+- ≥25% of a pantry-enabled plan's 21 meals use at least one pantry ingredient
 
-**Failure action:** If completion <20%, prioritize barcode scanning (F8) within the V2 build, or surface a pantry onboarding prompt immediately after first meal plan generation.
+**Failure action:** If completion <20%, fast-track barcode scanning (F8) into MVP instead of V2, or surface a pantry onboarding prompt immediately after Step 1 (TDEE calculation) rather than waiting for Step 2.
+
+---
+
+## H8 — AI-composed recipes & snack add-ons: users accept them as real meals
+
+**Hypothesis:** When Spoonacular has no macro/pantry match and Claude composes or edits a recipe (or adds a snack/side to close a macro gap), users rate these AI-touched meals as realistic and cookable at roughly the same rate as pure Spoonacular recipes — this doesn't become a trust-eroding "the AI made something weird" moment.
+
+**Source:** New mechanism introduced alongside pantry-first generation and the conversational assistant (see PRD F3, ai-agents.md Agent 2) — not yet validated with users. Elevates the risk already flagged in H1 / PRD Assumption A1.
+
+**Test method:**
+- Tag every meal server-side as `spoonacular` / `ai-composed` / `ai-edited` / `snack-addon` at generation time
+- Post-week in-app rating split by tag: "Did this meal feel like a real, cookable meal?" (1–5 scale), compared across tags
+- Track swap/reject rate by tag — do users swap away from AI-touched meals more often than pure Spoonacular ones?
+
+**Success threshold:**
+- AI-composed/edited meal rating within 0.5 points of pure-Spoonacular meal rating
+- Swap rate for AI-touched meals no more than 1.5× the swap rate for pure Spoonacular meals
+
+**Failure action:** If AI-touched meals rate meaningfully lower or get swapped much more often, tighten the composition fallback to trigger less often (widen cascade tolerance further first, or accept a smaller weekly-band miss) rather than defaulting to AI composition, and/or reduce the snack add-on's calorie-share cap.
 
 ---
 
@@ -156,11 +178,12 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 |---|---|---|---|
 | H2 | $9/month pricing | Before launch (interviews) | High — kills conversion |
 | H1 | Macro trust | Week 1 post-launch | High — kills retention |
+| H8 | AI-composed recipe/snack acceptance | Week 1 post-launch | High — new mechanism, same retention risk as H1 |
 | H3 | Time savings | Week 2 post-launch | High — core value prop |
 | H7 | Weekly retention | Week 4 post-launch | High — business model |
 | H5 | Price accuracy | Week 2 post-launch | Medium — Pro feature risk |
 | H4 | Recipe variety | Month 1 post-launch | Medium — variety drives retention |
-| H6 | Pantry engagement | Week 2 post-V2-launch | Medium — no MVP pantry feature to test |
+| H6 | Pantry engagement | Week 1–2 post-launch | Medium — now testable at MVP, not gated on V2 |
 
 ---
 

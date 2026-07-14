@@ -472,17 +472,19 @@
             <div class="mock-bar-row stagger-2"><span class="lbl">Fat</span><div class="mock-bar-wrap"><div class="mock-bar bar-orange" style="width:40%;"></div></div><span class="val mono">90g</span></div>
             <div class="mock-field stagger-3" style="margin-top:18px"><label>Weekly grocery budget (optional)</label><input type="text" class="mono" value="$120" readonly></div>
             <div class="mock-field stagger-3" style="margin-top:10px"><label>Zip code</label><input type="text" class="mono" value="94103" readonly></div>
+            <div class="mock-field stagger-3" style="margin-top:10px"><label>Pantry (optional)</label><input type="text" class="mono" value="chicken breast, rice, soy sauce" readonly></div>
             <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="nextDemoStep()">
-              Looks good 
+              Looks good
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>
           </div>
           <div class="demo-copy stagger-1">
             <h3>Set Weekly Goal</h3>
-            <p>Confirm your weekly macro targets, an optional grocery budget, and your zip code — used to localize grocery price estimates. Budget is optional — leave it blank and MacroMap just shows you the total cost with no filtering applied.</p>
+            <p>Confirm your weekly macro targets, an optional grocery budget, your zip code — used to localize grocery price estimates — and optionally what's already in your pantry. Budget is optional — leave it blank and MacroMap just shows you the total cost with no filtering applied. Pantry items bias Step 3's recipe picks toward what you already have; skip it and generation works exactly the same as before.</p>
             <div class="step-tags">
               <span class="step-tag">Budget optional</span>
               <span class="step-tag">Zip → local prices</span>
+              <span class="step-tag">Pantry optional</span>
               <span class="step-tag">Saved as your baseline</span>
             </div>
           </div>
@@ -562,15 +564,16 @@
           </div>
           <div class="demo-copy stagger-1">
             <h3>Generate Meal Plan</h3>
-            <p>21 meals — 3 a day, 7 days — matched to your macros, dietary preferences, allergies, and budget. Don't like a meal? Tap "Swap" for an alternative — try it on the left.</p>
+            <p>21 meals — 3 a day, 7 days — matched to your macros, dietary preferences, allergies, budget, and pantry. Don't like a meal? Tap "Swap" for an alternative, or just tell the chat assistant — try Swap on the left.</p>
             <div class="step-tags">
               <span class="step-tag">Macro-matched</span>
+              <span class="step-tag">Pantry-aware</span>
               <span class="step-tag">Budget-aware</span>
               <span class="step-tag">Allergy-safe</span>
             </div>
             <div class="fallback-note">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              <span><strong>Never a dead end:</strong> if nothing matches exactly, MacroMap automatically widens the tolerance in steps until it finds a close match — and always tells you what changed.</span>
+              <span><strong>Never a dead end:</strong> if nothing matches exactly, MacroMap first widens the tolerance in steps — and if that still comes up empty, or ignores what's in your pantry, the assistant composes or tweaks a recipe (or adds a small side) to close the gap, always grounded in real ingredient nutrition data, never a guess.</span>
             </div>
           </div>
         </div>
@@ -754,7 +757,7 @@
   <div class="container">
     <span class="eyebrow">Features</span>
     <h2>Everything the workflow needs — nothing it doesn't.</h2>
-    <p class="section-sub">Ten features across four connected data sources: recipes, nutrition, prices, and your own preferences.</p>
+    <p class="section-sub">Eleven features across four connected data sources: recipes, nutrition, prices, and your own preferences.</p>
 
     <div class="feature-grid">
       <div class="feature-card glass">
@@ -768,9 +771,14 @@
         <p>Dietary style, allergy flags, and dislikes — safety filtering that's always applied.</p>
       </div>
       <div class="feature-card glass">
+        <span class="icon">💬</span>
+        <h4>Conversational Plan Assistant</h4>
+        <p>Chat alongside every step — edit your pantry, swap a meal, or change a constraint in plain language instead of hunting through forms.</p>
+      </div>
+      <div class="feature-card glass">
         <span class="icon">🍽️</span>
         <h4>Meal Plan Generation</h4>
-        <p>21 macro-matched meals a week, sourced from a 5,000+ recipe library, with budget-aware filtering.</p>
+        <p>21 macro-matched meals a week, sourced from a 5,000+ recipe library and your own pantry, with budget-aware filtering. When nothing fits, the assistant composes or tweaks a recipe — or adds a small side — to close the gap.</p>
       </div>
       <div class="feature-card glass">
         <span class="icon">🛒</span>
@@ -783,10 +791,9 @@
         <p>Daily and 7-day trend views vs. target, plus off-plan meal logging so the numbers stay honest.</p>
       </div>
       <div class="feature-card glass">
-        <span class="tier-badge tier-v2">ROADMAP</span>
         <span class="icon">🧂</span>
         <h4>Pantry Log</h4>
-        <p>Log what's already at home so your grocery list never suggests buying it again.</p>
+        <p>Log what's already at home — the plan is built around it from the start, and your grocery list never suggests buying it again.</p>
       </div>
       <div class="feature-card glass">
         <span class="tier-badge tier-v2">ROADMAP</span>
