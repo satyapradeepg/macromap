@@ -33,6 +33,17 @@ export function slotKey(slot: MealSlotId): string {
   return `${slot.dayIndex}-${slot.mealType}`;
 }
 
+// Meal-type realism (Epic E2 rework) — maps our internal MealType to
+// Spoonacular's `type` complexSearch param, live-confirmed (July 2026) to
+// return genuinely meal-appropriate results (type=breakfast -> smoothies/
+// frittatas, type=main course -> soups/stews), not just a label. Lunch and
+// dinner share "main course" rather than getting distinct types — nothing
+// in Spoonacular's vocabulary meaningfully separates them, and splitting
+// further would fragment the shared query pool without a real benefit.
+export function mealTypeToSpoonacularType(mealType: MealType): string {
+  return mealType === "breakfast" ? "breakfast" : "main course";
+}
+
 // 3 meals/day — every meal slot targets an equal share of the daily total.
 export function perMealTarget(daily: MacroTargets): MacroTargets {
   return {

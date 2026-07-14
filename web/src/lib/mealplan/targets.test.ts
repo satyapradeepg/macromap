@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { allSlotIds, perMealTarget, weeklyTarget, MEALS_PER_WEEK } from "./targets";
+import { allSlotIds, perMealTarget, weeklyTarget, MEALS_PER_WEEK, mealTypeToSpoonacularType } from "./targets";
 
 describe("allSlotIds", () => {
   it("enumerates exactly 21 slots in fixed Day1-Breakfast..Day7-Dinner order", () => {
@@ -19,5 +19,16 @@ describe("perMealTarget / weeklyTarget", () => {
 
   it("multiplies daily by 7 for weekly target", () => {
     expect(weeklyTarget(daily)).toEqual({ calories: 10500, proteinG: 1050, carbsG: 1050, fatG: 350 });
+  });
+});
+
+describe("mealTypeToSpoonacularType", () => {
+  it("maps breakfast to Spoonacular's breakfast type", () => {
+    expect(mealTypeToSpoonacularType("breakfast")).toBe("breakfast");
+  });
+
+  it("maps both lunch and dinner to main course", () => {
+    expect(mealTypeToSpoonacularType("lunch")).toBe("main course");
+    expect(mealTypeToSpoonacularType("dinner")).toBe("main course");
   });
 });

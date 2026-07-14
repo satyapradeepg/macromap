@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
-  weeklyBand,
+  toleranceBand,
   sumActuals,
   outsideMacros,
   macroGapDirections,
+  isWithinBand,
   dominantDirection,
   dominantIncreaseGap,
   pickSlackSlots,
@@ -40,26 +41,39 @@ function claimedSlot(id: number, index: number, overrides: Partial<RankedCandida
 
 const weeklyTarget = { calories: 14000, proteinG: 1400, carbsG: 1400, fatG: 500 };
 
-describe("weeklyBand", () => {
+describe("toleranceBand", () => {
   it("is +/-5% of the weekly target", () => {
-    const band = weeklyBand(weeklyTarget);
+    const band = toleranceBand(weeklyTarget);
     expect(band.calories).toEqual({ min: 13300, max: 14700 });
   });
 });
 
 describe("outsideMacros / macroGapDirections", () => {
   it("reports nothing out of band when actuals match target", () => {
-    const band = weeklyBand(weeklyTarget);
+    const band = toleranceBand(weeklyTarget);
     expect(outsideMacros(weeklyTarget, band)).toEqual([]);
     expect(macroGapDirections(weeklyTarget, band)).toEqual([]);
   });
 
   it("detects a too-high macro as 'decrease' and a too-low macro as 'increase'", () => {
-    const band = weeklyBand(weeklyTarget);
+    const band = toleranceBand(weeklyTarget);
     const actual = { ...weeklyTarget, calories: 16000, proteinG: 1000 };
     const gaps = macroGapDirections(actual, band);
     expect(gaps).toContainEqual(expect.objectContaining({ macro: "calories", direction: "decrease" }));
     expect(gaps).toContainEqual(expect.objectContaining({ macro: "proteinG", direction: "increase" }));
+  });
+});
+
+describe("isWithinBand", () => {
+  it("is true when every macro is within band", () => {
+    const band = toleranceBand(weeklyTarget);
+    expect(isWithinBand(weeklyTarget, band)).toBe(true);
+  });
+
+  it("is false when any macro is outside band, at any granularity (daily or weekly)", () => {
+    const dailyTarget = { calories: 2000, proteinG: 200, carbsG: 200, fatG: 70 };
+    const band = toleranceBand(dailyTarget);
+    expect(isWithinBand({ ...dailyTarget, carbsG: 150 }, band)).toBe(false);
   });
 });
 

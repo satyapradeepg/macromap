@@ -49,6 +49,12 @@ export interface ComplexSearchArgs {
   excludeIngredients: string[];
   excludeIds: number[];
   number: number;
+  // Meal-type realism (live-confirmed July 2026: type=breakfast returns
+  // genuinely breakfast-appropriate dishes, type=main course returns
+  // lunch/dinner-appropriate ones — not just a label, a real filter).
+  // Optional so callers that don't care about meal-type (e.g. none yet,
+  // but keeps the client itself meal-type-agnostic) can omit it.
+  type?: string;
 }
 
 // Spoonacular's documented complexSearch params don't include a direct
@@ -82,6 +88,7 @@ export async function complexSearch(args: ComplexSearchArgs): Promise<RecipeCand
   if (args.excludeIngredients.length > 0) {
     params.set("excludeIngredients", args.excludeIngredients.join(","));
   }
+  if (args.type) params.set("type", args.type);
 
   let response: Response;
   try {

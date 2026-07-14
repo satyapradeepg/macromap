@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { MEAL_TYPES, type MealType } from "@/lib/mealplan/targets";
+import { MEAL_TYPES, DAYS_PER_WEEK, type MealType, type MacroTargets } from "@/lib/mealplan/targets";
+import { toleranceBand, isWithinBand } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { recipeVideoSearchUrl } from "@/lib/youtube";
 import { generatePlan, swapMeal } from "./actions";
@@ -13,6 +14,36 @@ const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function slotMapKey(dayIndex: number, mealType: MealType): string {
   return `${dayIndex}-${mealType}`;
+}
+
+// Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
+// that same ±5% check purely for display, derived from data the plan
+// already carries (no separate persisted per-day status). weeklyTarget/7
+// is exactly the daily target orchestrate.ts used, since weeklyTarget is
+// always dailyTarget x 7 (targets.ts).
+function dayStatus(
+  plan: PlanView,
+  dayIndex: number,
+): "within_band" | "outside_band" | "incomplete" {
+  const daySlots = plan.slots.filter((s) => s.dayIndex === dayIndex);
+  if (daySlots.length < MEAL_TYPES.length) return "incomplete";
+
+  const actual: MacroTargets = daySlots.reduce(
+    (sum, slot) => ({
+      calories: sum.calories + slot.calories + (slot.addon?.caloriesKcal ?? 0),
+      proteinG: sum.proteinG + slot.proteinG + (slot.addon?.proteinG ?? 0),
+      carbsG: sum.carbsG + slot.carbsG + (slot.addon?.carbsG ?? 0),
+      fatG: sum.fatG + slot.fatG + (slot.addon?.fatG ?? 0),
+    }),
+    { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+  );
+  const dailyTarget: MacroTargets = {
+    calories: plan.weeklyTarget.calories / DAYS_PER_WEEK,
+    proteinG: plan.weeklyTarget.proteinG / DAYS_PER_WEEK,
+    carbsG: plan.weeklyTarget.carbsG / DAYS_PER_WEEK,
+    fatG: plan.weeklyTarget.fatG / DAYS_PER_WEEK,
+  };
+  return isWithinBand(actual, toleranceBand(dailyTarget)) ? "within_band" : "outside_band";
 }
 
 export function PlanBoard({
@@ -108,13 +139,18 @@ export function PlanBoard({
         </p>
       )}
 
-      {plan?.reconciliationStatus === "outside_band_after_retries" && (
-        <div className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
-          <p className="font-semibold text-foreground">This week lands slightly outside your weekly targets</p>
-          <p className="mt-1">
-            Target: {Math.round(plan.weeklyTarget.calories)} cal · {Math.round(plan.weeklyTarget.proteinG)}g
-            protein — Actual: {Math.round(plan.weeklyActual.calories)} cal ·{" "}
-            {Math.round(plan.weeklyActual.proteinG)}g protein.
+      {plan && (
+        <div className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
+          <p className="font-semibold text-foreground">
+            {plan.reconciliationStatus === "within_band"
+              ? "This week is within your weekly targets"
+              : "This week lands slightly outside your weekly targets"}
+          </p>
+          <p className="mt-1 font-mono text-xs text-muted">
+            Calories: {Math.round(plan.weeklyActual.calories)} / {Math.round(plan.weeklyTarget.calories)} · Protein:{" "}
+            {Math.round(plan.weeklyActual.proteinG)}g / {Math.round(plan.weeklyTarget.proteinG)}g · Carbs:{" "}
+            {Math.round(plan.weeklyActual.carbsG)}g / {Math.round(plan.weeklyTarget.carbsG)}g · Fat:{" "}
+            {Math.round(plan.weeklyActual.fatG)}g / {Math.round(plan.weeklyTarget.fatG)}g
           </p>
         </div>
       )}
@@ -132,9 +168,19 @@ export function PlanBoard({
 
       {plan && (
         <div className="mt-8 flex flex-col gap-8">
-          {DAY_LABELS.map((label, dayIndex) => (
+          {DAY_LABELS.map((label, dayIndex) => {
+            const status = dayStatus(plan, dayIndex);
+            return (
             <div key={dayIndex}>
-              <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">{label}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">{label}</h2>
+                {status === "within_band" && (
+                  <span className="text-xs font-semibold text-accent-2">On target</span>
+                )}
+                {status === "outside_band" && (
+                  <span className="text-xs font-semibold text-muted">Slightly off target</span>
+                )}
+              </div>
               <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {MEAL_TYPES.map((mealType) => {
                   const key = slotMapKey(dayIndex, mealType);
@@ -153,7 +199,8 @@ export function PlanBoard({
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </main>
@@ -184,6 +231,11 @@ function MealCard({
           <p className="mt-2 font-mono text-xs text-muted">
             {Math.round(slot.calories)} cal · {Math.round(slot.proteinG)}g protein · {Math.round(slot.carbsG)}g
             carbs · {Math.round(slot.fatG)}g fat
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {slot.servings > 1
+              ? `Macros shown are for 1 serving — this recipe makes ${slot.servings}, so cook a fraction of it or plan for leftovers.`
+              : "Makes 1 serving."}
           </p>
           {slot.addon && (
             <p className="mt-1 text-xs text-accent-2">

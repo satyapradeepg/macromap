@@ -28,6 +28,11 @@ export interface QuerySignature {
   // shape — bumping it naturally misses the old cache rows instead of
   // requiring a manual truncate every time this knob changes.
   resultCount: number;
+  // Meal-type realism (Epic E2 rework) — Spoonacular's type param
+  // (breakfast vs main course) returns genuinely different result sets,
+  // so it's a real query dimension, not just a label; breakfast and
+  // lunch/dinner now get distinct cache entries instead of sharing one.
+  type: string;
 }
 
 export function recipeCacheKey(sig: QuerySignature): string {
@@ -40,6 +45,7 @@ export function recipeCacheKey(sig: QuerySignature): string {
     intolerances: [...sig.intolerances].map((s) => s.toLowerCase()).sort(),
     excludeIngredients: [...sig.excludeIngredients].map((s) => s.toLowerCase()).sort(),
     resultCount: sig.resultCount,
+    type: sig.type,
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

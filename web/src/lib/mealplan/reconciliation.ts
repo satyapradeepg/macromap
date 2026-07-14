@@ -1,33 +1,43 @@
-// Epic E2 (F3) — weekly reconciliation pass. Per-meal tolerance (OQ2,
-// ±10-30%) doesn't guarantee the weekly aggregate lands on target, so after
-// all 21 slots are claimed, sum actuals and compare to a tighter ±5% weekly
-// band; re-query up to the shared retry budget's remaining slots with the
-// most slack (docs/PRD-MacroMap.md OQ2 extended).
+// Epic E2 (F3) — reconciliation pass. Per-meal tolerance (OQ2, ±10-30%)
+// doesn't guarantee a larger aggregate lands on target, so after a set of
+// slots is claimed, sum actuals and compare to a tighter ±5% band; re-query
+// up to the shared retry budget's remaining slots with the most slack
+// (docs/PRD-MacroMap.md OQ2 extended).
+//
+// Originally weekly-only (summed all 21 slots once). Reworked to run
+// per-day instead (orchestrate.ts loops days 0-6, calling these same
+// functions with just that day's 3 slots and the daily target) — a plan
+// can look fine on a whole-week average while individual days swing
+// wildly, and Prospre-style plans reconcile at daily granularity. The
+// functions below were already generic over whatever MacroTargets/
+// ClaimedSlot[] they're given, so no math changed — only what orchestrate.ts
+// passes in. Renamed weeklyBand -> toleranceBand accordingly (band math is
+// identical at either granularity).
 
 import type { ClaimedSlot } from "./claim";
 import type { MealSlotId } from "./targets";
 import type { MacroTargets } from "./targets";
 import type { MacroBounds } from "./tolerance";
 
-const WEEKLY_BAND_PCT = 0.05;
+const BAND_PCT = 0.05;
 
-export interface WeeklyBand {
+export interface MacroBand {
   calories: { min: number; max: number };
   proteinG: { min: number; max: number };
   carbsG: { min: number; max: number };
   fatG: { min: number; max: number };
 }
 
-export function weeklyBand(weekly: MacroTargets): WeeklyBand {
-  const band = (target: number) => ({
-    min: target * (1 - WEEKLY_BAND_PCT),
-    max: target * (1 + WEEKLY_BAND_PCT),
+export function toleranceBand(target: MacroTargets): MacroBand {
+  const band = (value: number) => ({
+    min: value * (1 - BAND_PCT),
+    max: value * (1 + BAND_PCT),
   });
   return {
-    calories: band(weekly.calories),
-    proteinG: band(weekly.proteinG),
-    carbsG: band(weekly.carbsG),
-    fatG: band(weekly.fatG),
+    calories: band(target.calories),
+    proteinG: band(target.proteinG),
+    carbsG: band(target.carbsG),
+    fatG: band(target.fatG),
   };
 }
 
@@ -48,7 +58,7 @@ export function sumActuals(claimed: ClaimedSlot[]): MacroTargets {
 export type MacroKey = "calories" | "proteinG" | "carbsG" | "fatG";
 const MACRO_KEYS: readonly MacroKey[] = ["calories", "proteinG", "carbsG", "fatG"];
 
-export function outsideMacros(actual: MacroTargets, band: WeeklyBand): MacroKey[] {
+export function outsideMacros(actual: MacroTargets, band: MacroBand): MacroKey[] {
   return MACRO_KEYS.filter((key) => actual[key] < band[key].min || actual[key] > band[key].max);
 }
 
@@ -58,7 +68,7 @@ export interface MacroGapDirection {
   overshootPct: number; // |actual - nearest band edge| / target, for picking a dominant direction
 }
 
-export function macroGapDirections(actual: MacroTargets, band: WeeklyBand): MacroGapDirection[] {
+export function macroGapDirections(actual: MacroTargets, band: MacroBand): MacroGapDirection[] {
   const gaps: MacroGapDirection[] = [];
   for (const macro of MACRO_KEYS) {
     if (actual[macro] > band[macro].max) {
@@ -76,6 +86,10 @@ export function macroGapDirections(actual: MacroTargets, band: WeeklyBand): Macr
     }
   }
   return gaps;
+}
+
+export function isWithinBand(actual: MacroTargets, band: MacroBand): boolean {
+  return macroGapDirections(actual, band).length === 0;
 }
 
 // A single re-query can only nudge protein+calories bounds one way at a

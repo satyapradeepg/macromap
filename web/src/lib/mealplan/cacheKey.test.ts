@@ -10,6 +10,7 @@ const baseSig = {
   intolerances: ["Gluten"],
   excludeIngredients: ["Peanuts", "shellfish"],
   resultCount: 30,
+  type: "main course",
 };
 
 describe("recipeCacheKey", () => {
@@ -40,6 +41,12 @@ describe("recipeCacheKey", () => {
   it("differs when resultCount differs, so tuning the pool size can't silently serve a stale smaller pool from cache", () => {
     const a = recipeCacheKey(baseSig);
     const b = recipeCacheKey({ ...baseSig, resultCount: 8 });
+    expect(a).not.toBe(b);
+  });
+
+  it("differs when type differs — breakfast and main course must not share a cache entry", () => {
+    const a = recipeCacheKey(baseSig);
+    const b = recipeCacheKey({ ...baseSig, type: "breakfast" });
     expect(a).not.toBe(b);
   });
 

@@ -306,6 +306,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   try {
     swapResult = await swapSlotCandidate({
       dailyTargets,
+      mealType: input.mealType,
       dietaryStyles: profile.dietary_styles,
       allergies: profile.allergies,
       dislikes: profile.dislikes,
