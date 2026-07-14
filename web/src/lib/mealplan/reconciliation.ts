@@ -15,7 +15,7 @@
 // identical at either granularity).
 
 import type { ClaimedSlot } from "./claim";
-import type { MealSlotId } from "./targets";
+import type { MealSlotId, MealType } from "./targets";
 import type { MacroTargets } from "./targets";
 import type { MacroBounds } from "./tolerance";
 
@@ -114,11 +114,12 @@ export function dominantIncreaseGap(gaps: MacroGapDirection[]): MacroGapDirectio
 }
 
 // Up to `max` slots with the most "slack" — furthest from their own
-// per-meal target, in the direction that would help move the weekly total
-// toward its band for the given gap directions.
+// per-meal-type target (breakfast/lunch/dinner now have different targets,
+// see targets.ts's MEAL_TYPE_SHARE), in the direction that would help move
+// the day's total toward its band for the given gap directions.
 export function pickSlackSlots(
   claimed: ClaimedSlot[],
-  perMeal: MacroTargets,
+  mealTypeTargets: Record<MealType, MacroTargets>,
   gaps: MacroGapDirection[],
   max = 3,
 ): MealSlotId[] {
@@ -130,19 +131,20 @@ export function pickSlackSlots(
     carbsG: candidate.carbsG,
     fatG: candidate.fatG,
   });
-  const perMealValue: Record<MacroKey, number> = {
-    calories: perMeal.calories,
-    proteinG: perMeal.proteinG,
-    carbsG: perMeal.carbsG,
-    fatG: perMeal.fatG,
-  };
 
   const scored = claimed.map((slot) => {
     const values = candidateValue(slot.candidate);
+    const target = mealTypeTargets[slot.slotId.mealType];
+    const perMealValue: Record<MacroKey, number> = {
+      calories: target.calories,
+      proteinG: target.proteinG,
+      carbsG: target.carbsG,
+      fatG: target.fatG,
+    };
     // Slack is positive when this slot's actual sits on the side of its own
-    // per-meal target that helps move the weekly total in the needed
-    // direction (e.g. weekly too high -> a slot already above its own
-    // target has room to be swapped down).
+    // per-meal-type target that helps move the day's total in the needed
+    // direction (e.g. day too high -> a slot already above its own target
+    // has room to be swapped down).
     let slack = 0;
     for (const gap of gaps) {
       const deviation = values[gap.macro] - perMealValue[gap.macro];

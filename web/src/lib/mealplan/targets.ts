@@ -44,14 +44,63 @@ export function mealTypeToSpoonacularType(mealType: MealType): string {
   return mealType === "breakfast" ? "breakfast" : "main course";
 }
 
-// 3 meals/day — every meal slot targets an equal share of the daily total.
-export function perMealTarget(daily: MacroTargets): MacroTargets {
+// Realistic per-meal-type share of the daily total (Epic E2 rework),
+// replacing an even 1/3-1/3-1/3 split. Not a dietitian-prescribed formula —
+// there isn't one; total daily macros and reasonably even protein
+// distribution across meals matter far more than exact per-meal
+// percentages (see docs/PRD-MacroMap.md realism discussion). This is a
+// sensible default matching common eating patterns (lighter breakfast,
+// bigger lunch/dinner), and it fixes a real bug: an even 1/3 split gave
+// breakfast the same protein/calorie target as lunch/dinner, but live
+// testing found real breakfast recipes run far lighter than that for a
+// high-protein profile — as few as 4 real Spoonacular matches, causing
+// blocked slots. Applied uniformly across all 4 macros (not just
+// calories) — treating protein differently (e.g. an even 1/3 split) was
+// considered and rejected: it would make breakfast's protein *density*
+// higher than almost any real breakfast recipe, reintroducing the same
+// scarcity problem from the other direction. See checkProteinFloor below
+// for the actual protein-distribution safeguard instead.
+export const MEAL_TYPE_SHARE: Record<MealType, number> = {
+  breakfast: 0.2,
+  lunch: 0.4,
+  dinner: 0.4,
+};
+
+export function perMealTarget(daily: MacroTargets, mealType: MealType): MacroTargets {
+  const share = MEAL_TYPE_SHARE[mealType];
   return {
-    calories: daily.calories / MEAL_TYPES.length,
-    proteinG: daily.proteinG / MEAL_TYPES.length,
-    carbsG: daily.carbsG / MEAL_TYPES.length,
-    fatG: daily.fatG / MEAL_TYPES.length,
+    calories: daily.calories * share,
+    proteinG: daily.proteinG * share,
+    carbsG: daily.carbsG * share,
+    fatG: daily.fatG * share,
   };
+}
+
+// Convenience for building a lookup used once per generation (orchestrate.ts)
+// instead of recomputing perMealTarget per slot.
+export function allMealTypeTargets(daily: MacroTargets): Record<MealType, MacroTargets> {
+  return Object.fromEntries(MEAL_TYPES.map((mealType) => [mealType, perMealTarget(daily, mealType)])) as Record<
+    MealType,
+    MacroTargets
+  >;
+}
+
+// Protein-distribution safeguard (Epic E2 rework) — the actual
+// evidence-based practice here isn't a fixed per-meal percentage, it's
+// that muscle protein synthesis has a per-sitting ceiling, so protein
+// shouldn't be backloaded into one meal while another gets almost none.
+// Monitoring-only: flags days where any meal falls below a loose 12% of
+// the daily protein target, rather than forcing ranking to redistribute
+// (which risks reintroducing the exact corpus-scarcity problem the
+// MEAL_TYPE_SHARE split above was built to avoid — see its comment).
+export const PROTEIN_FLOOR_FRACTION = 0.12;
+
+export function proteinFloorViolations(
+  dailyProteinTarget: number,
+  mealProteinValues: Array<{ mealType: MealType; proteinG: number }>,
+): MealType[] {
+  const floor = dailyProteinTarget * PROTEIN_FLOOR_FRACTION;
+  return mealProteinValues.filter((m) => m.proteinG < floor).map((m) => m.mealType);
 }
 
 export function weeklyTarget(daily: MacroTargets): MacroTargets {

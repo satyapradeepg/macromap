@@ -115,18 +115,22 @@ describe("dominantIncreaseGap", () => {
 });
 
 describe("pickSlackSlots", () => {
-  const perMeal = { calories: 500, proteinG: 40, carbsG: 40, fatG: 15 };
+  const perMealValue = { calories: 500, proteinG: 40, carbsG: 40, fatG: 15 };
+  // Same target for all 3 types — these tests exercise slack scoring
+  // generically, not the real per-meal-type split (see targets.test.ts for
+  // that).
+  const mealTypeTargets = { breakfast: perMealValue, lunch: perMealValue, dinner: perMealValue };
 
   it("returns nothing when there are no gaps", () => {
     const claimed = [claimedSlot(1, 0)];
-    expect(pickSlackSlots(claimed, perMeal, [])).toEqual([]);
+    expect(pickSlackSlots(claimed, mealTypeTargets, [])).toEqual([]);
   });
 
   it("prefers slots already above target when the weekly total needs to decrease", () => {
     const high = claimedSlot(1, 0, { caloriesKcal: 700 }); // well above per-meal target
     const low = claimedSlot(2, 1, { caloriesKcal: 300 }); // below per-meal target
     const gaps = [{ macro: "calories" as const, direction: "decrease" as const, overshootPct: 0.1 }];
-    const picked = pickSlackSlots([high, low], perMeal, gaps, 1);
+    const picked = pickSlackSlots([high, low], mealTypeTargets, gaps, 1);
     expect(picked).toEqual([high.slotId]);
   });
 
@@ -134,14 +138,32 @@ describe("pickSlackSlots", () => {
     const high = claimedSlot(1, 0, { caloriesKcal: 700 });
     const low = claimedSlot(2, 1, { caloriesKcal: 300 });
     const gaps = [{ macro: "calories" as const, direction: "increase" as const, overshootPct: 0.1 }];
-    const picked = pickSlackSlots([high, low], perMeal, gaps, 1);
+    const picked = pickSlackSlots([high, low], mealTypeTargets, gaps, 1);
     expect(picked).toEqual([low.slotId]);
   });
 
   it("caps the result at max slots", () => {
     const claimed = allSlotIds().map((_, i) => claimedSlot(i + 1, i, { caloriesKcal: 500 + i * 10 }));
     const gaps = [{ macro: "calories" as const, direction: "decrease" as const, overshootPct: 0.1 }];
-    expect(pickSlackSlots(claimed, perMeal, gaps, 3)).toHaveLength(3);
+    expect(pickSlackSlots(claimed, mealTypeTargets, gaps, 3)).toHaveLength(3);
+  });
+
+  it("scores each slot against its OWN meal type's target, not a shared one", () => {
+    // breakfast target is much lower than lunch's — a breakfast slot at
+    // 400 cal is actually ABOVE its own (300) target, while an
+    // identical-calorie lunch slot is BELOW its own (700) target.
+    const differentTargets = {
+      breakfast: { calories: 300, proteinG: 20, carbsG: 30, fatG: 10 },
+      lunch: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
+      dinner: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
+    };
+    const breakfastSlot = claimedSlot(1, 0, { caloriesKcal: 400 }); // slotId index 0 = breakfast
+    const lunchSlot = claimedSlot(2, 1, { caloriesKcal: 400 }); // slotId index 1 = lunch
+    const gaps = [{ macro: "calories" as const, direction: "decrease" as const, overshootPct: 0.1 }];
+    // "decrease" gap prefers slots ABOVE their own target — only the
+    // breakfast slot qualifies once each is judged against its own target.
+    const picked = pickSlackSlots([breakfastSlot, lunchSlot], differentTargets, gaps, 1);
+    expect(picked).toEqual([breakfastSlot.slotId]);
   });
 });
 

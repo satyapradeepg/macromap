@@ -7,6 +7,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   allSlotIds,
   perMealTarget,
+  allMealTypeTargets,
+  proteinFloorViolations,
   weeklyTarget as computeWeeklyTarget,
   slotKey,
   mealTypeToSpoonacularType,
@@ -62,13 +64,14 @@ function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): 
   return total;
 }
 
-// All 21 slots share the identical per-meal target in this MVP's model
-// (daily macros divided equally across breakfast/lunch/dinner), so each
-// meal-type's query's candidate pool has to cover all its unique claims
-// (7 breakfast claims, 14 lunch+dinner claims — meal-type realism, added
-// in the Epic E2 rework, splits what used to be ONE shared 21-slot pool
-// into two: type=breakfast and type=main course, live-confirmed to return
-// genuinely different, meal-appropriate results — see spoonacular.ts).
+// All slots of the SAME meal type share an identical target (targets.ts's
+// MEAL_TYPE_SHARE — breakfast/lunch/dinner now get different shares of the
+// daily total, not an even 1/3 each), so each meal-type's query's
+// candidate pool has to cover all its unique claims (7 breakfast claims,
+// 14 lunch+dinner claims — meal-type realism, added in the Epic E2
+// rework, splits what used to be ONE shared 21-slot pool into two:
+// type=breakfast and type=main course, live-confirmed to return genuinely
+// different, meal-appropriate results — see spoonacular.ts).
 // cascade.ts now always fetches at the widest tier (p30) rather than only
 // widening when the tightest tier is empty — verified live against
 // Spoonacular: for an unrestricted 60g-protein/meal profile, p30 alone has
@@ -111,7 +114,7 @@ export interface OrchestrateResult {
 }
 
 export async function orchestrateGeneration(input: OrchestrateInput): Promise<OrchestrateResult> {
-  const perMeal = perMealTarget(input.dailyTargets);
+  const mealTypeTargets = allMealTypeTargets(input.dailyTargets);
   const weekly = computeWeeklyTarget(input.dailyTargets);
 
   const diet = resolveDiet(input.dietaryStyles);
@@ -121,12 +124,12 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const rankOpts = { tier: input.tier, budgetPerMealUsd, pantryItems: input.pantryItems };
 
   const admin = createAdminClient();
-  // All 21 slots share the identical per-meal target, so at a given tier
-  // they all compute the same cache key — without this, Promise.all below
-  // would race 21 concurrent callers past a cold-cache miss and each would
-  // fire its own real Spoonacular call for what should be a single shared
-  // request. Scoped to this one generation call (not module-level) so it
-  // can't leak across requests/users.
+  // All slots of the SAME meal type share an identical target, so at a
+  // given tier they all compute the same cache key — without this,
+  // Promise.all below would race N concurrent callers past a cold-cache
+  // miss and each would fire its own real Spoonacular call for what should
+  // be one shared request per meal type. Scoped to this one generation
+  // call (not module-level) so it can't leak across requests/users.
   const inFlight = new Map<string, Promise<RecipeCandidate[]>>();
 
   const makeFetcher = (excludeIds: number[], type: string): FetchCandidatesFn => (bounds, tier) =>
@@ -135,7 +138,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const slotIds = allSlotIds();
   const cascades = await Promise.all(
     slotIds.map((slotId) =>
-      runCascadeForSlot(perMeal, makeFetcher([], mealTypeToSpoonacularType(slotId.mealType)), rankOpts),
+      runCascadeForSlot(
+        mealTypeTargets[slotId.mealType],
+        makeFetcher([], mealTypeToSpoonacularType(slotId.mealType)),
+        rankOpts,
+      ),
     ),
   );
 
@@ -156,7 +163,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     retryQueriesUsed++;
     const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
     const cascade = await runCascadeForSlot(
-      perMeal,
+      mealTypeTargets[slotId.mealType],
       makeFetcher(claimedIds, mealTypeToSpoonacularType(slotId.mealType)),
       rankOpts,
     );
@@ -216,7 +223,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       retryQueriesUsed++;
 
       const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
-      const [targetSlotId] = pickSlackSlots(eligible, perMeal, [increaseGap], 1);
+      const [targetSlotId] = pickSlackSlots(eligible, mealTypeTargets, [increaseGap], 1);
       if (!targetSlotId) break; // no slot left in this day to try an add-on on
 
       const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
@@ -240,7 +247,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       const direction = dominantDirection(gaps)!;
       const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
       const affordableRequeries = Math.floor(retryBudget.remaining / RECIPE_ACTION_COST);
-      const slackSlotIds = pickSlackSlots(eligible, perMeal, gaps, affordableRequeries);
+      const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
 
       for (const slotId of slackSlotIds) {
         if (!trySpend(retryBudget, RECIPE_ACTION_COST)) break;
@@ -253,7 +260,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         const claimedIds = claimResult.claimed
           .filter((_, i) => i !== existingIndex)
           .map((c) => c.candidate.id);
-        const bounds = nudgedBounds(perMeal, direction);
+        const slotTarget = mealTypeTargets[slotId.mealType];
+        const bounds = nudgedBounds(slotTarget, direction);
         const raw = await fetchCandidatesWithCache(
           admin,
           // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
@@ -263,7 +271,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           claimedIds,
           inFlight,
         );
-        const ranked = rankCandidates(raw, perMeal, rankOpts);
+        const ranked = rankCandidates(raw, slotTarget, rankOpts);
         const pick = ranked.find((c) => !claimedIds.includes(c.id));
         if (pick) {
           // The nudge intentionally searches outside the slot's original
@@ -271,7 +279,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // target (not the nudged one) so the persisted label/match_label
           // honestly reflects it, rather than carrying over a stale tier
           // that no longer matches the actual deviation.
-          const actualTier = classifyTier(pick, perMeal) ?? "p30";
+          const actualTier = classifyTier(pick, slotTarget) ?? "p30";
           claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
         }
         // If nothing found, leave the existing claim unchanged — the gap
@@ -281,6 +289,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
     const dayFinalActual = sumWithAddons(daySlots(), addons);
     dailyStatuses.push(isWithinBand(dayFinalActual, dailyBand) ? "within_band" : "outside_band_after_retries");
+
+    // Protein-distribution safeguard (targets.ts's proteinFloorViolations)
+    // — monitoring only, doesn't change ranking/selection (see targets.ts
+    // comment for why a hard constraint here risks reintroducing the
+    // breakfast corpus-scarcity problem). Logged so a real violation is at
+    // least visible, not silently shipped.
+    const mealProteinValues = daySlots().map((c) => ({
+      mealType: c.slotId.mealType,
+      proteinG: c.candidate.proteinG + (addons.get(slotKey(c.slotId))?.proteinG ?? 0),
+    }));
+    const violations = proteinFloorViolations(input.dailyTargets.proteinG, mealProteinValues);
+    if (violations.length > 0) {
+      console.log(`[mealplan] day ${dayIndex}: protein floor violation in ${violations.join(", ")}`);
+    }
   }
 
   // Weekly totals are still computed and returned for the plan-level
@@ -295,7 +317,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     slotId: c.slotId,
     candidate: c.candidate,
     tier: c.tier,
-    matchLabel: matchLabelFor(c.tier, c.candidate, perMeal),
+    matchLabel: matchLabelFor(c.tier, c.candidate, mealTypeTargets[c.slotId.mealType]),
     addon: addons.get(slotKey(c.slotId)),
   }));
 
@@ -439,7 +461,7 @@ export interface SwapSlotResult {
 }
 
 export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotResult> {
-  const perMeal = perMealTarget(input.dailyTargets);
+  const perMeal = perMealTarget(input.dailyTargets, input.mealType);
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
   const excludeIngredients = [...input.allergies, ...input.dislikes];
