@@ -22,6 +22,17 @@
 // without it whenever a nutrient filter is present, but every call path
 // here always includes bounds, so this costs nothing extra in practice and
 // protects against ever silently getting zeroed-out macros again.
+//
+// Pantry preference (F6/F3) is deliberately NOT sent here as Spoonacular's
+// includeIngredients param, despite PRD 7.3 F3 describing it as "passed to
+// the Spoonacular query" — pantry contents are per-user, and folding them
+// into the real request would fragment the cross-user recipe_query_cache
+// (cacheKey.ts) to near-zero hit rate, the same reason excludeIds is kept
+// out of the cache key. Same tradeoff already made for carb/fat bounds
+// (see the module comment above): handled as a local post-fetch ranking
+// preference instead (ranking.ts's pantryOverlapDeduction), over the same
+// shared candidate pool every user's query already produces. PRD wording
+// should be corrected to match next time the docs are touched.
 
 import type { MacroBounds } from "./mealplan/tolerance";
 import type { RecipeCandidate } from "./mealplan/ranking";

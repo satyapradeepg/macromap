@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { macroDeviationScore, rankCandidates, type RecipeCandidate } from "./ranking";
+import {
+  macroDeviationScore,
+  rankCandidates,
+  type PantryItem,
+  type RecipeCandidate,
+} from "./ranking";
 
 function candidate(overrides: Partial<RecipeCandidate> = {}): RecipeCandidate {
   return {
@@ -152,5 +157,80 @@ describe("rankCandidates", () => {
     const ranked = rankCandidates([exact, outsideP10], target, { tier: "free", budgetPerMealUsd: null });
     expect(ranked.find((c) => c.id === 1)!.actualTier).toBe("p10");
     expect(ranked.find((c) => c.id === 2)!.actualTier).toBe("p20");
+  });
+
+  describe("pantry overlap (F6/F3)", () => {
+    const chicken = { id: 101, name: "chicken breast", amount: 1, unit: "lb", metricAmount: 450, metricUnit: "g" };
+    const rice = { id: 202, name: "white rice", amount: 1, unit: "cup", metricAmount: 190, metricUnit: "g" };
+
+    it("prefers a candidate using pantry ingredients over an equally-good macro match without them", () => {
+      const withPantry = candidate({ id: 1, ingredients: [chicken] });
+      const withoutPantry = candidate({ id: 2, ingredients: [] });
+      const pantryItems: PantryItem[] = [{ name: "chicken breast", spoonacularIngredientId: null }];
+      const ranked = rankCandidates([withoutPantry, withPantry], target, {
+        tier: "free",
+        budgetPerMealUsd: null,
+        pantryItems,
+      });
+      expect(ranked.map((c) => c.id)).toEqual([1, 2]);
+    });
+
+    it("matches by resolved spoonacularIngredientId when available", () => {
+      const withPantry = candidate({ id: 1, ingredients: [chicken] });
+      const withoutPantry = candidate({ id: 2, ingredients: [] });
+      const pantryItems: PantryItem[] = [{ name: "some unrelated label", spoonacularIngredientId: 101 }];
+      const ranked = rankCandidates([withoutPantry, withPantry], target, {
+        tier: "free",
+        budgetPerMealUsd: null,
+        pantryItems,
+      });
+      expect(ranked.map((c) => c.id)).toEqual([1, 2]);
+    });
+
+    it("falls back to a loose case-insensitive name match when unresolved", () => {
+      const withPantry = candidate({
+        id: 1,
+        ingredients: [{ ...chicken, name: "boneless skinless chicken breast" }],
+      });
+      const pantryItems: PantryItem[] = [{ name: "Chicken Breast", spoonacularIngredientId: null }];
+      const ranked = rankCandidates([withPantry], target, {
+        tier: "free",
+        budgetPerMealUsd: null,
+        pantryItems,
+      });
+      expect(ranked[0].score).toBeLessThan(macroDeviationScore(withPantry, target));
+    });
+
+    it("never lets pantry overlap override a meaningfully better macro match", () => {
+      const worseMatchWithPantry = candidate({
+        id: 1,
+        proteinG: 60,
+        caloriesKcal: 700,
+        ingredients: [chicken, rice],
+      });
+      const betterMatchNoPantry = candidate({ id: 2, proteinG: 41, caloriesKcal: 505, ingredients: [] });
+      const pantryItems: PantryItem[] = [
+        { name: "chicken breast", spoonacularIngredientId: null },
+        { name: "white rice", spoonacularIngredientId: null },
+      ];
+      const ranked = rankCandidates([worseMatchWithPantry, betterMatchNoPantry], target, {
+        tier: "free",
+        budgetPerMealUsd: null,
+        pantryItems,
+      });
+      expect(ranked.map((c) => c.id)).toEqual([2, 1]);
+    });
+
+    it("is a no-op when pantryItems is omitted or empty", () => {
+      const a = candidate({ id: 1, ingredients: [chicken] });
+      const withoutOpt = rankCandidates([a], target, { tier: "free", budgetPerMealUsd: null });
+      const withEmpty = rankCandidates([a], target, {
+        tier: "free",
+        budgetPerMealUsd: null,
+        pantryItems: [],
+      });
+      expect(withoutOpt[0].score).toBe(macroDeviationScore(a, target));
+      expect(withEmpty[0].score).toBe(macroDeviationScore(a, target));
+    });
   });
 });

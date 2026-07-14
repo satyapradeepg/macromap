@@ -15,7 +15,7 @@ import {
 } from "./targets";
 import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
 import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
-import { rankCandidates, type RecipeCandidate } from "./ranking";
+import { rankCandidates, type PantryItem, type RecipeCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
 import { createRetryBudget, trySpend } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
@@ -54,6 +54,7 @@ export interface OrchestrateInput {
   dislikes: string[];
   tier: "free" | "pro";
   weeklyBudgetUsd: number | null;
+  pantryItems: PantryItem[];
 }
 
 export interface OrchestratedSlot {
@@ -80,7 +81,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const intolerances = resolveIntolerances(input.dietaryStyles);
   const excludeIngredients = [...input.allergies, ...input.dislikes];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
-  const rankOpts = { tier: input.tier, budgetPerMealUsd };
+  const rankOpts = { tier: input.tier, budgetPerMealUsd, pantryItems: input.pantryItems };
 
   const admin = createAdminClient();
   // All 21 slots share the identical per-meal target, so at a given tier
@@ -305,6 +306,7 @@ export interface SwapSlotInput {
   tier: "free" | "pro";
   weeklyBudgetUsd: number | null;
   excludeRecipeIds: number[];
+  pantryItems: PantryItem[];
 }
 
 export interface SwapSlotResult {
@@ -332,7 +334,11 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
       inFlight,
     );
 
-  const cascade = await runCascadeForSlot(perMeal, fetcher, { tier: input.tier, budgetPerMealUsd });
+  const cascade = await runCascadeForSlot(perMeal, fetcher, {
+    tier: input.tier,
+    budgetPerMealUsd,
+    pantryItems: input.pantryItems,
+  });
   if (cascade.blocked || cascade.rankedCandidates.length === 0) {
     return {
       candidate: null,

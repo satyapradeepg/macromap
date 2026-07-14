@@ -9,6 +9,7 @@ import {
   SpoonacularRequestError,
 } from "@/lib/mealplan/orchestrate";
 import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
+import type { PantryItem } from "@/lib/mealplan/ranking";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -35,6 +36,24 @@ async function loadProfile(
     .eq("id", userId)
     .maybeSingle();
   return data;
+}
+
+// F6/F3 pantry-aware querying. Empty array is the correct/expected result
+// until F6's entry UI exists — pantry entry is fully optional (PRD 7.3 F6),
+// so no rows here just means generation behaves exactly as before.
+async function loadPantryItems(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<PantryItem[]> {
+  const { data } = await supabase
+    .from("pantry_items")
+    .select("name, spoonacular_ingredient_id")
+    .eq("user_id", userId);
+
+  return (data ?? []).map((row) => ({
+    name: row.name,
+    spoonacularIngredientId: row.spoonacular_ingredient_id,
+  }));
 }
 
 // This is the first data-returning Server Action in the codebase, unlike
@@ -76,6 +95,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
     carbsG: profile.daily_carbs_g,
     fatG: profile.daily_fat_g,
   };
+  const pantryItems = await loadPantryItems(supabase, user.id);
 
   try {
     const result = await orchestrateGeneration({
@@ -86,6 +106,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       dislikes: profile.dislikes,
       tier: profile.tier,
       weeklyBudgetUsd: profile.weekly_budget_usd,
+      pantryItems,
     });
 
     const { data: insertedPlan, error: planError } = await supabase
@@ -233,6 +254,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     carbsG: profile.daily_carbs_g,
     fatG: profile.daily_fat_g,
   };
+  const pantryItems = await loadPantryItems(supabase, user.id);
 
   let swapResult;
   try {
@@ -244,6 +266,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
       tier: profile.tier,
       weeklyBudgetUsd: profile.weekly_budget_usd,
       excludeRecipeIds,
+      pantryItems,
     });
   } catch (err) {
     if (err instanceof SpoonacularQuotaError || err instanceof SpoonacularRequestError) {

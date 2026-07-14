@@ -27,6 +27,14 @@ export interface RecipeCandidate {
   ingredients: CandidateIngredient[];
 }
 
+// F6/F3 pantry-aware querying. spoonacularIngredientId is resolved lazily
+// (F6 is manual-entry-first) — null until resolved, in which case matching
+// falls back to a loose name comparison (see pantryOverlapDeduction below).
+export interface PantryItem {
+  name: string;
+  spoonacularIngredientId: number | null;
+}
+
 export interface RankedCandidate extends RecipeCandidate {
   score: number;
   budgetCompliant: boolean;
@@ -73,9 +81,44 @@ export function macroDeviationScore(
   return proteinDeviation + caloriesDeviation + carbsDeviation + fatDeviation;
 }
 
+// PRD 7.3 F3: pantry overlap is "a small deduction" that "never overrides
+// macro/dietary/allergen constraints, it only biases which matching recipe
+// is preferred" — so this is capped well below a single real protein/
+// calorie deviation point (contrast CARB_FAT_WEIGHT above, which is an
+// acknowledged real precision tradeoff, not a tiebreak-only nudge).
+// Deliberately NOT sent to Spoonacular as includeIngredients (unlike diet/
+// intolerances/excludeIngredients): pantry contents are per-user and would
+// fragment the cross-user recipe_query_cache (cacheKey.ts) to near-zero
+// hit rate the same way excludeIds already deliberately stays out of the
+// key — same tradeoff already made for carb/fat bounds in spoonacular.ts.
+const PANTRY_OVERLAP_WEIGHT = 0.02;
+const MAX_PANTRY_OVERLAP_DEDUCTION = 0.06;
+
+function pantryOverlapDeduction(
+  candidateIngredients: CandidateIngredient[],
+  pantryItems: PantryItem[],
+): number {
+  if (pantryItems.length === 0 || candidateIngredients.length === 0) return 0;
+
+  let matched = 0;
+  for (const item of pantryItems) {
+    const isMatch =
+      item.spoonacularIngredientId !== null
+        ? (ing: CandidateIngredient) => ing.id === item.spoonacularIngredientId
+        : (ing: CandidateIngredient) => {
+            const a = ing.name.toLowerCase();
+            const b = item.name.toLowerCase();
+            return a.includes(b) || b.includes(a);
+          };
+    if (candidateIngredients.some(isMatch)) matched++;
+  }
+  return Math.min(matched * PANTRY_OVERLAP_WEIGHT, MAX_PANTRY_OVERLAP_DEDUCTION);
+}
+
 export interface RankCandidatesOptions {
   tier: "free" | "pro";
   budgetPerMealUsd: number | null;
+  pantryItems?: PantryItem[];
 }
 
 // Budget-compliant candidates ranked first (Pro only, and only when a
@@ -98,10 +141,13 @@ export function rankCandidates(
 ): RankedCandidate[] {
   const budgetAware = opts.tier === "pro" && opts.budgetPerMealUsd !== null;
   const budgetLimitCents = budgetAware ? opts.budgetPerMealUsd! * 100 : null;
+  const pantryItems = opts.pantryItems ?? [];
 
   const scored = candidates.map((candidate) => ({
     ...candidate,
-    score: macroDeviationScore(candidate, target),
+    score:
+      macroDeviationScore(candidate, target) -
+      pantryOverlapDeduction(candidate.ingredients, pantryItems),
     budgetCompliant:
       !budgetAware ||
       candidate.pricePerServingCents === null ||
