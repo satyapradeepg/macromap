@@ -9,6 +9,7 @@ import {
   perMealTarget,
   allMealTypeTargets,
   proteinFloorViolations,
+  PROTEIN_FLOOR_FRACTION,
   slotMechanism,
   weeklyTarget as computeWeeklyTarget,
   slotKey,
@@ -34,6 +35,7 @@ import {
   dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
+  type MacroGapDirection,
 } from "./reconciliation";
 import { buildAddonForSlot, type SlotAddon } from "./addon";
 import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
@@ -385,21 +387,83 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       }
     }
 
+    // Protein-distribution enforcement (targets.ts's proteinFloorViolations)
+    // — previously monitoring-only (PRD F3 backlog item, closed July 2026).
+    // Runs after the day-aggregate gap-closing phases above so it sees
+    // their final picks (an add-on/swap from phase 1/2 may have already
+    // pushed a flagged meal back over its floor). Still doesn't touch
+    // ranking/candidate order itself (targets.ts's comment on why a hard
+    // ranking constraint risks reintroducing the breakfast corpus-scarcity
+    // problem still holds) — this only spends budget on a targeted top-up
+    // for whichever specific meal is under floor, same "never fake
+    // progress" discipline as phases 1/2.
+    const currentMealProtein = () =>
+      daySlots().map((c) => ({
+        mealType: c.slotId.mealType,
+        proteinG: c.candidate.proteinG + (addons.get(slotKey(c.slotId))?.proteinG ?? 0),
+      }));
+
+    for (const mealType of proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein())) {
+      const slotId = daySlots().find((c) => c.slotId.mealType === mealType)?.slotId;
+      if (!slotId) continue;
+      const proteinFloor = input.dailyTargets.proteinG * PROTEIN_FLOOR_FRACTION;
+      const floorGap: MacroGapDirection = { macro: "proteinG", direction: "increase", overshootPct: 1 };
+
+      // Prefer an add-on (protein powder/yogurt) — but PRD F3 caps one
+      // add-on per slot for realism, so only attempt this if phases 1/2
+      // above didn't already attach one to this exact slot.
+      if (!addonedThisDay.has(slotKey(slotId)) && trySpend(retryBudget, ADDON_ATTEMPT_COST)) {
+        retryQueriesUsed++;
+        const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
+        addonedThisDay.add(slotKey(slotId));
+        if (existing) {
+          const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacros);
+          if (addon) addons.set(slotKey(slotId), addon);
+        }
+      }
+
+      // Re-check after the add-on attempt (or immediately, if this slot
+      // already had one from phases 1/2 and so was skipped above) — only
+      // fall through to a recipe swap if still genuinely under floor, and
+      // only for recipe-mechanism slots (snacks have no Spoonacular recipe
+      // to requery, same constraint as phase 2).
+      const existingNow = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
+      const proteinNow = (existingNow?.candidate.proteinG ?? 0) + (addons.get(slotKey(slotId))?.proteinG ?? 0);
+      if (existingNow && proteinNow < proteinFloor && slotMechanism(mealType) === "recipe" && trySpend(retryBudget, RECIPE_ACTION_COST)) {
+        retryQueriesUsed++;
+        const claimedIds = claimResult.claimed
+          .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
+          .map((c) => c.candidate.id);
+        const slotTarget = mealTypeTargets[mealType];
+        const bounds = nudgedBounds(slotTarget, "increase");
+        const raw = await fetchCandidatesWithCache(
+          admin,
+          { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType) },
+          claimedIds,
+          inFlight,
+        );
+        const ranked = rankCandidates(raw, slotTarget, rankOpts);
+        // Requires a real protein improvement over the current pick — a
+        // swap that doesn't actually raise protein isn't worth spending
+        // budget on (would just repeat the same violation next generation).
+        const pick = ranked.find((c) => !claimedIds.includes(c.id) && c.proteinG > existingNow.candidate.proteinG);
+        if (pick) {
+          const actualTier = classifyTier(pick, slotTarget) ?? "p30";
+          const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
+          claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
+          // The old add-on (if any) was sized against the pre-swap recipe's
+          // calories and is no longer relevant to the newly-picked one.
+          addons.delete(slotKey(slotId));
+        }
+      }
+    }
+
     const dayFinalActual = sumWithAddons(daySlots(), addons);
     dailyStatuses.push(isWithinBand(dayFinalActual, dailyBand) ? "within_band" : "outside_band_after_retries");
 
-    // Protein-distribution safeguard (targets.ts's proteinFloorViolations)
-    // — monitoring only, doesn't change ranking/selection (see targets.ts
-    // comment for why a hard constraint here risks reintroducing the
-    // breakfast corpus-scarcity problem). Logged so a real violation is at
-    // least visible, not silently shipped.
-    const mealProteinValues = daySlots().map((c) => ({
-      mealType: c.slotId.mealType,
-      proteinG: c.candidate.proteinG + (addons.get(slotKey(c.slotId))?.proteinG ?? 0),
-    }));
-    const violations = proteinFloorViolations(input.dailyTargets.proteinG, mealProteinValues);
-    if (violations.length > 0) {
-      console.log(`[mealplan] day ${dayIndex}: protein floor violation in ${violations.join(", ")}`);
+    const remainingViolations = proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein());
+    if (remainingViolations.length > 0) {
+      console.log(`[mealplan] day ${dayIndex}: protein floor violation persisted after enforcement in ${remainingViolations.join(", ")}`);
     }
   }
 

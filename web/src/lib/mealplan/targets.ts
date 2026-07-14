@@ -150,10 +150,13 @@ export function allMealTypeTargets(daily: MacroTargets): Record<MealType, MacroT
 // evidence-based practice here isn't a fixed per-meal percentage, it's
 // that muscle protein synthesis has a per-sitting ceiling, so protein
 // shouldn't be backloaded into one meal while another gets almost none.
-// Monitoring-only: flags days where any meal falls below a loose 12% of
-// the daily protein target, rather than forcing ranking to redistribute
-// (which risks reintroducing the exact corpus-scarcity problem the
-// MEAL_TYPE_SHARE split above was built to avoid — see its comment).
+// Flags days where any meal falls below a loose 12% of the daily protein
+// target. Deliberately NOT a ranking-time constraint (that would risk
+// reintroducing the exact corpus-scarcity problem the MEAL_TYPE_SHARE
+// split above was built to avoid — see its comment) — instead,
+// orchestrate.ts enforces this after the fact with a targeted per-meal
+// add-on/swap (PRD F3 backlog item, closed July 2026), the same additive
+// approach the day-aggregate reconciliation pass already uses.
 export const PROTEIN_FLOOR_FRACTION = 0.12;
 
 export function proteinFloorViolations(
