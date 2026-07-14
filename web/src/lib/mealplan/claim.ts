@@ -26,11 +26,24 @@ export interface ClaimResolutionResult {
   exhaustedSlots: MealSlotId[]; // whole ranked list already claimed by earlier slots
 }
 
-// Walks allSlotIds() order (Day1 Breakfast .. Day7 Dinner). Each slot
-// greedily claims its own highest-ranked candidate whose id hasn't already
-// been claimed by an earlier slot in this walk; steps down its own list on
-// collision. Budget-awareness already lives in the list's ordering
-// (ranking.ts), so stepping down never reintroduces a resolved budget miss.
+// Walks allSlotIds() order (Day1 Breakfast .. Day7 Dinner), but only for
+// slots actually present in `results` — a real, live-found bug: callers
+// may resolve a subset (orchestrate.ts only passes recipe-mechanism slots
+// through this function; snack slots are composed separately via
+// snackComposition.ts and never go through claim resolution at all). A
+// slot legitimately absent from `results` isn't "exhausted" (that means
+// "had real candidates, but every one was already claimed elsewhere") —
+// it just isn't part of this resolution pass, and skipping it silently is
+// correct. Treating it as exhausted used to be effectively dead code (real
+// callers always supply one result per requested slotId via Promise.all)
+// until snack slots made "requested a subset of allSlotIds()" a real,
+// common case — the old behavior then caused every snack slot to be
+// mis-classified as exhausted and crash trying to Spoonacular-search it.
+// Each present slot greedily claims its own highest-ranked candidate whose
+// id hasn't already been claimed by an earlier slot in this walk; steps
+// down its own list on collision. Budget-awareness already lives in the
+// list's ordering (ranking.ts), so stepping down never reintroduces a
+// resolved budget miss.
 export function resolveClaims(results: SlotFetchResult[]): ClaimResolutionResult {
   const bySlot = new Map(results.map((r) => [slotKey(r.slotId), r]));
   const claimedRecipeIds = new Set<number>();
@@ -40,12 +53,7 @@ export function resolveClaims(results: SlotFetchResult[]): ClaimResolutionResult
 
   for (const slotId of allSlotIds()) {
     const result = bySlot.get(slotKey(slotId));
-    if (!result) {
-      // No fetch result at all for this slot — treat as exhausted so the
-      // caller's retry path handles it uniformly with a genuinely-collided slot.
-      exhaustedSlots.push(slotId);
-      continue;
-    }
+    if (!result) continue;
 
     if (result.cascade.blocked) {
       blockedSlots.push(slotId);

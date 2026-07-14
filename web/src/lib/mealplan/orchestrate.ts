@@ -9,6 +9,7 @@ import {
   perMealTarget,
   allMealTypeTargets,
   proteinFloorViolations,
+  slotMechanism,
   weeklyTarget as computeWeeklyTarget,
   slotKey,
   mealTypeToSpoonacularType,
@@ -20,7 +21,7 @@ import {
 } from "./targets";
 import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
 import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
-import { rankCandidates, type PantryItem, type RecipeCandidate } from "./ranking";
+import { rankCandidates, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
 import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
@@ -35,6 +36,7 @@ import {
   nudgedBounds,
 } from "./reconciliation";
 import { buildAddonForSlot, type SlotAddon } from "./addon";
+import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import {
   complexSearch,
@@ -51,6 +53,60 @@ export { SpoonacularQuotaError, SpoonacularRequestError };
 // silently drops add-on macros whenever it's called again later (e.g. after
 // phase 2's recipe swaps), which is exactly the kind of staleness bug this
 // avoids by never trusting a previously-incremented running total.
+// Shared between the main generation loop and swapSlotCandidate's
+// composed-snack path (a "swap" on a snack recomposes with a different
+// variety seed rather than a fresh Spoonacular search, which doesn't apply
+// to snacks — see targets.ts's SLOT_MECHANISM). id must be unique within
+// the caller's scope; negative so it never collides with a real
+// (always-positive) Spoonacular recipe id.
+function composedSnackCandidate(
+  target: MacroTargets,
+  pool: Record<string, { id: number; name: string; caloriesPer100g: number; proteinGPer100g: number; carbsGPer100g: number; fatGPer100g: number }>,
+  varietySeed: number,
+  id: number,
+): RankedCandidate | null {
+  const composed = composeSnack(target, pool, varietySeed);
+  if (composed.ingredients.length === 0) return null;
+
+  return {
+    id,
+    title: composedSnackTitle(composed),
+    imageUrl: null,
+    servings: 1,
+    proteinG: composed.totalProteinG,
+    caloriesKcal: composed.totalCalories,
+    carbsG: composed.totalCarbsG,
+    fatG: composed.totalFatG,
+    pricePerServingCents: null,
+    aggregateLikes: 0,
+    ingredients: composed.ingredients.map((i) => ({
+      id: i.spoonacularIngredientId,
+      name: i.ingredientName,
+      amount: i.amountG,
+      unit: "g",
+      metricAmount: i.amountG,
+      metricUnit: "g",
+    })),
+    score: 0,
+    budgetCompliant: true,
+    // "p10" here means "composed directly to target," not a recipe-search
+    // tolerance tier — matchLabelFor treats it the same as a clean match,
+    // which is correct: composition doesn't have a "closest available"
+    // tradeoff the way recipe search does.
+    actualTier: "p10",
+    isFallbackOfLastResort: false,
+  };
+}
+
+async function fetchSnackIngredientPool() {
+  const poolEntries = await Promise.all(
+    allPoolIngredientNames().map(async (name) => [name, await lookupIngredientMacros(name)] as const),
+  );
+  return Object.fromEntries(
+    poolEntries.filter((entry): entry is [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null),
+  );
+}
+
 function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
   let total = sumActuals(claimed);
   for (const addon of addons.values()) {
@@ -135,9 +191,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const makeFetcher = (excludeIds: number[], type: string): FetchCandidatesFn => (bounds, tier) =>
     fetchCandidatesWithCache(admin, { bounds, tier, diet, intolerances, excludeIngredients, type }, excludeIds, inFlight);
 
-  const slotIds = allSlotIds();
+  // Only breakfast/lunch/dinner use recipe search — snacks are built
+  // separately below via ingredient composition (slotMechanism, see
+  // targets.ts/snackComposition.ts for why recipe search is the wrong tool
+  // for snacks).
+  const allSlots = allSlotIds();
+  const recipeSlotIds = allSlots.filter((s) => slotMechanism(s.mealType) === "recipe");
+  const snackSlotIds = allSlots.filter((s) => slotMechanism(s.mealType) === "composed");
+
   const cascades = await Promise.all(
-    slotIds.map((slotId) =>
+    recipeSlotIds.map((slotId) =>
       runCascadeForSlot(
         mealTypeTargets[slotId.mealType],
         makeFetcher([], mealTypeToSpoonacularType(slotId.mealType)),
@@ -146,10 +209,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     ),
   );
 
-  const claimResult = resolveClaims(slotIds.map((slotId, i) => ({ slotId, cascade: cascades[i] })));
+  const claimResult = resolveClaims(recipeSlotIds.map((slotId, i) => ({ slotId, cascade: cascades[i] })));
   const blockedHints = new Map<string, string>();
   for (const slotId of claimResult.blockedSlots) {
-    const cascade = cascades[slotIds.findIndex((s) => slotKey(s) === slotKey(slotId))];
+    const cascade = cascades[recipeSlotIds.findIndex((s) => slotKey(s) === slotKey(slotId))];
     blockedHints.set(slotKey(slotId), cascade.blockingHint ?? "No recipe matched this meal's targets.");
   }
 
@@ -176,6 +239,35 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         cascade.blockingHint ?? "Every close match for this meal is already used elsewhere this week.",
       );
     }
+  }
+
+  // Snack slots (snack1/snack2): composed from a small ingredient pool
+  // fetched ONCE here and reused for all 14 snack slots this week — a
+  // fresh 2-3 lookup per slot would cost ~84 Spoonacular points/plan (3
+  // lookups x 2pts x 14 slots); fetching the fixed 9-ingredient pool once
+  // costs ~18 points regardless of how many snack slots use it. This is a
+  // real, permanent addition to baseline per-plan cost (every plan now has
+  // 14 snack slots), not a rare reconciliation-only cost.
+  const snackIngredientPool = await fetchSnackIngredientPool();
+
+  let syntheticSnackId = -1;
+  for (const slotId of snackSlotIds) {
+    // Rotates which pool ingredient each snack slot uses (dayIndex x slot
+    // position) so a week's 14 snacks aren't all identical — deterministic,
+    // not Math.random, matching this pipeline's determinism elsewhere.
+    const varietySeed = slotId.dayIndex * 2 + (slotId.mealType === "snack1" ? 0 : 1);
+    const candidate = composedSnackCandidate(
+      mealTypeTargets[slotId.mealType],
+      snackIngredientPool,
+      varietySeed,
+      syntheticSnackId--,
+    );
+
+    if (!candidate) {
+      blockedHints.set(slotKey(slotId), "Couldn't compose a snack close to this meal's targets.");
+      continue;
+    }
+    claimResult.claimed.push({ slotId, candidate, tier: "p10" });
   }
 
   // Daily reconciliation (reworked from weekly-only — a plan can look fine
@@ -245,7 +337,13 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
     if (gaps.length > 0) {
       const direction = dominantDirection(gaps)!;
-      const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
+      // Recipe requery only applies to recipe-mechanism slots — a composed
+      // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
+      // throws for snack types); a snack with remaining slack only gets
+      // helped by phase 1's add-on, not this phase.
+      const eligible = daySlots().filter(
+        (c) => !addonedThisDay.has(slotKey(c.slotId)) && slotMechanism(c.slotId.mealType) === "recipe",
+      );
       const affordableRequeries = Math.floor(retryBudget.remaining / RECIPE_ACTION_COST);
       const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
 
@@ -322,12 +420,12 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   }));
 
   const blockedSlots = [...blockedHints.entries()].map(([key, blockingHint]) => ({
-    slotId: slotIds.find((s) => slotKey(s) === key)!,
+    slotId: allSlots.find((s) => slotKey(s) === key)!,
     blockingHint,
   }));
 
   console.log(
-    `[mealplan] generation done: ${slots.length}/21 claimed, ${blockedSlots.length} blocked, ` +
+    `[mealplan] generation done: ${slots.length}/${MEALS_PER_WEEK} claimed, ${blockedSlots.length} blocked, ` +
       `retryQueriesUsed=${retryQueriesUsed}, reconciliation=${reconciliationStatus}`,
   );
 
@@ -462,6 +560,28 @@ export interface SwapSlotResult {
 
 export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotResult> {
   const perMeal = perMealTarget(input.dailyTargets, input.mealType);
+
+  // Snacks have no Spoonacular recipe to requery — "swap" recomposes with a
+  // different pool option instead (3 possible combos per role, same pool
+  // size as generation's rotation). Re-fetches the small 9-ingredient pool
+  // fresh (~18pts) rather than caching it across requests, matching the
+  // recipe path's own per-swap Spoonacular call.
+  if (slotMechanism(input.mealType) === "composed") {
+    const pool = await fetchSnackIngredientPool();
+    const varietySeed = Date.now() % 3;
+    const candidate = composedSnackCandidate(perMeal, pool, varietySeed, -1);
+    if (!candidate) {
+      return {
+        candidate: null,
+        tier: null,
+        matchLabel: null,
+        blocked: true,
+        blockingHint: "Couldn't compose an alternative snack for this meal's targets.",
+      };
+    }
+    return { candidate, tier: "p10", matchLabel: null, blocked: false, blockingHint: null };
+  }
+
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
   const excludeIngredients = [...input.allergies, ...input.dislikes];

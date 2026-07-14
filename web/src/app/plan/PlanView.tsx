@@ -16,6 +16,14 @@ function slotMapKey(dayIndex: number, mealType: MealType): string {
   return `${dayIndex}-${mealType}`;
 }
 
+const MEAL_TYPE_LABELS: Record<MealType, string> = {
+  breakfast: "breakfast",
+  lunch: "lunch",
+  dinner: "dinner",
+  snack1: "snack 1",
+  snack2: "snack 2",
+};
+
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
 // that same ±5% check purely for display, derived from data the plan
 // already carries (no separate persisted per-day status). weeklyTarget/7
@@ -181,7 +189,7 @@ export function PlanBoard({
                   <span className="text-xs font-semibold text-muted">Slightly off target</span>
                 )}
               </div>
-              <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 {MEAL_TYPES.map((mealType) => {
                   const key = slotMapKey(dayIndex, mealType);
                   const slot = plan.slots.find((s) => slotMapKey(s.dayIndex, s.mealType) === key);
@@ -222,7 +230,7 @@ function MealCard({
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
-      <p className="text-xs font-semibold tracking-wide text-muted uppercase">{mealType}</p>
+      <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
 
       {slot ? (
         <>
@@ -232,11 +240,19 @@ function MealCard({
             {Math.round(slot.calories)} cal · {Math.round(slot.proteinG)}g protein · {Math.round(slot.carbsG)}g
             carbs · {Math.round(slot.fatG)}g fat
           </p>
-          <p className="mt-1 text-xs text-muted">
-            {slot.servings > 1
-              ? `Macros shown are for 1 serving — this recipe makes ${slot.servings}, so cook a fraction of it or plan for leftovers.`
-              : "Makes 1 serving."}
-          </p>
+          {slot.isComposed ? (
+            slot.composedIngredients && (
+              <p className="mt-1 text-xs text-muted">
+                {slot.composedIngredients.map((i) => `${Math.round(i.amountG)}g ${i.name}`).join(" + ")}
+              </p>
+            )
+          ) : (
+            <p className="mt-1 text-xs text-muted">
+              {slot.servings > 1
+                ? `Macros shown are for 1 serving — this recipe makes ${slot.servings}, so cook a fraction of it or plan for leftovers.`
+                : "Makes 1 serving."}
+            </p>
+          )}
           {slot.addon && (
             <p className="mt-1 text-xs text-accent-2">
               + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} added to help hit this week&apos;s
@@ -244,14 +260,18 @@ function MealCard({
             </p>
           )}
           <div className="mt-3 flex items-center justify-between">
-            <a
-              href={recipeVideoSearchUrl(slot.recipeTitle)}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs font-semibold text-accent-2"
-            >
-              Watch how to cook this
-            </a>
+            {slot.isComposed ? (
+              <span className="text-xs text-muted">No recipe to cook — just combine and eat</span>
+            ) : (
+              <a
+                href={recipeVideoSearchUrl(slot.recipeTitle)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-semibold text-accent-2"
+              >
+                Watch how to cook this
+              </a>
+            )}
             <button
               type="button"
               onClick={onSwap}

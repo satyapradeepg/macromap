@@ -116,10 +116,16 @@ describe("dominantIncreaseGap", () => {
 
 describe("pickSlackSlots", () => {
   const perMealValue = { calories: 500, proteinG: 40, carbsG: 40, fatG: 15 };
-  // Same target for all 3 types — these tests exercise slack scoring
+  // Same target for all 5 types — these tests exercise slack scoring
   // generically, not the real per-meal-type split (see targets.test.ts for
   // that).
-  const mealTypeTargets = { breakfast: perMealValue, lunch: perMealValue, dinner: perMealValue };
+  const mealTypeTargets = {
+    breakfast: perMealValue,
+    lunch: perMealValue,
+    dinner: perMealValue,
+    snack1: perMealValue,
+    snack2: perMealValue,
+  };
 
   it("returns nothing when there are no gaps", () => {
     const claimed = [claimedSlot(1, 0)];
@@ -156,6 +162,8 @@ describe("pickSlackSlots", () => {
       breakfast: { calories: 300, proteinG: 20, carbsG: 30, fatG: 10 },
       lunch: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
       dinner: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
+      snack1: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
+      snack2: { calories: 700, proteinG: 50, carbsG: 70, fatG: 20 },
     };
     const breakfastSlot = claimedSlot(1, 0, { caloriesKcal: 400 }); // slotId index 0 = breakfast
     const lunchSlot = claimedSlot(2, 1, { caloriesKcal: 400 }); // slotId index 1 = lunch

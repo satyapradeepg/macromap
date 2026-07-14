@@ -144,23 +144,32 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       const { data: slotsData, error: slotsError } = await supabase
         .from("meal_plan_slots")
         .insert(
-          result.slots.map((s) => ({
-            meal_plan_id: insertedPlan.id,
-            day_index: s.slotId.dayIndex,
-            meal_type: s.slotId.mealType,
-            recipe_id: s.candidate.id,
-            recipe_title: s.candidate.title,
-            image_url: s.candidate.imageUrl,
-            servings: s.candidate.servings,
-            calories: s.candidate.caloriesKcal,
-            protein_g: s.candidate.proteinG,
-            carbs_g: s.candidate.carbsG,
-            fat_g: s.candidate.fatG,
-            price_per_serving_cents: s.candidate.pricePerServingCents,
-            tolerance_tier: s.tier,
-            match_label: s.matchLabel,
-            ingredients: s.candidate.ingredients,
-          })),
+          result.slots.map((s) => {
+            // Composed snacks (snack1/snack2) use a synthetic negative id
+            // (orchestrate.ts) since no single Spoonacular recipe backs
+            // them — store as null with recipe_source='composed' rather
+            // than persisting the synthetic id, which is only meaningful
+            // within one generation call.
+            const isComposed = s.candidate.id < 0;
+            return {
+              meal_plan_id: insertedPlan.id,
+              day_index: s.slotId.dayIndex,
+              meal_type: s.slotId.mealType,
+              recipe_id: isComposed ? null : s.candidate.id,
+              recipe_source: isComposed ? "composed" : "spoonacular",
+              recipe_title: s.candidate.title,
+              image_url: s.candidate.imageUrl,
+              servings: s.candidate.servings,
+              calories: s.candidate.caloriesKcal,
+              protein_g: s.candidate.proteinG,
+              carbs_g: s.candidate.carbsG,
+              fat_g: s.candidate.fatG,
+              price_per_serving_cents: s.candidate.pricePerServingCents,
+              tolerance_tier: s.tier,
+              match_label: s.matchLabel,
+              ingredients: s.candidate.ingredients,
+            };
+          }),
         )
         .select("id, day_index, meal_type");
       if (slotsError) {
@@ -202,31 +211,38 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       reconciliationStatus: result.reconciliationStatus,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
-      slots: result.slots.map((s) => ({
-        dayIndex: s.slotId.dayIndex,
-        mealType: s.slotId.mealType,
-        recipeId: s.candidate.id,
-        recipeTitle: s.candidate.title,
-        imageUrl: s.candidate.imageUrl,
-        servings: s.candidate.servings,
-        calories: s.candidate.caloriesKcal,
-        proteinG: s.candidate.proteinG,
-        carbsG: s.candidate.carbsG,
-        fatG: s.candidate.fatG,
-        pricePerServingCents: s.candidate.pricePerServingCents,
-        toleranceTier: s.tier,
-        matchLabel: s.matchLabel,
-        addon: s.addon
-          ? {
-              ingredientName: s.addon.ingredientName,
-              amountG: s.addon.amountG,
-              caloriesKcal: s.addon.caloriesKcal,
-              proteinG: s.addon.proteinG,
-              carbsG: s.addon.carbsG,
-              fatG: s.addon.fatG,
-            }
-          : null,
-      })),
+      slots: result.slots.map((s) => {
+        const isComposed = s.candidate.id < 0;
+        return {
+          dayIndex: s.slotId.dayIndex,
+          mealType: s.slotId.mealType,
+          recipeId: isComposed ? null : s.candidate.id,
+          recipeTitle: s.candidate.title,
+          isComposed,
+          composedIngredients: isComposed
+            ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
+            : null,
+          imageUrl: s.candidate.imageUrl,
+          servings: s.candidate.servings,
+          calories: s.candidate.caloriesKcal,
+          proteinG: s.candidate.proteinG,
+          carbsG: s.candidate.carbsG,
+          fatG: s.candidate.fatG,
+          pricePerServingCents: s.candidate.pricePerServingCents,
+          toleranceTier: s.tier,
+          matchLabel: s.matchLabel,
+          addon: s.addon
+            ? {
+                ingredientName: s.addon.ingredientName,
+                amountG: s.addon.amountG,
+                caloriesKcal: s.addon.caloriesKcal,
+                proteinG: s.addon.proteinG,
+                carbsG: s.addon.carbsG,
+                fatG: s.addon.fatG,
+              }
+            : null,
+        };
+      }),
       blockedSlots: result.blockedSlots.map((b) => ({
         dayIndex: b.slotId.dayIndex,
         mealType: b.slotId.mealType,
@@ -332,10 +348,15 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     return { slot: null, blocked: true, blockingHint: swapResult.blockingHint, error: null };
   }
 
+  // Composed snacks (snack1/snack2) use a synthetic negative id — see
+  // generatePlan's insert above for why recipe_id/recipe_source differ.
+  const isComposed = swapResult.candidate.id < 0;
+
   const { data: updatedSlot, error: updateError } = await supabase
     .from("meal_plan_slots")
     .update({
-      recipe_id: swapResult.candidate.id,
+      recipe_id: isComposed ? null : swapResult.candidate.id,
+      recipe_source: isComposed ? "composed" : "spoonacular",
       recipe_title: swapResult.candidate.title,
       image_url: swapResult.candidate.imageUrl,
       servings: swapResult.candidate.servings,
@@ -368,8 +389,12 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   const slot: PlanSlotView = {
     dayIndex: input.dayIndex,
     mealType: input.mealType,
-    recipeId: swapResult.candidate.id,
+    recipeId: isComposed ? null : swapResult.candidate.id,
     recipeTitle: swapResult.candidate.title,
+    isComposed,
+    composedIngredients: isComposed
+      ? swapResult.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
+      : null,
     imageUrl: swapResult.candidate.imageUrl,
     servings: swapResult.candidate.servings,
     calories: swapResult.candidate.caloriesKcal,

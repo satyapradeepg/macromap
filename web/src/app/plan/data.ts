@@ -16,11 +16,22 @@ export interface PlanSlotAddonView {
   fatG: number;
 }
 
+export interface ComposedIngredientView {
+  name: string;
+  amountG: number;
+}
+
 export interface PlanSlotView {
   dayIndex: number;
   mealType: MealType;
-  recipeId: number;
+  // null for composed snacks (snack1/snack2) — no single Spoonacular recipe
+  // backs them, see snackComposition.ts. isComposed distinguishes this from
+  // a recipe-based slot rather than callers checking recipeId === null
+  // directly, since a null id isn't self-explanatory on its own.
+  recipeId: number | null;
   recipeTitle: string;
+  isComposed: boolean;
+  composedIngredients: ComposedIngredientView[] | null;
   imageUrl: string | null;
   servings: number;
   calories: number;
@@ -96,11 +107,19 @@ export async function getMostRecentPlan(
     },
     slots: (slots ?? []).map((s) => {
       const addonRow = addonsBySlotId.get(s.id);
+      const isComposed = s.recipe_source === "composed";
       return {
         dayIndex: s.day_index,
         mealType: s.meal_type,
         recipeId: s.recipe_id,
         recipeTitle: s.recipe_title,
+        isComposed,
+        composedIngredients: isComposed
+          ? (s.ingredients as Array<{ name: string; amount: number }>).map((i) => ({
+              name: i.name,
+              amountG: i.amount,
+            }))
+          : null,
         imageUrl: s.image_url,
         servings: s.servings,
         calories: s.calories,

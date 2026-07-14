@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveClaims, type SlotFetchResult } from "./claim";
 import type { RankedCandidate } from "./ranking";
-import { allSlotIds } from "./targets";
+import { allSlotIds, MEALS_PER_WEEK } from "./targets";
 
 function ranked(id: number, overrides: Partial<RankedCandidate> = {}): RankedCandidate {
   return {
@@ -37,10 +37,10 @@ describe("resolveClaims", () => {
       cascade: cascadeResult([ranked(i + 1)]),
     }));
     const { claimed, blockedSlots, exhaustedSlots } = resolveClaims(results);
-    expect(claimed).toHaveLength(21);
+    expect(claimed).toHaveLength(MEALS_PER_WEEK);
     expect(blockedSlots).toHaveLength(0);
     expect(exhaustedSlots).toHaveLength(0);
-    expect(new Set(claimed.map((c) => c.candidate.id)).size).toBe(21); // all unique
+    expect(new Set(claimed.map((c) => c.candidate.id)).size).toBe(MEALS_PER_WEEK); // all unique
   });
 
   it("steps down to the next-ranked candidate on collision", () => {
@@ -62,7 +62,7 @@ describe("resolveClaims", () => {
       return { slotId, cascade: cascadeResult([ranked(i + 100)]) }; // unrelated, unique candidates
     });
     const { claimed, exhaustedSlots } = resolveClaims(results);
-    expect(claimed).toHaveLength(20); // every slot except slots[1]
+    expect(claimed).toHaveLength(MEALS_PER_WEEK - 1); // every slot except slots[1]
     expect(exhaustedSlots).toEqual([slots[1]]);
   });
 
@@ -77,14 +77,29 @@ describe("resolveClaims", () => {
       return { slotId, cascade: cascadeResult([ranked(i + 100)]) };
     });
     const { claimed, blockedSlots, exhaustedSlots } = resolveClaims(results);
-    expect(claimed).toHaveLength(20);
+    expect(claimed).toHaveLength(MEALS_PER_WEEK - 1);
     expect(blockedSlots).toEqual([slots[0]]);
     expect(exhaustedSlots).toHaveLength(0);
   });
 
-  it("treats a missing fetch result as exhausted, not a crash", () => {
-    const { claimed, exhaustedSlots } = resolveClaims([]);
+  it("skips slots with no fetch result entirely, not a crash — a real caller passes a subset (e.g. recipe-mechanism slots only, snacks resolved separately)", () => {
+    const { claimed, blockedSlots, exhaustedSlots } = resolveClaims([]);
     expect(claimed).toHaveLength(0);
-    expect(exhaustedSlots).toHaveLength(21);
+    expect(blockedSlots).toHaveLength(0);
+    expect(exhaustedSlots).toHaveLength(0);
+  });
+
+  it("resolves only the slots actually passed in, leaving the rest untouched", () => {
+    const results: SlotFetchResult[] = [slots[0], slots[1]].map((slotId, i) => ({
+      slotId,
+      cascade: cascadeResult([ranked(i + 1)]),
+    }));
+    const { claimed, blockedSlots, exhaustedSlots } = resolveClaims(results);
+    expect(claimed.map((c) => c.slotId)).toEqual(
+      expect.arrayContaining([slots[0], slots[1]]),
+    );
+    expect(claimed).toHaveLength(2);
+    expect(blockedSlots).toHaveLength(0);
+    expect(exhaustedSlots).toHaveLength(0);
   });
 });
