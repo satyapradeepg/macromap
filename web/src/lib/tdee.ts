@@ -53,9 +53,7 @@ export interface MacroTargets {
   dailyFatG: number;
 }
 
-// PRD 7.3 F1 "Default macro splits by goal" table. Calories = TDEE in every
-// case — goal changes the macro split, not a deficit/surplus; users can
-// nudge any value manually afterward per the same section.
+// PRD 7.3 F1 "Default macro splits by goal" table.
 const MACRO_SPLIT_RULES: Record<
   Goal,
   { proteinGPerKg: number; fatPercentOfCalories: number }
@@ -65,24 +63,39 @@ const MACRO_SPLIT_RULES: Record<
   maintain: { proteinGPerKg: 1.6, fatPercentOfCalories: 0.3 },
 };
 
+// Goal-based caloric adjustment (PRD F1 backlog item, added July 2026):
+// calories used to equal TDEE for every goal, so "cut" only reallocated
+// macros at maintenance calories instead of creating an actual deficit.
+// Multipliers land within standard evidence-based ranges (cut ~15-25%
+// deficit, lean bulk ~10-15% surplus). Protein is deliberately computed
+// from bodyweight (g/kg), not from the adjusted calories, so a cut doesn't
+// shrink the protein target along with total calories — preserving lean
+// mass during a deficit is the point of the higher cut g/kg figure above.
+const GOAL_CALORIE_MULTIPLIER: Record<Goal, number> = {
+  cut: 0.8,
+  bulk: 1.1,
+  maintain: 1.0,
+};
+
 export function calculateMacroTargets(
   tdee: number,
   weightKg: number,
   goal: Goal,
 ): MacroTargets {
   const { proteinGPerKg, fatPercentOfCalories } = MACRO_SPLIT_RULES[goal];
+  const dailyCalories = tdee * GOAL_CALORIE_MULTIPLIER[goal];
 
   const proteinG = proteinGPerKg * weightKg;
   const proteinCalories = proteinG * 4;
 
-  const fatCalories = tdee * fatPercentOfCalories;
+  const fatCalories = dailyCalories * fatPercentOfCalories;
   const fatG = fatCalories / 9;
 
-  const carbsCalories = Math.max(0, tdee - proteinCalories - fatCalories);
+  const carbsCalories = Math.max(0, dailyCalories - proteinCalories - fatCalories);
   const carbsG = carbsCalories / 4;
 
   return {
-    dailyCalories: Math.round(tdee),
+    dailyCalories: Math.round(dailyCalories),
     dailyProteinG: Math.round(proteinG),
     dailyCarbsG: Math.round(carbsG),
     dailyFatG: Math.round(fatG),
