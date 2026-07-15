@@ -253,6 +253,12 @@ function MealCard({
                 : "Makes 1 serving."}
             </p>
           )}
+          {slot.aiComposed && (
+            <p className="mt-1 text-xs text-muted">
+              AI-composed — no Spoonacular recipe matched this meal, so this dish was assembled from real,
+              grounded ingredient data instead.
+            </p>
+          )}
           {slot.addon && (
             <p className="mt-1 text-xs text-accent-2">
               + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} added to help hit this week&apos;s
@@ -260,7 +266,7 @@ function MealCard({
             </p>
           )}
           <div className="mt-3 flex items-center justify-between">
-            {slot.isComposed ? (
+            {slot.isComposed && !slot.aiComposed ? (
               <span className="text-xs text-muted">No recipe to cook — just combine and eat</span>
             ) : (
               <a

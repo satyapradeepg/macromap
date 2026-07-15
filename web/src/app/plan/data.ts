@@ -31,6 +31,12 @@ export interface PlanSlotView {
   recipeId: number | null;
   recipeTitle: string;
   isComposed: boolean;
+  // True only for the AI composition fallback (aiMealComposition.ts) —
+  // distinguishes a real, named, AI-composed DISH (still isComposed, since
+  // it also has no single Spoonacular recipe backing it) from a plain
+  // composed SNACK, so the UI can show a video-search link and different
+  // copy for the former (see PlanView.tsx's MealCard).
+  aiComposed: boolean;
   composedIngredients: ComposedIngredientView[] | null;
   imageUrl: string | null;
   servings: number;
@@ -107,13 +113,15 @@ export async function getMostRecentPlan(
     },
     slots: (slots ?? []).map((s) => {
       const addonRow = addonsBySlotId.get(s.id);
-      const isComposed = s.recipe_source === "composed";
+      const aiComposed = s.recipe_source === "ai_composed";
+      const isComposed = s.recipe_source === "composed" || aiComposed;
       return {
         dayIndex: s.day_index,
         mealType: s.meal_type,
         recipeId: s.recipe_id,
         recipeTitle: s.recipe_title,
         isComposed,
+        aiComposed,
         composedIngredients: isComposed
           ? (s.ingredients as Array<{ name: string; amount: number }>).map((i) => ({
               name: i.name,

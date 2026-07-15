@@ -24,7 +24,7 @@ import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
 import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
-import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST } from "./retryBudget";
+import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST, createAiComposeBudget, AI_COMPOSE_ACTION_COST } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
 import {
   toleranceBand,
@@ -41,6 +41,8 @@ import { buildAddonForSlot, type SlotAddon, type IngredientMacroLookup, type Fet
 import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
 import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
+import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
+import { proposeMealViaClaude } from "./mealProposer";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import {
   complexSearch,
@@ -153,6 +155,13 @@ const lookupIngredientMacrosForAddon: FetchIngredientMacrosFn = async (query: st
   if (staticMatch) return staticMatch;
   return lookupIngredientMacros(query);
 };
+
+// aiMealComposition.ts's ingredients are open-ended (Claude's own choice,
+// not from the fixed 9), so this always resolves live — no static-table
+// shortcut applies here the way it does for the fixed pool above.
+async function groundIngredientForAiMeal(query: string): Promise<GroundedIngredientData | null> {
+  return lookupIngredientMacros(query);
+}
 
 function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
   let total = sumActuals(claimed);
@@ -328,6 +337,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const snackIngredientPool = await fetchSnackIngredientPool(dietaryCtx);
 
   let syntheticSnackId = -1;
+  // Distinct negative range from syntheticSnackId, purely so a synthetic
+  // id is human-recognizable in logs/DB rows as "AI-composed meal" vs
+  // "composed snack" at a glance — the aiComposed flag on RankedCandidate
+  // is what code actually keys off, not this range.
+  let syntheticAiMealId = -100000;
   for (const slotId of snackSlotIds) {
     // Rotates which pool ingredient each snack slot uses (dayIndex x slot
     // position) so a week's 14 snacks aren't all identical — deterministic,
@@ -572,6 +586,95 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       }
       break;
     }
+  }
+
+  // AI composition fallback (F3, built July 15 2026) — last resort for
+  // whatever's STILL in blockedHints after the entire recipe-search +
+  // reconciliation pipeline above (blocked slots never got a claim in the
+  // first place, so the day loop above never touches them). Own separate
+  // whole-generation budget, not per-day and not shared with
+  // reconciliation's budget, since this only ever applies to the rare
+  // handful of slots nothing else could fill — found live July 15 2026
+  // that an extreme profile's every breakfast (and several lunches) hit
+  // this state, not fixable by more Spoonacular query engineering.
+  //
+  // Same grounding rule as addon.ts/snackComposition.ts: Claude proposes
+  // WHAT ingredients (a judgment call), never a macro number — every
+  // number here comes from a real Spoonacular ingredient lookup, summed
+  // deterministically by composeMealFromProposal. A recoverable failure
+  // at ANY step (Claude call fails/misconfigured, proposal fails safety
+  // or portion-realism checks, an ingredient doesn't resolve) leaves the
+  // slot exactly as blocked as it already was — never partially applied,
+  // never forces an unsafe or unrealistic result through.
+  const aiComposeBudget = createAiComposeBudget();
+  const pantryItemNames = input.pantryItems.map((p) => p.name);
+  for (const [key] of [...blockedHints.entries()]) {
+    if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
+
+    const slotId = allSlots.find((s) => slotKey(s) === key);
+    // Snack slots are composed separately above and never end up in
+    // blockedHints via this path in practice, but guard explicitly rather
+    // than assume — this fallback is scoped to recipe-mechanism slots.
+    if (!slotId || slotMechanism(slotId.mealType) !== "recipe") continue;
+
+    const slotTarget = mealTypeTargets[slotId.mealType];
+
+    let proposal;
+    try {
+      proposal = await proposeMealViaClaude({
+        mealType: slotId.mealType as "breakfast" | "lunch" | "dinner",
+        target: slotTarget,
+        dietaryStyles: input.dietaryStyles,
+        allergies: input.allergies,
+        dislikes: input.dislikes,
+        pantryItemNames,
+      });
+    } catch (err) {
+      console.error(`[mealplan] AI composition call failed for ${key}, leaving slot blocked:`, err);
+      continue;
+    }
+    if (!proposal) continue;
+
+    const composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+    if (!composed) continue; // safety/portion-realism/grounding failure -- stays honestly blocked
+
+    const actualTier = classifyTier(
+      { proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories },
+      slotTarget,
+    ) ?? "p30";
+
+    const candidate: RankedCandidate = {
+      id: syntheticAiMealId--,
+      title: composed.dishName,
+      imageUrl: null,
+      servings: 1,
+      proteinG: composed.totalProteinG,
+      caloriesKcal: composed.totalCalories,
+      carbsG: composed.totalCarbsG,
+      fatG: composed.totalFatG,
+      // No reliable per-ingredient cost data confirmed for this endpoint
+      // yet (see project notes on F4/price) — left null (shows as "price
+      // unavailable" in the UI, same as an unresolved Tavily lookup)
+      // rather than fabricating a number.
+      pricePerServingCents: null,
+      aggregateLikes: 0,
+      ingredients: composed.ingredients.map((i) => ({
+        id: i.spoonacularIngredientId,
+        name: i.ingredientName,
+        amount: i.amountG,
+        unit: "g",
+        metricAmount: i.amountG,
+        metricUnit: "g",
+      })),
+      score: 0,
+      budgetCompliant: true,
+      actualTier,
+      isFallbackOfLastResort: true,
+      aiComposed: true,
+    };
+
+    claimResult.claimed.push({ slotId, candidate, tier: actualTier });
+    blockedHints.delete(key);
   }
 
   // Weekly totals are still computed and returned for the plan-level

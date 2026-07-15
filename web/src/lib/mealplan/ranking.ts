@@ -46,6 +46,11 @@ export interface RankedCandidate extends RecipeCandidate {
   // honest per-candidate rather than per-fetch).
   actualTier: ToleranceTier | null;
   isFallbackOfLastResort: boolean;
+  // Set only by aiMealComposition.ts's candidates -- distinguishes an
+  // AI-composed MEAL (real dish name + ingredient list, recipe_source
+  // 'ai_composed') from a plain composed SNACK (recipe_source
+  // 'composed') even though both use a synthetic negative id.
+  aiComposed?: boolean;
 }
 
 // Protein weighted 2x, carbs/fat weighted 0.5x, per F1's macro-split

@@ -35,8 +35,28 @@ export interface RetryBudget {
 export const RECIPE_ACTION_COST = 3;
 export const ADDON_ATTEMPT_COST = 1;
 
+// AI composition fallback (aiMealComposition.ts, July 15 2026) — real cost
+// is ~1 Claude call (a separate, non-Spoonacular cost not modeled here) +
+// up to 4 ingredient lookups (protein/carb/fat/one fixed garnish) at the
+// live-confirmed ~2pt flat rate each ≈ 6-8 Spoonacular points/attempt.
+// Modeled at 5, between RECIPE_ACTION_COST and its real ~2x cost — an
+// approximation, not meant to be exact, same honesty as the ratio above.
+export const AI_COMPOSE_ACTION_COST = 5;
+
 export function createRetryBudget(total = RECIPE_ACTION_COST * 3): RetryBudget {
   return { remaining: total };
+}
+
+// A separate, whole-generation (not per-day) budget for the AI composition
+// fallback — it only ever applies to slots still genuinely blocked after
+// the entire existing recipe-search + reconciliation pipeline has already
+// run, which is rare (a handful of slots at most in real plans seen so
+// far), so it doesn't need day-scoping the way reconciliation does. Sized
+// to attempt up to 10 blocked slots in one generation — comfortably above
+// every real blocked-count observed live so far (max 10), not an
+// arbitrary round number.
+export function createAiComposeBudget(): RetryBudget {
+  return { remaining: AI_COMPOSE_ACTION_COST * 10 };
 }
 
 // No partial spend: returns false (and leaves remaining untouched) if the

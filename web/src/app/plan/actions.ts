@@ -145,18 +145,21 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         .from("meal_plan_slots")
         .insert(
           result.slots.map((s) => {
-            // Composed snacks (snack1/snack2) use a synthetic negative id
+            // Composed snacks (snack1/snack2) and AI-composed meals
+            // (aiMealComposition.ts) both use a synthetic negative id
             // (orchestrate.ts) since no single Spoonacular recipe backs
-            // them — store as null with recipe_source='composed' rather
+            // them — store as null with the right recipe_source rather
             // than persisting the synthetic id, which is only meaningful
-            // within one generation call.
+            // within one generation call. aiComposed is checked first
+            // since it's the more specific case.
             const isComposed = s.candidate.id < 0;
+            const recipeSource = s.candidate.aiComposed ? "ai_composed" : isComposed ? "composed" : "spoonacular";
             return {
               meal_plan_id: insertedPlan.id,
               day_index: s.slotId.dayIndex,
               meal_type: s.slotId.mealType,
               recipe_id: isComposed ? null : s.candidate.id,
-              recipe_source: isComposed ? "composed" : "spoonacular",
+              recipe_source: recipeSource,
               recipe_title: s.candidate.title,
               image_url: s.candidate.imageUrl,
               servings: s.candidate.servings,
@@ -219,6 +222,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
           recipeId: isComposed ? null : s.candidate.id,
           recipeTitle: s.candidate.title,
           isComposed,
+          aiComposed: !!s.candidate.aiComposed,
           composedIngredients: isComposed
             ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
             : null,
@@ -350,13 +354,18 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
 
   // Composed snacks (snack1/snack2) use a synthetic negative id — see
   // generatePlan's insert above for why recipe_id/recipe_source differ.
+  // swapSlotCandidate never produces an AI-composed candidate (that
+  // fallback only runs during full generation, not a single swap), so
+  // aiComposed is always false here — checked anyway for consistency
+  // with generatePlan's logic rather than assuming it can't change later.
   const isComposed = swapResult.candidate.id < 0;
+  const recipeSource = swapResult.candidate.aiComposed ? "ai_composed" : isComposed ? "composed" : "spoonacular";
 
   const { data: updatedSlot, error: updateError } = await supabase
     .from("meal_plan_slots")
     .update({
       recipe_id: isComposed ? null : swapResult.candidate.id,
-      recipe_source: isComposed ? "composed" : "spoonacular",
+      recipe_source: recipeSource,
       recipe_title: swapResult.candidate.title,
       image_url: swapResult.candidate.imageUrl,
       servings: swapResult.candidate.servings,
@@ -392,6 +401,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     recipeId: isComposed ? null : swapResult.candidate.id,
     recipeTitle: swapResult.candidate.title,
     isComposed,
+    aiComposed: !!swapResult.candidate.aiComposed,
     composedIngredients: isComposed
       ? swapResult.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
       : null,
