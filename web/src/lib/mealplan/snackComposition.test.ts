@@ -115,16 +115,29 @@ describe("composeSnack", () => {
       expect(seen.size).toBeGreaterThan(0);
     });
 
-    it("prefers the cheapest known-cost option when budget-aware and no pantry match", () => {
+    it("rotates between the cheaper 2 of 3 protein-role options when budget-aware, excluding only the priciest", () => {
+      // Regression test for the live bug found July 15 2026 (a tight-
+      // budget Pro profile got the identical snack 14/14 times): strict
+      // cheapest-only never had a real tie given these real costs
+      // (cottage cheese 50.0 / greek yogurt 71.43 / protein powder
+      // 278.57), so it always picked cottage cheese. The fix keeps the
+      // cheaper HALF (min 2) preferred instead of just the single
+      // cheapest -- protein powder (the priciest) should still never
+      // appear, but both cottage cheese and greek yogurt should, across
+      // enough seeds. Checked on the PROTEIN role specifically (always
+      // reached every seed, unlike the fat role, which composeSnack only
+      // reaches conditionally once protein+carb haven't already used up
+      // the fat target -- a separate, pre-existing sequencing property
+      // of composeSnack, not something this fix needs to reach into).
       const ctx: PantryPriceContext = { pantryItemNames: [], budgetAware: true };
-      // fat role: peanut butter (35.71) is far cheaper than almonds
-      // (178.57) or walnuts (239.29), but normally comes last in
-      // best-fit-first order.
-      for (const seed of [0, 1, 2]) {
+      const seen = new Set<string>();
+      for (const seed of [0, 1, 2, 3]) {
         const snack = composeSnack(target, pool, seed, ctx);
-        const fatItem = snack.ingredients.find((i) => ["almonds", "walnuts", "peanut butter"].includes(i.ingredientName));
-        if (fatItem) expect(fatItem.ingredientName).toBe("peanut butter");
+        const proteinItem = snack.ingredients.find((i) => ["greek yogurt", "cottage cheese", "protein powder"].includes(i.ingredientName));
+        if (proteinItem) seen.add(proteinItem.ingredientName);
       }
+      expect(seen.has("protein powder")).toBe(false);
+      expect(seen.size).toBeGreaterThan(1);
     });
 
     it("computes a real total cost when every ingredient's cost is known", () => {

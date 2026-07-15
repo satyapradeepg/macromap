@@ -67,7 +67,7 @@ describe("rankByPantryAndPrice", () => {
     expect(result.preferredCount).toBe(1);
   });
 
-  it("orders by cheapest known cost when budget-aware and no pantry match", () => {
+  it("orders by cheapest known cost when budget-aware and no pantry match, keeping the cheaper half (min 2) preferred", () => {
     const candidates: TestItem[] = [
       { name: "walnuts", costCentsPer100g: 239.29 },
       { name: "almonds", costCentsPer100g: 178.57 },
@@ -76,7 +76,44 @@ describe("rankByPantryAndPrice", () => {
     const ctx: PantryPriceContext = { pantryItemNames: [], budgetAware: true };
     const result = rankByPantryAndPrice(candidates, ctx);
     expect(result.ordered.map((c) => c.name)).toEqual(["peanut butter", "almonds", "walnuts"]);
-    expect(result.preferredCount).toBe(1);
+    // Rank-based (not a percentage tie-band, see source comment): keeps
+    // the cheaper 2 of 3 preferred, excluding only the priciest (walnuts).
+    expect(result.preferredCount).toBe(2);
+  });
+
+  // Regression test for the live bug found July 15 2026: a tight-budget
+  // Pro profile got the byte-identical "Cottage Cheese + Banana" 14/14
+  // times, because the strict-cheapest-only comparison never has a real
+  // tie given the actual fixed-pool costs (2nd-cheapest is always
+  // 43-570% pricier -- see the source comment's derivation). This proves
+  // the fix actually restores rotation for the REAL numbers involved, not
+  // just a synthetic case with convenient ties.
+  it("restores 2-way rotation for the real fixed-pool costs that caused live 14/14 repetition", () => {
+    const proteinRole: TestItem[] = [
+      { name: "greek yogurt", costCentsPer100g: 71.43 },
+      { name: "cottage cheese", costCentsPer100g: 50.0 },
+      { name: "protein powder", costCentsPer100g: 278.57 },
+    ];
+    const carbRole: TestItem[] = [
+      { name: "banana", costCentsPer100g: 13.33 },
+      { name: "apple", costCentsPer100g: 33.11 },
+      { name: "orange", costCentsPer100g: 22.22 },
+    ];
+    const ctx: PantryPriceContext = { pantryItemNames: [], budgetAware: true };
+
+    const proteinResult = rankByPantryAndPrice(proteinRole, ctx);
+    expect(proteinResult.preferredCount).toBe(2);
+    expect(proteinResult.ordered.slice(0, 2).map((c) => c.name).sort()).toEqual(["cottage cheese", "greek yogurt"]);
+
+    const carbResult = rankByPantryAndPrice(carbRole, ctx);
+    expect(carbResult.preferredCount).toBe(2);
+    expect(carbResult.ordered.slice(0, 2).map((c) => c.name).sort()).toEqual(["banana", "orange"]);
+
+    // The seed-based caller (composeSnack) would now rotate between 2
+    // real options instead of always landing on index 0.
+    const seeds = [0, 1, 2, 3];
+    const picks = new Set(seeds.map((s) => proteinResult.ordered[s % proteinResult.preferredCount].name));
+    expect(picks.size).toBe(2);
   });
 
   it("groups tied-cheapest candidates together", () => {

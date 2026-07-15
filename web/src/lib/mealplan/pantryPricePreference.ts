@@ -60,9 +60,20 @@ export function rankByPantryAndPrice<T extends { name: string; costCentsPer100g:
     if (known.length >= 2) {
       const unknown = candidates.filter((c) => c.costCentsPer100g === null);
       const sortedKnown = [...known].sort((a, b) => a.costCentsPer100g! - b.costCentsPer100g!);
-      const cheapest = sortedKnown[0].costCentsPer100g!;
-      const tiedCheapest = sortedKnown.filter((c) => c.costCentsPer100g === cheapest).length;
-      return { ordered: [...sortedKnown, ...unknown], preferredCount: tiedCheapest };
+      // Rank-based, not a percentage tie-band -- checked live July 15
+      // 2026 against the real fixed-pool costs and a band would NOT have
+      // fixed the bug it was meant to fix: the 2nd-cheapest option in
+      // every real role is 43-570% pricier than the cheapest (e.g.
+      // cottage cheese vs greek yogurt is +43%), so any band tight enough
+      // to still mean "prefer cheap" only ever included one option,
+      // reproducing the exact "same snack 14/14 times" bug this was
+      // supposed to fix. Keeping the cheaper HALF (minimum 2, when at
+      // least 2 exist) guarantees real rotation regardless of the dollar
+      // gap, while still excluding the priciest option(s) from
+      // consideration -- still a real budget bias, just one that can't
+      // collapse to zero variety.
+      const preferredN = Math.min(sortedKnown.length, Math.max(2, Math.ceil(sortedKnown.length / 2)));
+      return { ordered: [...sortedKnown, ...unknown], preferredCount: preferredN };
     }
   }
 
