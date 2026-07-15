@@ -102,6 +102,14 @@ describe("isKnownIngredientUnsafeFor", () => {
       }
     });
 
+    it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] };
+      expect(isKnownIngredientUnsafeFor("pea protein powder", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("hemp seeds", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("sunflower seed butter", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("chia seeds", ctx)).toBeNull();
+    });
+
     it("regression: dairy_free + gluten_free with no vegan style still blocks dairy pool items -- the exact combination that served cottage cheese/greek yogurt live on July 15 2026", () => {
       const ctx: DietaryContext = {
         dietaryStyles: ["dairy_free", "gluten_free"],

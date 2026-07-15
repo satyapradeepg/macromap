@@ -178,10 +178,13 @@ describe("composedSnackTitle", () => {
 });
 
 describe("allPoolIngredientNames / INGREDIENT_POOL", () => {
-  it("returns all 9 pool ingredient names across the 3 roles", () => {
-    expect(allPoolIngredientNames()).toHaveLength(9);
-    expect(INGREDIENT_POOL.protein).toHaveLength(3);
+  // protein/fat widened 3->5 (audit round 2, July 15 2026) so a vegan +
+  // nut allergy + soy allergy profile has 2 safe options left in each
+  // role instead of 0 -- see the source comment on INGREDIENT_POOL.
+  it("returns all 13 pool ingredient names across the 3 roles", () => {
+    expect(allPoolIngredientNames()).toHaveLength(13);
+    expect(INGREDIENT_POOL.protein).toHaveLength(5);
     expect(INGREDIENT_POOL.carb).toHaveLength(3);
-    expect(INGREDIENT_POOL.fat).toHaveLength(3);
+    expect(INGREDIENT_POOL.fat).toHaveLength(5);
   });
 });

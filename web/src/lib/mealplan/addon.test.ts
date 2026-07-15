@@ -80,24 +80,52 @@ describe("buildAddonForSlot", () => {
   // Safety: found and fixed July 15 2026 -- this file previously never
   // checked allergies/diet/dislikes at all.
   describe("dietary safety", () => {
-    it("never calls the fetcher for a macro whose every candidate is unsafe (nut allergy, fat macro)", async () => {
+    it("falls through to the widened fat-role options for a nut allergy instead of finding nothing (audit round 2, July 15 2026)", async () => {
       const fetcher = vi.fn().mockResolvedValue(greekYogurt);
       const ctx: DietaryContext = { dietaryStyles: [], allergies: ["nuts"], dislikes: [] };
       const addon = await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fetcher, ctx);
-      // almonds/walnuts/peanut butter are ALL nut-tagged -- every candidate
-      // for this macro is unsafe, so the fetcher must never be called and
-      // no addon is returned, rather than falling through to an unsafe pick.
-      expect(fetcher).not.toHaveBeenCalled();
-      expect(addon).toBeNull();
+      // almonds/walnuts/peanut butter are ALL nut-tagged -- before the pool
+      // was widened, every candidate for this macro was unsafe and the
+      // fetcher was never called. sunflower seed butter (added the same
+      // day precisely for this case) is the first safe option now.
+      expect(fetcher).toHaveBeenCalledWith("sunflower seed butter");
+      expect(addon).not.toBeNull();
     });
 
-    it("never calls the fetcher for a macro whose every candidate is unsafe (vegan diet, protein macro)", async () => {
+    it("falls through to the widened protein-role options for a vegan profile instead of finding nothing (audit round 2, July 15 2026)", async () => {
       const fetcher = vi.fn().mockResolvedValue(greekYogurt);
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
       const addon = await buildAddonForSlot(700, proteinGap(), fetcher, ctx);
-      // greek yogurt/cottage cheese/protein powder are all non-vegan-compliant.
-      expect(fetcher).not.toHaveBeenCalled();
-      expect(addon).toBeNull();
+      // greek yogurt/cottage cheese/protein powder are all non-vegan-
+      // compliant. pea protein powder (added the same day precisely for
+      // this case) is the first safe option now.
+      expect(fetcher).toHaveBeenCalledWith("pea protein powder");
+      expect(addon).not.toBeNull();
+    });
+
+    // Direct regression test for the live bug this pool expansion fixes:
+    // vegan + nut allergy + soy allergy used to leave BOTH the protein
+    // and fat roles with zero safe options (17% of calorie target,
+    // engine-audit-2026-07-15-round2.md finding 4). Confirms the fetcher
+    // is never even called with an unsafe candidate for either macro.
+    it("finds a safe option for both protein and fat when vegan + nut allergy + soy allergy stack (regression)", async () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] };
+
+      const proteinFetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const proteinAddon = await buildAddonForSlot(700, proteinGap(), proteinFetcher, ctx);
+      expect(proteinFetcher).toHaveBeenCalledWith("pea protein powder");
+      expect(proteinFetcher).not.toHaveBeenCalledWith("greek yogurt");
+      expect(proteinFetcher).not.toHaveBeenCalledWith("cottage cheese");
+      expect(proteinFetcher).not.toHaveBeenCalledWith("protein powder");
+      expect(proteinAddon).not.toBeNull();
+
+      const fatFetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const fatAddon = await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fatFetcher, ctx);
+      expect(fatFetcher).toHaveBeenCalledWith("sunflower seed butter");
+      expect(fatFetcher).not.toHaveBeenCalledWith("almonds");
+      expect(fatFetcher).not.toHaveBeenCalledWith("walnuts");
+      expect(fatFetcher).not.toHaveBeenCalledWith("peanut butter");
+      expect(fatAddon).not.toBeNull();
     });
 
     it("skips a disliked candidate and picks the next safe alternative in the same role", async () => {

@@ -40,11 +40,20 @@ export interface IngredientMacroLookup {
 // Prospre's own snack examples actually look like (protein shake/yogurt,
 // banana/orange, occasionally nuts). 3 options per role gives real
 // rotation across a week's 14 snack slots without an unbounded lookup
-// cost — all 9 are fetched once per generation, not per slot.
+// cost — all ingredients are fetched once per generation, not per slot.
+//
+// protein/fat each widened from 3 to 5 (audit round 2, July 15 2026): the
+// original 3 protein options are all dairy- or soy-tagged and the
+// original 3 fat options are all nut-tagged, so a vegan + nut allergy +
+// soy allergy profile had ZERO safe options in either role (collapsed a
+// plan to 17% of target, see engine-audit-2026-07-15-round2.md finding
+// 4). Added 2 per starved role, not 1 -- a single addition leaves exactly
+// 1 safe option for this profile, the same "collapses to 1, no rotation"
+// failure already found and fixed for pantry/budget preference.
 export const INGREDIENT_POOL: Record<MacroRole, string[]> = {
-  protein: ["greek yogurt", "cottage cheese", "protein powder"],
+  protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds"],
   carb: ["banana", "apple", "orange"],
-  fat: ["almonds", "peanut butter", "walnuts"],
+  fat: ["almonds", "peanut butter", "walnuts", "sunflower seed butter", "chia seeds"],
 };
 
 export function allPoolIngredientNames(): string[] {

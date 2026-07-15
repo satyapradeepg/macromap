@@ -182,6 +182,73 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsGluten: false,
     veganCompliant: true,
   },
+
+  // Added July 15 2026 (audit round 2, finding: vegan + nut allergy + soy
+  // allergy collapsed a plan to 17% of target because the protein and fat
+  // roles each had zero safe options left -- greek yogurt/cottage cheese/
+  // protein powder are all dairy- or soy-tagged, almonds/walnuts/peanut
+  // butter are all nut-tagged). Two per starved role, not one -- a single
+  // addition would leave exactly 1 safe option for this profile,
+  // colliding with the exact "collapses to 1, no rotation" bug already
+  // found and fixed for pantry/budget preference earlier the same day.
+  // Real data, fetched live the same way the original 9 were (search +
+  // information, amount=100/unit=grams).
+  "pea protein powder": {
+    id: 98890,
+    name: "pea protein powder",
+    caloriesPer100g: 363.63,
+    proteinGPer100g: 72.72,
+    carbsGPer100g: 3.03,
+    fatGPer100g: 6.06,
+    estimatedCostCentsPer100g: 240.0,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+  "hemp seeds": {
+    id: 93602,
+    name: "hemp seeds",
+    caloriesPer100g: 580,
+    proteinGPer100g: 37,
+    carbsGPer100g: 7,
+    fatGPer100g: 45,
+    estimatedCostCentsPer100g: 339.29,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+  "sunflower seed butter": {
+    id: 98928,
+    name: "sunflower seed butter",
+    caloriesPer100g: 579,
+    proteinGPer100g: 19.7,
+    carbsGPer100g: 27.4,
+    fatGPer100g: 47.7,
+    estimatedCostCentsPer100g: 166.08,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+  "chia seeds": {
+    id: 12006,
+    name: "chia seeds",
+    caloriesPer100g: 486,
+    proteinGPer100g: 16.54,
+    carbsGPer100g: 42.12,
+    fatGPer100g: 30.74,
+    estimatedCostCentsPer100g: 178.57,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
 };
 
 export function lookupIngredientMacrosStatic(query: string): StaticIngredientMacro | null {

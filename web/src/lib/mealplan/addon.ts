@@ -44,14 +44,17 @@ export interface SlotAddon {
 // that's unsafe for the profile (ingredientSafety.ts) — found and fixed
 // July 15 2026 after confirming this file never checked allergies/diet at
 // all, meaning e.g. a nut allergy could previously get served almonds.
-// Reuses the exact same 9-ingredient set as snackComposition.ts's
+// Reuses the exact same ingredient set as snackComposition.ts's
 // INGREDIENT_POOL (just macro-ordered rather than role-grouped), not a
 // separate list, so there's one place that defines "the fixed pool."
+// proteinG/fatG widened alongside INGREDIENT_POOL (audit round 2, July 15
+// 2026) -- see that file's comment for why (vegan+nut+soy allergy
+// stacking left both roles with zero safe options).
 export const ADDON_INGREDIENT_OPTIONS_BY_MACRO: Record<MacroKey, string[]> = {
-  proteinG: ["greek yogurt", "cottage cheese", "protein powder"],
+  proteinG: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds"],
   carbsG: ["banana", "apple", "orange"],
-  fatG: ["almonds", "walnuts", "peanut butter"],
-  calories: ["peanut butter", "walnuts", "almonds"],
+  fatG: ["almonds", "walnuts", "peanut butter", "sunflower seed butter", "chia seeds"],
+  calories: ["peanut butter", "walnuts", "almonds", "sunflower seed butter", "chia seeds"],
 };
 
 // PRD 7.3 F3: "capped at... ≤15-20% of that meal's calories" — uses the top
