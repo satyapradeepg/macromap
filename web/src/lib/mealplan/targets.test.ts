@@ -99,6 +99,37 @@ describe("perMealTarget absolute bounds", () => {
     expect(targets.breakfast.calories).toBeCloseTo(421.2, 5);
     expect(targets.lunch.calories).toBeCloseTo(673.92, 5);
   });
+
+  // Floor split by meal type, audit round 2 (July 15 2026): breakfast and
+  // lunch/dinner used to share one flat 250 kcal floor despite querying
+  // genuinely different Spoonacular corpora. Live-checked real recipe
+  // data before picking new numbers -- see the source comment on
+  // CALORIE_BOUNDS for the full derivation.
+  describe("meal-type-specific floor (breakfast 250 vs lunch/dinner 150)", () => {
+    it("does not clamp dinner at 192 kcal -- above the new 150 floor, would have clamped to 250 under the old shared floor", () => {
+      const daily = { calories: 1200, proteinG: 100, carbsG: 120, fatG: 33 };
+      const dinner = perMealTarget(daily, "dinner");
+      expect(dinner.calories).toBeCloseTo(1200 * 0.16, 5); // 192, unclamped
+    });
+
+    it("still clamps dinner up to 150 (not 250) when the raw share falls below even the lowered floor", () => {
+      const daily = { calories: 800, proteinG: 70, carbsG: 80, fatG: 22 };
+      const dinner = perMealTarget(daily, "dinner");
+      expect(dinner.calories).toBe(150);
+    });
+
+    it("applies the same lowered 150 floor to lunch", () => {
+      const daily = { calories: 400, proteinG: 40, carbsG: 40, fatG: 12 };
+      const lunch = perMealTarget(daily, "lunch"); // raw = 400*0.32 = 128, below 150
+      expect(lunch.calories).toBe(150);
+    });
+
+    it("still clamps breakfast up to 250, unaffected by the lunch/dinner change", () => {
+      const daily = { calories: 992, proteinG: 88, carbsG: 98, fatG: 27.5 };
+      const breakfast = perMealTarget(daily, "breakfast"); // raw ~198, below 250
+      expect(breakfast.calories).toBe(250);
+    });
+  });
 });
 
 describe("proteinFloorViolations", () => {

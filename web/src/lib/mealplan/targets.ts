@@ -100,19 +100,42 @@ export const MEAL_TYPE_SHARE: Record<MealType, number> = {
 
 // Absolute sanity bounds per slot, on top of the percentage share above —
 // a real, live-confirmed gap: at this app's own allowed input extremes
-// (13-100yo, 30-300kg), the percentage split alone produces unrealistic
+// (18-100yo, 30-300kg), the percentage split alone produces unrealistic
 // single-meal sizes (e.g. a 150kg/200cm/25yo very-active bulker's 32%
-// lunch share is ~1815 kcal in one sitting; a 40kg/150cm/70yo sedentary
-// cutter's 20% breakfast share is ~198 kcal, too small to reliably match
-// real breakfast recipes). Clamped and rescaled proportionally (same
-// macro ratio the percentage split implied, just at a realistic absolute
-// size) — for the rare profile this triggers on, the day's real total
-// will legitimately fall outside the daily band, and reconciliation
+// lunch share is ~1815 kcal in one sitting; a very small/sedentary
+// cutter's 20% breakfast share can be too small to reliably match real
+// breakfast recipes). Clamped and rescaled proportionally (same macro
+// ratio the percentage split implied, just at a realistic absolute size)
+// — for the rare profile this triggers on, the day's real total will
+// legitimately fall outside the daily band, and reconciliation
 // (orchestrate.ts) honestly reports that rather than recommending an
 // unrealistic single meal.
-const CALORIE_BOUNDS: Record<SlotMechanism, { min: number; max: number }> = {
-  recipe: { min: 250, max: 1200 },
-  composed: { min: 100, max: 500 },
+//
+// Keyed by MealType, not SlotMechanism (audit round 2, July 15 2026) —
+// breakfast and lunch/dinner used to share one flat 250 floor despite
+// querying genuinely different Spoonacular corpora. Live-checked what the
+// smallest REAL recipes each type actually returns (sorted by calories
+// ascending) before picking new numbers, rather than guessing:
+// - type=breakfast's smallest entries (down to ~37 kcal) are dominated by
+//   inherently bite-sized items (mini muffins, a smoothie) that would look
+//   broken as a standalone meal card — kept breakfast's floor at 250,
+//   which the data doesn't contradict (191 real recipes exist at or below
+//   it, not scarce).
+// - type=main course's smallest entries are genuine complete, protein-
+//   bearing dishes (e.g. 79 kcal "Moroccan Lemon Shish Kebabs" at 12.3g
+//   protein, 104 kcal "Grilled Prawns" at 15.8g) all the way down to ~100
+//   kcal (only 2 real matches below that) -- lowered lunch/dinner's floor
+//   to 150, backed by 25 real, legitimate dishes at or below it. This
+//   meaningfully narrows (but does not eliminate -- see
+//   engine-audit-2026-07-15-round2.md finding 3) how often a small but
+//   ordinary cutting target gets its dinner silently inflated: the
+//   trigger threshold drops from ~1,562 to ~938 kcal/day.
+const CALORIE_BOUNDS: Record<MealType, { min: number; max: number }> = {
+  breakfast: { min: 250, max: 1200 },
+  lunch: { min: 150, max: 1200 },
+  dinner: { min: 150, max: 1200 },
+  snack1: { min: 100, max: 500 },
+  snack2: { min: 100, max: 500 },
 };
 
 export function perMealTarget(daily: MacroTargets, mealType: MealType): MacroTargets {
@@ -124,7 +147,7 @@ export function perMealTarget(daily: MacroTargets, mealType: MealType): MacroTar
     fatG: daily.fatG * share,
   };
 
-  const bounds = CALORIE_BOUNDS[SLOT_MECHANISM[mealType]];
+  const bounds = CALORIE_BOUNDS[mealType];
   const clampedCalories = Math.min(Math.max(raw.calories, bounds.min), bounds.max);
   if (clampedCalories === raw.calories) return raw;
 
