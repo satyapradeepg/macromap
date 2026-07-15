@@ -8,7 +8,7 @@
 // (excludes on any doubt), never tries to "fix" a violation by silently
 // swapping to something unverified.
 //
-// Two independent checks, since they catch different things:
+// Three independent checks, since they catch different things:
 // 1. Exact/substring match against the user's own allergy/dislike words —
 //    same source of truth already used to build Spoonacular's
 //    excludeIngredients param for recipe search, plus a small synonym
@@ -16,6 +16,17 @@
 //    "greek yogurt", so a bare substring check alone would miss it).
 // 2. The static table's curated safety tags (staticIngredientMacros.ts) —
 //    exact, not inferred, since this is a small fixed set we fully control.
+// 3. Dietary-STYLE presets (dairy_free/gluten_free), added July 15 2026
+//    (audit round 2) after live-testing found this gate never consulted
+//    them at all — only free-text allergies/dislikes and a hardcoded
+//    "vegan" check existed, so a dairy_free+gluten_free profile with no
+//    vegan style could be (and was) served cottage cheese/greek yogurt in
+//    a composed snack even though dietaryMapping.ts's resolveIntolerances
+//    already correctly maps those same presets to Spoonacular's
+//    intolerances param for the recipe-search side. Reuses
+//    resolveIntolerances directly rather than re-deriving a second
+//    preset->restriction mapping here, so the two stay in sync by
+//    construction instead of by discipline.
 //
 // Scoped ONLY to the known static 9-ingredient pool. An ingredient name
 // this module has never heard of returns null ("not flagged"), which is
@@ -26,6 +37,7 @@
 // "unrecognized" as unsafe, not safe.
 
 import { STATIC_INGREDIENT_MACROS } from "./staticIngredientMacros";
+import { resolveIntolerances } from "./dietaryMapping";
 
 export interface DietaryContext {
   dietaryStyles: string[];
@@ -54,6 +66,11 @@ export function isKnownIngredientUnsafeFor(ingredientKey: string, ctx: DietaryCo
   if (!entry) return null;
 
   const userWords = [...ctx.allergies, ...ctx.dislikes];
+  // Single source of truth also used by the recipe-search path
+  // (dietaryMapping.ts) -- keeps dairy_free/gluten_free enforcement here
+  // in sync with what Spoonacular's own intolerances param already
+  // enforces, instead of a second hand-maintained preset list.
+  const intolerances = resolveIntolerances(ctx.dietaryStyles).map((i) => i.toLowerCase());
 
   for (const word of userWords) {
     const normalized = word.toLowerCase().trim();
@@ -65,11 +82,14 @@ export function isKnownIngredientUnsafeFor(ingredientKey: string, ctx: DietaryCo
   if (entry.containsNut && mentionsAny(userWords, NUT_SYNONYMS)) {
     return "contains nuts (explicit allergy/dislike)";
   }
-  if (entry.containsDairy && mentionsAny(userWords, DAIRY_SYNONYMS)) {
-    return "contains dairy (explicit allergy/dislike)";
+  if (entry.containsDairy && (mentionsAny(userWords, DAIRY_SYNONYMS) || intolerances.includes("dairy"))) {
+    return "contains dairy (explicit allergy/dislike or dairy-free diet)";
   }
   if (entry.containsSoy && mentionsAny(userWords, SOY_SYNONYMS)) {
     return "contains soy (explicit allergy/dislike)";
+  }
+  if (entry.containsGluten && intolerances.includes("gluten")) {
+    return "contains gluten (gluten-free diet)";
   }
 
   if (!entry.veganCompliant && ctx.dietaryStyles.includes("vegan")) {

@@ -43,6 +43,13 @@ export interface StaticIngredientMacro {
   containsDairy: boolean;
   containsNut: boolean;
   containsSoy: boolean;
+  // Added July 15 2026 (audit round 2) alongside ingredientSafety.ts's
+  // dietaryStyles-aware check -- false for all 9 pool ingredients today
+  // (none of them are wheat/gluten-based), so this has no observable
+  // effect yet, but closes a real completeness gap for gluten_free and
+  // future-proofs against the pool ever growing to include something
+  // gluten-containing (e.g. a granola bar).
+  containsGluten: boolean;
   veganCompliant: boolean;
 }
 
@@ -58,6 +65,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: true,
     containsNut: false,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: false,
   },
   "cottage cheese": {
@@ -71,6 +79,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: true,
     containsNut: false,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: false,
   },
   "protein powder": {
@@ -86,6 +95,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: true,
     containsNut: false,
     containsSoy: true,
+    containsGluten: false,
     veganCompliant: false,
   },
   banana: {
@@ -99,6 +109,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
   apple: {
@@ -112,6 +123,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
   orange: {
@@ -125,6 +137,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
   almonds: {
@@ -138,6 +151,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: true,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
   "peanut butter": {
@@ -151,6 +165,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: true,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
   walnuts: {
@@ -164,6 +179,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsDairy: false,
     containsNut: true,
     containsSoy: false,
+    containsGluten: false,
     veganCompliant: true,
   },
 };

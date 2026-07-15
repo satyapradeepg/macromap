@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { isKnownIngredientUnsafeFor, filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
+import { STATIC_INGREDIENT_MACROS } from "./staticIngredientMacros";
 
 const NONE: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
 
@@ -72,6 +73,45 @@ describe("isKnownIngredientUnsafeFor", () => {
     it("does not apply the vegan check for a merely vegetarian profile", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
       expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).toBeNull();
+    });
+  });
+
+  describe("dairy_free / gluten_free dietary-style presets (audit round 2, July 15 2026)", () => {
+    it("flags every dairy-tagged ingredient for a dairy_free profile with no explicit 'dairy' allergy/dislike text", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("protein powder", ctx)).not.toBeNull();
+    });
+
+    it("does not flag non-dairy ingredients for a dairy_free profile", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isKnownIngredientUnsafeFor("banana", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("almonds", ctx)).toBeNull();
+    });
+
+    it("does not apply the dairy_free check for an unrelated style like vegetarian", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).toBeNull();
+    });
+
+    it("does not currently flag any pool ingredient for gluten_free -- none of the 9 contain gluten today, this locks in that expectation so it's caught if the pool ever changes", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      for (const name of Object.keys(STATIC_INGREDIENT_MACROS)) {
+        expect(isKnownIngredientUnsafeFor(name, ctx), name).toBeNull();
+      }
+    });
+
+    it("regression: dairy_free + gluten_free with no vegan style still blocks dairy pool items -- the exact combination that served cottage cheese/greek yogurt live on July 15 2026", () => {
+      const ctx: DietaryContext = {
+        dietaryStyles: ["dairy_free", "gluten_free"],
+        allergies: ["tree nut", "shellfish"],
+        dislikes: ["cilantro"],
+      };
+      expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("protein powder", ctx)).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("banana", ctx)).toBeNull();
     });
   });
 });
