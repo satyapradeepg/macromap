@@ -16,6 +16,14 @@
 // only when budget-aware, prefer the cheapest known-cost option(s). Never
 // reorders based on price when cost data is missing for enough
 // candidates to make a meaningful comparison.
+//
+// Pantry-match branch fixed July 15 2026 (audit round 2) to carry the same
+// minimum-2-preferred floor the budget branch already had: a real pantry
+// almost always matches exactly ONE pool item per macro role (a 15-item
+// pantry test confirmed this live), which used to collapse preferredCount
+// to 1 -- composeSnack's variety-seed rotation then has nothing to rotate
+// within, reproducing the exact "same snack 14/14 times" bug this file's
+// budget branch was already fixed for, just via a different trigger.
 export interface PantryPriceContext {
   pantryItemNames: string[];
   budgetAware: boolean;
@@ -45,21 +53,40 @@ function matchesPantry(ingredientName: string, pantryItemNames: string[]): boole
   });
 }
 
+// Shared by both branches below so the two never drift apart -- known-cost
+// items ascending, unknown-cost items last (never reordered based on
+// missing data).
+function sortCheapestFirst<T extends { costCentsPer100g: number | null }>(items: T[]): T[] {
+  const known = items.filter((c) => c.costCentsPer100g !== null);
+  const unknown = items.filter((c) => c.costCentsPer100g === null);
+  const sortedKnown = [...known].sort((a, b) => a.costCentsPer100g! - b.costCentsPer100g!);
+  return [...sortedKnown, ...unknown];
+}
+
 export function rankByPantryAndPrice<T extends { name: string; costCentsPer100g: number | null }>(
   candidates: T[],
   ctx: PantryPriceContext,
 ): RankedByPreference<T> {
   const pantryMatches = candidates.filter((c) => matchesPantry(c.name, ctx.pantryItemNames));
   if (pantryMatches.length > 0) {
-    const rest = candidates.filter((c) => !pantryMatches.includes(c));
-    return { ordered: [...pantryMatches, ...rest], preferredCount: pantryMatches.length };
+    const nonMatches = candidates.filter((c) => !pantryMatches.includes(c));
+    // Refinement: when also budget-aware, the backup/topped-up slots below
+    // prefer the cheapest of the non-matching candidates rather than
+    // whatever order they happened to be in -- "pantry match wins, cheapest
+    // breaks remaining ties," not required to fix the variety collapse
+    // itself but a reasonable secondary preference given the cost data is
+    // already there.
+    const rest = ctx.budgetAware ? sortCheapestFirst(nonMatches) : nonMatches;
+    // Same minimum-2-preferred floor as the budget branch below, and for
+    // the same reason: a preferred tier of exactly 1 leaves composeSnack's
+    // variety-seed rotation with nothing to rotate within.
+    const preferredN = Math.min(candidates.length, Math.max(pantryMatches.length, 2));
+    return { ordered: [...pantryMatches, ...rest], preferredCount: preferredN };
   }
 
   if (ctx.budgetAware) {
     const known = candidates.filter((c) => c.costCentsPer100g !== null);
     if (known.length >= 2) {
-      const unknown = candidates.filter((c) => c.costCentsPer100g === null);
-      const sortedKnown = [...known].sort((a, b) => a.costCentsPer100g! - b.costCentsPer100g!);
       // Rank-based, not a percentage tie-band -- checked live July 15
       // 2026 against the real fixed-pool costs and a band would NOT have
       // fixed the bug it was meant to fix: the 2nd-cheapest option in
@@ -72,8 +99,8 @@ export function rankByPantryAndPrice<T extends { name: string; costCentsPer100g:
       // gap, while still excluding the priciest option(s) from
       // consideration -- still a real budget bias, just one that can't
       // collapse to zero variety.
-      const preferredN = Math.min(sortedKnown.length, Math.max(2, Math.ceil(sortedKnown.length / 2)));
-      return { ordered: [...sortedKnown, ...unknown], preferredCount: preferredN };
+      const preferredN = Math.min(known.length, Math.max(2, Math.ceil(known.length / 2)));
+      return { ordered: sortCheapestFirst(candidates), preferredCount: preferredN };
     }
   }
 

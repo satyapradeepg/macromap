@@ -92,15 +92,26 @@ describe("composeSnack", () => {
   describe("pantry/price preference", () => {
     const target = { calories: 337, proteinG: 29, carbsG: 34, fatG: 9 };
 
-    it("consistently picks a pantry-matching option across every variety seed, not just some", () => {
+    // Fixed July 15 2026 (audit round 2): this used to assert the actual
+    // live bug -- a single pantry match collapsed preferredCount to 1, so
+    // every seed landed on "orange" with nothing to rotate against (a real
+    // 15-item pantry test produced 1 distinct snack combo across all 14
+    // snack slots). rankByPantryAndPrice now tops the preferred tier up to
+    // 2, so a single pantry match should be favored (appear across most
+    // seeds) but not exclusively -- real rotation should return.
+    it("favors a single pantry-matching option across seeds, but still rotates with a backup instead of collapsing to one option", () => {
       const ctx: PantryPriceContext = { pantryItemNames: ["orange"], budgetAware: false };
-      // Without preference, seed 0/1/2 would rotate through
-      // banana/apple/orange -- a real preference should pick "orange"
-      // regardless of seed, not just when the seed happens to land on it.
+      const seen = new Set<string>();
       for (const seed of [0, 1, 2, 5, 42]) {
         const snack = composeSnack(target, pool, seed, ctx);
-        expect(snack.ingredients.map((i) => i.ingredientName)).toContain("orange");
+        const carbItem = snack.ingredients.find((i) => ["banana", "apple", "orange"].includes(i.ingredientName));
+        seen.add(carbItem!.ingredientName);
       }
+      expect(seen.has("orange")).toBe(true);
+      // The bug this replaces would have made this assertion fail (seen
+      // would be exactly {"orange"}) -- real rotation means at least one
+      // other carb-role option also gets picked across these 5 seeds.
+      expect(seen.size).toBeGreaterThan(1);
     });
 
     it("rotates among multiple pantry matches for variety, never picking a non-match", () => {

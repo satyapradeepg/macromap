@@ -20,7 +20,7 @@ describe("rankByPantryAndPrice", () => {
     expect(result.preferredCount).toBe(3);
   });
 
-  it("puts a pantry match first and reports a preferredCount of 1", () => {
+  it("puts a single pantry match first, but tops the preferred tier up to 2 so there's still something to rotate with", () => {
     const candidates: TestItem[] = [
       { name: "banana", costCentsPer100g: 13 },
       { name: "apple", costCentsPer100g: 33 },
@@ -29,10 +29,10 @@ describe("rankByPantryAndPrice", () => {
     const ctx: PantryPriceContext = { pantryItemNames: ["apple"], budgetAware: false };
     const result = rankByPantryAndPrice(candidates, ctx);
     expect(result.ordered[0].name).toBe("apple");
-    expect(result.preferredCount).toBe(1);
+    expect(result.preferredCount).toBe(2);
   });
 
-  it("matches a pantry item that's a substring of the ingredient name and vice versa", () => {
+  it("matches a pantry item that's a substring of the ingredient name and vice versa, still topped up to 2 preferred", () => {
     const candidates: TestItem[] = [
       { name: "greek yogurt", costCentsPer100g: 71 },
       { name: "cottage cheese", costCentsPer100g: 50 },
@@ -40,7 +40,43 @@ describe("rankByPantryAndPrice", () => {
     const ctx: PantryPriceContext = { pantryItemNames: ["yogurt"], budgetAware: false };
     const result = rankByPantryAndPrice(candidates, ctx);
     expect(result.ordered[0].name).toBe("greek yogurt");
-    expect(result.preferredCount).toBe(1);
+    expect(result.preferredCount).toBe(2);
+  });
+
+  // Regression test for the live bug found July 15 2026 (audit round 2): a
+  // 15-item real pantry produced 1 distinct snack combo across all 14
+  // snack slots, because a real pantry almost always matches exactly ONE
+  // pool item per macro role -- preferredCount used to collapse to 1,
+  // leaving composeSnack's variety-seed rotation nothing to rotate within.
+  it("restores 2-way rotation when only a single pantry item matches a role", () => {
+    const carbRole: TestItem[] = [
+      { name: "banana", costCentsPer100g: 13.33 },
+      { name: "apple", costCentsPer100g: 33.11 },
+      { name: "orange", costCentsPer100g: 22.22 },
+    ];
+    const ctx: PantryPriceContext = { pantryItemNames: ["banana"], budgetAware: false };
+    const result = rankByPantryAndPrice(carbRole, ctx);
+    expect(result.preferredCount).toBe(2);
+    expect(result.ordered[0].name).toBe("banana");
+
+    const seeds = [0, 1, 2, 3];
+    const picks = new Set(seeds.map((s) => result.ordered[s % result.preferredCount].name));
+    expect(picks.size).toBe(2);
+  });
+
+  it("prefers the cheaper of the backup slots when also budget-aware", () => {
+    const carbRole: TestItem[] = [
+      { name: "banana", costCentsPer100g: 13.33 },
+      { name: "apple", costCentsPer100g: 33.11 },
+      { name: "orange", costCentsPer100g: 22.22 },
+    ];
+    // "apple" is the pantry match, but the priciest of the three -- the
+    // topped-up 2nd preferred slot should still favor the cheaper backup
+    // (banana over orange) when budget-aware, not an arbitrary order.
+    const ctx: PantryPriceContext = { pantryItemNames: ["apple"], budgetAware: true };
+    const result = rankByPantryAndPrice(carbRole, ctx);
+    expect(result.ordered.map((c) => c.name)).toEqual(["apple", "banana", "orange"]);
+    expect(result.preferredCount).toBe(2);
   });
 
   it("groups multiple pantry matches together at the front, preserving their relative order", () => {
@@ -64,7 +100,7 @@ describe("rankByPantryAndPrice", () => {
     const ctx: PantryPriceContext = { pantryItemNames: ["apple"], budgetAware: true };
     const result = rankByPantryAndPrice(candidates, ctx);
     expect(result.ordered[0].name).toBe("apple");
-    expect(result.preferredCount).toBe(1);
+    expect(result.preferredCount).toBe(2);
   });
 
   it("orders by cheapest known cost when budget-aware and no pantry match, keeping the cheaper half (min 2) preferred", () => {
