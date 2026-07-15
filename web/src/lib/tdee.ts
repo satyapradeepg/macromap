@@ -78,13 +78,32 @@ const GOAL_CALORIE_MULTIPLIER: Record<Goal, number> = {
   maintain: 1.0,
 };
 
+// Audit round 2 (July 15 2026), finding 3's remaining half: mealplan/
+// targets.ts's per-meal calorie floors sum to a real structural minimum
+// across a full day (750 kcal as of today's floor split -- see that
+// file's CALORIE_BOUNDS comment). A computed target below that forces the
+// whole plan over target by construction, not just imprecisely. Rather
+// than teach the meal engine to cope with arbitrarily low targets, this
+// floors the computed target itself -- the same category of fix as
+// raising AGE_RANGE.min: don't let the app prescribe a target this
+// restrictive in the first place, rather than engineering around one that
+// shouldn't exist. 1,200 kcal/day is the commonly-cited general minimum
+// (most consumer guidance floors women around 1,200 and men around
+// 1,500 -- this uses the lower, more conservative shared value since
+// calculateMacroTargets doesn't take biological sex as an input). A user
+// can still manually override the resulting dailyCalories field below
+// this floor in onboarding -- that path is NOT protected by this
+// constant, see targets.ts's structuralCalorieFloorExceedsTarget for the
+// disclosure that catches it instead.
+export const MIN_DAILY_CALORIES = 1200;
+
 export function calculateMacroTargets(
   tdee: number,
   weightKg: number,
   goal: Goal,
 ): MacroTargets {
   const { proteinGPerKg, fatPercentOfCalories } = MACRO_SPLIT_RULES[goal];
-  const dailyCalories = tdee * GOAL_CALORIE_MULTIPLIER[goal];
+  const dailyCalories = Math.max(tdee * GOAL_CALORIE_MULTIPLIER[goal], MIN_DAILY_CALORIES);
 
   const proteinG = proteinGPerKg * weightKg;
   const proteinCalories = proteinG * 4;

@@ -138,6 +138,24 @@ const CALORIE_BOUNDS: Record<MealType, { min: number; max: number }> = {
   snack2: { min: 100, max: 500 },
 };
 
+// Sum of every slot's own floor -- the real structural minimum for a full
+// day, independent of what the percentage split would otherwise produce.
+// A daily target below this is guaranteed to be exceeded by construction,
+// not just imprecisely (audit round 2, July 15 2026, finding 3). tdee.ts's
+// MIN_DAILY_CALORIES (1,200) keeps the app's own COMPUTED targets safely
+// above this for the common case, but onboarding lets a user manually
+// override that computed value -- structuralCalorieFloorExceedsTarget
+// below is the disclosure that catches an override low enough to still
+// trigger this, rather than silently generating an over-target plan.
+export const STRUCTURAL_CALORIE_FLOOR_TOTAL = Object.values(CALORIE_BOUNDS).reduce(
+  (sum, bounds) => sum + bounds.min,
+  0,
+);
+
+export function structuralCalorieFloorExceedsTarget(dailyCalories: number): boolean {
+  return STRUCTURAL_CALORIE_FLOOR_TOTAL > dailyCalories;
+}
+
 export function perMealTarget(daily: MacroTargets, mealType: MealType): MacroTargets {
   const share = MEAL_TYPE_SHARE[mealType];
   const raw: MacroTargets = {

@@ -22,7 +22,7 @@ export default async function PlanPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, allergies, dislikes, dietary_styles")
+    .select("id, allergies, dislikes, dietary_styles, daily_calories")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -37,6 +37,7 @@ export default async function PlanPage() {
     <PlanBoard
       initialPlan={initialPlan}
       dietaryStyles={profile.dietary_styles ?? []}
+      dailyCalories={profile.daily_calories}
       initialPantryItems={initialPantryItems}
     />
   );

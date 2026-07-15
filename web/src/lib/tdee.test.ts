@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateBmr, calculateTdee, calculateMacroTargets, AGE_RANGE } from "./tdee";
+import { calculateBmr, calculateTdee, calculateMacroTargets, AGE_RANGE, MIN_DAILY_CALORIES } from "./tdee";
 
 describe("calculateBmr", () => {
   it("applies the +5 male constant", () => {
@@ -61,6 +61,32 @@ describe("calculateMacroTargets — goal-based caloric adjustment", () => {
     const cut = calculateMacroTargets(tdee, weightKg, "cut");
     const expectedFatG = Math.round(((tdee * 0.8) * 0.25) / 9);
     expect(cut.dailyFatG).toBe(expectedFatG);
+  });
+
+  // Audit round 2 (July 15 2026), finding 3's remaining half: a computed
+  // target below mealplan/targets.ts's structural per-meal-floor sum
+  // (750 kcal as of today's floor split) forces the whole plan over
+  // target by construction. Floors the computed value at the source
+  // rather than teaching the meal engine to cope with an arbitrarily low
+  // target -- same category of fix as raising AGE_RANGE.min.
+  describe("MIN_DAILY_CALORIES floor", () => {
+    it("floors a very low computed target (small/sedentary/cut) up to 1,200", () => {
+      // 30kg/100cm/18yo/sedentary/cut female: BMR=300+625-90-161=674,
+      // TDEE=674*1.2=808.8, cut target would be 647.04 without the floor.
+      const bmr = calculateBmr({ weightKg: 30, heightCm: 100, age: 18, biologicalSex: "female" });
+      const tdeeVal = calculateTdee(bmr, "sedentary");
+      const targets = calculateMacroTargets(tdeeVal, 30, "cut");
+      expect(targets.dailyCalories).toBe(MIN_DAILY_CALORIES);
+    });
+
+    it("does not floor a normal target that's already above 1,200", () => {
+      const targets = calculateMacroTargets(2000, 80, "cut"); // 2000*0.8 = 1600
+      expect(targets.dailyCalories).toBe(1600);
+    });
+
+    it("has a value of 1,200", () => {
+      expect(MIN_DAILY_CALORIES).toBe(1200);
+    });
   });
 });
 

@@ -1,7 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { MEAL_TYPES, DAYS_PER_WEEK, type MealType, type MacroTargets } from "@/lib/mealplan/targets";
+import {
+  MEAL_TYPES,
+  DAYS_PER_WEEK,
+  structuralCalorieFloorExceedsTarget,
+  STRUCTURAL_CALORIE_FLOOR_TOTAL,
+  type MealType,
+  type MacroTargets,
+} from "@/lib/mealplan/targets";
 import { toleranceBand, isWithinBand } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { recipeVideoSearchUrl } from "@/lib/youtube";
@@ -57,10 +64,12 @@ function dayStatus(
 export function PlanBoard({
   initialPlan,
   dietaryStyles,
+  dailyCalories,
   initialPantryItems,
 }: {
   initialPlan: PlanView | null;
   dietaryStyles: string[];
+  dailyCalories: number;
   initialPantryItems: PantryItemView[];
 }) {
   const [plan, setPlan] = useState<PlanView | null>(initialPlan);
@@ -71,6 +80,13 @@ export function PlanBoard({
   const [swappingKey, setSwappingKey] = useState<string | null>(null);
 
   const unsupportedStyles = unsupportedDietaryStyles(dietaryStyles);
+  // Audit round 2 (July 15 2026), finding 3's remaining half: our own
+  // MIN_DAILY_CALORIES floor (tdee.ts) keeps a COMPUTED target safely
+  // above the meal-floor structural minimum, but onboarding lets a user
+  // manually override dailyCalories below it -- this catches that case
+  // honestly rather than silently generating a plan that's guaranteed to
+  // land over target.
+  const belowStructuralFloor = structuralCalorieFloorExceedsTarget(dailyCalories);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -167,6 +183,15 @@ export function PlanBoard({
         <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
           {unsupportedStyles.map((s) => s.replace("_", " ")).join(" / ")} aren&apos;t enforced by our
           recipe filters yet — please double-check ingredients.
+        </p>
+      )}
+
+      {belowStructuralFloor && (
+        <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
+          Your daily calorie target ({Math.round(dailyCalories)} cal) is low enough that this plan may
+          run above it — we can&apos;t realistically make individual meals smaller than about{" "}
+          {STRUCTURAL_CALORIE_FLOOR_TOTAL} cal combined. Consider raising your target if this plan looks
+          too large.
         </p>
       )}
 

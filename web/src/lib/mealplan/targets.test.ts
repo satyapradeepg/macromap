@@ -8,6 +8,8 @@ import {
   slotMechanism,
   MEALS_PER_WEEK,
   mealTypeToSpoonacularType,
+  structuralCalorieFloorExceedsTarget,
+  STRUCTURAL_CALORIE_FLOOR_TOTAL,
 } from "./targets";
 
 describe("allSlotIds", () => {
@@ -128,6 +130,26 @@ describe("perMealTarget absolute bounds", () => {
       const daily = { calories: 992, proteinG: 88, carbsG: 98, fatG: 27.5 };
       const breakfast = perMealTarget(daily, "breakfast"); // raw ~198, below 250
       expect(breakfast.calories).toBe(250);
+    });
+  });
+
+  // Disclosure half of finding 3 (audit round 2, July 15 2026) -- the
+  // computed-target floor (tdee.ts's MIN_DAILY_CALORIES) protects the
+  // common case, but a manual onboarding override can still land below
+  // the meal-floor structural minimum. This is the check that catches it.
+  describe("structuralCalorieFloorExceedsTarget", () => {
+    it("computes 750 as today's structural floor total (250+150+150+100+100)", () => {
+      expect(STRUCTURAL_CALORIE_FLOOR_TOTAL).toBe(750);
+    });
+
+    it("returns true when the daily target is below the structural floor", () => {
+      expect(structuralCalorieFloorExceedsTarget(600)).toBe(true);
+      expect(structuralCalorieFloorExceedsTarget(749)).toBe(true);
+    });
+
+    it("returns false once the daily target reaches or exceeds the structural floor", () => {
+      expect(structuralCalorieFloorExceedsTarget(750)).toBe(false);
+      expect(structuralCalorieFloorExceedsTarget(1200)).toBe(false);
     });
   });
 });
