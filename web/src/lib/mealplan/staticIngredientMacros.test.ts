@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { STATIC_INGREDIENT_MACROS, lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { allPoolIngredientNames } from "./snackComposition";
-import { ADDON_INGREDIENT_BY_MACRO } from "./addon";
+import { ADDON_INGREDIENT_OPTIONS_BY_MACRO } from "./addon";
 
 describe("staticIngredientMacros", () => {
   it("covers every name in the snack composition pool", () => {
@@ -11,8 +11,10 @@ describe("staticIngredientMacros", () => {
   });
 
   it("covers every name addon.ts maps a macro gap to", () => {
-    for (const name of Object.values(ADDON_INGREDIENT_BY_MACRO)) {
-      expect(lookupIngredientMacrosStatic(name)).not.toBeNull();
+    for (const names of Object.values(ADDON_INGREDIENT_OPTIONS_BY_MACRO)) {
+      for (const name of names) {
+        expect(lookupIngredientMacrosStatic(name)).not.toBeNull();
+      }
     }
   });
 

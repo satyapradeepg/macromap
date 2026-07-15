@@ -22,6 +22,20 @@ export interface StaticIngredientMacro {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  // Safety tags for ingredientSafety.ts — curated by hand for this fixed,
+  // known 9-ingredient set (not inferred from the name string), so they're
+  // exact rather than a best-effort keyword guess. containsNut covers both
+  // tree nuts and peanuts, matching this app's single "nuts" allergy
+  // preset (F2 doesn't distinguish the two). Ambiguous ingredients default
+  // to the SAFER (excluded) tag rather than assuming a specific
+  // formulation: "protein powder" could resolve to a whey (dairy), soy, or
+  // plant-based product depending on which real one Spoonacular's search
+  // happens to return, so it's conservatively tagged as both
+  // containsDairy and containsSoy, and not vegan-compliant.
+  containsDairy: boolean;
+  containsNut: boolean;
+  containsSoy: boolean;
+  veganCompliant: boolean;
 }
 
 export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
@@ -32,6 +46,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 10.3,
     carbsGPer100g: 3.64,
     fatGPer100g: 0.37,
+    containsDairy: true,
+    containsNut: false,
+    containsSoy: false,
+    veganCompliant: false,
   },
   "cottage cheese": {
     id: 1012,
@@ -40,6 +58,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 11.1,
     carbsGPer100g: 3.38,
     fatGPer100g: 4.3,
+    containsDairy: true,
+    containsNut: false,
+    containsSoy: false,
+    veganCompliant: false,
   },
   "protein powder": {
     id: 99239,
@@ -48,6 +70,12 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 83.33,
     carbsGPer100g: 10,
     fatGPer100g: 6.67,
+    // Conservative: formulation is unknown/ambiguous, so treat it as both
+    // dairy (whey) and soy for safety purposes rather than assuming plant-based.
+    containsDairy: true,
+    containsNut: false,
+    containsSoy: true,
+    veganCompliant: false,
   },
   banana: {
     id: 9040,
@@ -56,6 +84,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 1.09,
     carbsGPer100g: 22.8,
     fatGPer100g: 0.33,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    veganCompliant: true,
   },
   apple: {
     id: 9003,
@@ -64,6 +96,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 0.26,
     carbsGPer100g: 13.8,
     fatGPer100g: 0.17,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    veganCompliant: true,
   },
   orange: {
     id: 9200,
@@ -72,6 +108,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 0.94,
     carbsGPer100g: 11.8,
     fatGPer100g: 0.12,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    veganCompliant: true,
   },
   almonds: {
     id: 12061,
@@ -80,6 +120,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 21.2,
     carbsGPer100g: 21.6,
     fatGPer100g: 49.9,
+    containsDairy: false,
+    containsNut: true,
+    containsSoy: false,
+    veganCompliant: true,
   },
   "peanut butter": {
     id: 16098,
@@ -88,6 +132,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 22.5,
     carbsGPer100g: 22.3,
     fatGPer100g: 51.1,
+    containsDairy: false,
+    containsNut: true,
+    containsSoy: false,
+    veganCompliant: true,
   },
   walnuts: {
     id: 12155,
@@ -96,6 +144,10 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 15.2,
     carbsGPer100g: 13.7,
     fatGPer100g: 65.2,
+    containsDairy: false,
+    containsNut: true,
+    containsSoy: false,
+    veganCompliant: true,
   },
 };
 

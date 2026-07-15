@@ -40,6 +40,7 @@ import {
 import { buildAddonForSlot, type SlotAddon, type IngredientMacroLookup, type FetchIngredientMacrosFn } from "./addon";
 import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
 import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
+import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import {
   complexSearch,
@@ -119,9 +120,17 @@ function composedSnackCandidate(
 // live lookup for any name the static table doesn't recognize (e.g. if
 // INGREDIENT_POOL ever grows without the static table being refreshed) so
 // results stay grounded in real data either way, never fabricated.
-async function fetchSnackIngredientPool() {
+//
+// ctx filters OUT any name unsafe for this profile (ingredientSafety.ts)
+// BEFORE it's ever added to the returned pool — found and fixed July 15
+// 2026 after confirming this function previously built the pool from ALL
+// 9 names unconditionally, so e.g. a nut allergy could get served almonds
+// in a composed snack. snackComposition.ts's pickFromPool then rotates
+// among whatever's actually present in the (pre-filtered) pool.
+async function fetchSnackIngredientPool(ctx: DietaryContext) {
+  const safeNames = filterSafeIngredientNames(allPoolIngredientNames(), ctx);
   const poolEntries = await Promise.all(
-    allPoolIngredientNames().map(async (name) => {
+    safeNames.map(async (name) => {
       const staticMatch = lookupIngredientMacrosStatic(name);
       if (staticMatch) return [name, staticMatch] as const;
       return [name, await lookupIngredientMacros(name)] as const;
@@ -133,9 +142,12 @@ async function fetchSnackIngredientPool() {
 }
 
 // Same static-first, live-fallback pattern for addon.ts's fixed
-// per-macro ingredient names (a subset of the same 9-ingredient pool) —
-// used wherever an add-on lookup previously called lookupIngredientMacros
-// directly.
+// per-macro ingredient options (the same 9-ingredient pool) — used
+// wherever an add-on lookup previously called lookupIngredientMacros
+// directly. Safety filtering (allergy/diet/dislike) happens inside
+// addon.ts's buildAddonForSlot itself (it tries each of its per-macro
+// candidates in order and skips unsafe ones) — this wrapper only resolves
+// real macro data for whichever candidate addon.ts decided to try.
 const lookupIngredientMacrosForAddon: FetchIngredientMacrosFn = async (query: string): Promise<IngredientMacroLookup | null> => {
   const staticMatch = lookupIngredientMacrosStatic(query);
   if (staticMatch) return staticMatch;
@@ -213,6 +225,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const excludeIngredients = [...input.allergies, ...input.dislikes];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
   const rankOpts = { tier: input.tier, budgetPerMealUsd, pantryItems: input.pantryItems };
+  const dietaryCtx: DietaryContext = {
+    dietaryStyles: input.dietaryStyles,
+    allergies: input.allergies,
+    dislikes: input.dislikes,
+  };
 
   const admin = createAdminClient();
   // All slots of the SAME meal type share an identical target, so at a
@@ -308,7 +325,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // costs ~18 points regardless of how many snack slots use it. This is a
   // real, permanent addition to baseline per-plan cost (every plan now has
   // 14 snack slots), not a rare reconciliation-only cost.
-  const snackIngredientPool = await fetchSnackIngredientPool();
+  const snackIngredientPool = await fetchSnackIngredientPool(dietaryCtx);
 
   let syntheticSnackId = -1;
   for (const slotId of snackSlotIds) {
@@ -402,7 +419,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
         if (!existing) break;
 
-        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon);
+        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx);
         addonedThisDay.add(slotKey(targetSlotId));
         if (addon) {
           addons.set(slotKey(targetSlotId), addon);
@@ -496,7 +513,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
           addonedThisDay.add(slotKey(slotId));
           if (existing) {
-            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon);
+            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx);
             if (addon) addons.set(slotKey(slotId), addon);
           }
         }
@@ -721,7 +738,11 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
   // pinned static table (staticIngredientMacros.ts), so this is ~free, not
   // the ~18pt live re-fetch this comment used to describe.
   if (slotMechanism(input.mealType) === "composed") {
-    const pool = await fetchSnackIngredientPool();
+    const pool = await fetchSnackIngredientPool({
+      dietaryStyles: input.dietaryStyles,
+      allergies: input.allergies,
+      dislikes: input.dislikes,
+    });
     const varietySeed = Date.now() % 3;
     const candidate = composedSnackCandidate(perMeal, pool, varietySeed, -1);
     if (!candidate) {

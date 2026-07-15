@@ -53,9 +53,25 @@ export function allPoolIngredientNames(): string[] {
 // this is a real backend generation path, same determinism requirement as
 // everything else in mealplan/) so a week's 14 snack slots don't all use
 // the identical 3 ingredients.
-function pickFromPool(role: MacroRole, varietySeed: number): string {
-  const options = INGREDIENT_POOL[role];
-  return options[varietySeed % options.length];
+//
+// Picks among whichever of this role's options are actually present as
+// keys in `pool` — the caller (orchestrate.ts's fetchSnackIngredientPool)
+// pre-filters unsafe ingredients out of `pool` entirely for this profile
+// (see ingredientSafety.ts), so this rotates among the remaining SAFE
+// options rather than blindly indexing the full fixed 3 and silently
+// losing this role's contribution whenever the seed happens to land on an
+// option that was filtered out. Returns null only when every option for
+// this role is unsafe for this profile (e.g. every fat-role ingredient
+// contains nuts for a nut allergy) — that role's contribution is then
+// genuinely skipped, same graceful degradation as an unresolvable lookup.
+function pickFromPool(
+  role: MacroRole,
+  varietySeed: number,
+  pool: Record<string, IngredientMacroLookup>,
+): string | null {
+  const available = INGREDIENT_POOL[role].filter((name) => pool[name] !== undefined);
+  if (available.length === 0) return null;
+  return available[varietySeed % available.length];
 }
 
 export interface ComposedIngredient {
@@ -115,7 +131,8 @@ export function composeSnack(
   let remainingCarbs = target.carbsG;
   let remainingFat = target.fatG;
 
-  const proteinLookup = pool[pickFromPool("protein", varietySeed)];
+  const proteinName = pickFromPool("protein", varietySeed, pool);
+  const proteinLookup = proteinName ? pool[proteinName] : undefined;
   const proteinItem = proteinLookup
     ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG)
     : null;
@@ -125,14 +142,16 @@ export function composeSnack(
     remainingFat -= proteinItem.fatG;
   }
 
-  const carbLookup = pool[pickFromPool("carb", varietySeed)];
+  const carbName = pickFromPool("carb", varietySeed, pool);
+  const carbLookup = carbName ? pool[carbName] : undefined;
   const carbItem = carbLookup ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs) : null;
   if (carbItem) {
     ingredients.push(carbItem);
     remainingFat -= carbItem.fatG;
   }
 
-  const fatLookup = pool[pickFromPool("fat", varietySeed)];
+  const fatName = pickFromPool("fat", varietySeed, pool);
+  const fatLookup = fatName ? pool[fatName] : undefined;
   const fatItem = fatLookup ? sizeIngredientForGap(fatLookup, fatLookup.fatGPer100g, remainingFat) : null;
   if (fatItem) {
     ingredients.push(fatItem);

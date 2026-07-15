@@ -69,6 +69,22 @@ describe("composeSnack", () => {
     const snack = composeSnack(target, partialPool, 0);
     expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["greek yogurt", "banana"]);
   });
+
+  // Safety fix, July 15 2026: orchestrate.ts's fetchSnackIngredientPool now
+  // pre-filters unsafe ingredients (allergy/diet/dislike) out of `pool`
+  // entirely before calling composeSnack -- this proves composeSnack
+  // rotates to whichever SAFE option in the same role is still present,
+  // rather than giving up on that role just because the seed happened to
+  // land on the one that got filtered out.
+  it("rotates to the next available pool option in a role when the seed's pick was filtered out", () => {
+    const poolWithoutBanana = { ...pool };
+    delete poolWithoutBanana.banana; // simulates e.g. a "banana" dislike being filtered upstream
+    const target = { calories: 337, proteinG: 29, carbsG: 34, fatG: 9 };
+    const snack = composeSnack(target, poolWithoutBanana, 0); // seed 0 would normally pick banana first
+    const names = snack.ingredients.map((i) => i.ingredientName);
+    expect(names).toContain("apple"); // falls through to the next carb option
+    expect(names).not.toContain("banana");
+  });
 });
 
 describe("composedSnackTitle", () => {

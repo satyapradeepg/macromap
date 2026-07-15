@@ -9,6 +9,7 @@
 // (separate, not-yet-built) AI composition fallback.
 
 import type { MacroGapDirection, MacroKey } from "./reconciliation";
+import { isKnownIngredientUnsafeFor, type DietaryContext } from "./ingredientSafety";
 
 export interface IngredientMacroLookup {
   id: number;
@@ -31,14 +32,22 @@ export interface SlotAddon {
   fatG: number;
 }
 
-// One representative single-ingredient add-on per macro (PRD 7.3 F3: "fruit,
-// nuts, yogurt, protein powder, etc.") — a fixed, deterministic choice per
-// macro rather than an open-ended search, so results are stable/testable.
-export const ADDON_INGREDIENT_BY_MACRO: Record<MacroKey, string> = {
-  proteinG: "greek yogurt",
-  carbsG: "banana",
-  fatG: "almonds",
-  calories: "peanut butter",
+// Per-macro fallback list (PRD 7.3 F3: "fruit, nuts, yogurt, protein
+// powder, etc.") — fixed, deterministic candidates rather than an
+// open-ended search, so results stay stable/testable. Ordered
+// best-fit-first (e.g. greek yogurt is the most protein-dense of the
+// protein options); buildAddonForSlot tries each in order and skips any
+// that's unsafe for the profile (ingredientSafety.ts) — found and fixed
+// July 15 2026 after confirming this file never checked allergies/diet at
+// all, meaning e.g. a nut allergy could previously get served almonds.
+// Reuses the exact same 9-ingredient set as snackComposition.ts's
+// INGREDIENT_POOL (just macro-ordered rather than role-grouped), not a
+// separate list, so there's one place that defines "the fixed pool."
+export const ADDON_INGREDIENT_OPTIONS_BY_MACRO: Record<MacroKey, string[]> = {
+  proteinG: ["greek yogurt", "cottage cheese", "protein powder"],
+  carbsG: ["banana", "apple", "orange"],
+  fatG: ["almonds", "walnuts", "peanut butter"],
+  calories: ["peanut butter", "walnuts", "almonds"],
 };
 
 // PRD 7.3 F3: "capped at... ≤15-20% of that meal's calories" — uses the top
@@ -67,9 +76,19 @@ export async function buildAddonForSlot(
   slotCalories: number,
   gap: MacroGapDirection,
   fetchIngredientMacros: FetchIngredientMacrosFn,
+  ctx: DietaryContext,
 ): Promise<SlotAddon | null> {
-  const query = ADDON_INGREDIENT_BY_MACRO[gap.macro];
-  const lookup = await fetchIngredientMacros(query);
+  // Tries each candidate for this macro in best-fit order, skipping any
+  // that's unsafe for this profile — never falls through to an unsafe
+  // option even if every safe one fails to resolve (that's a genuine
+  // "no add-on this time," same as today's null-lookup case, not a reason
+  // to relax the safety check).
+  let lookup = null;
+  for (const candidate of ADDON_INGREDIENT_OPTIONS_BY_MACRO[gap.macro]) {
+    if (isKnownIngredientUnsafeFor(candidate, ctx) !== null) continue;
+    lookup = await fetchIngredientMacros(candidate);
+    if (lookup) break;
+  }
   if (!lookup || lookup.caloriesPer100g <= 0) return null;
 
   // Floors to the nearest 5g (not round-to-nearest) so the add-on's real

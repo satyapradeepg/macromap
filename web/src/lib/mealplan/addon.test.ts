@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildAddonForSlot, type IngredientMacroLookup } from "./addon";
 import type { MacroGapDirection } from "./reconciliation";
+import type { DietaryContext } from "./ingredientSafety";
 
 const greekYogurt: IngredientMacroLookup = {
   id: 1256,
@@ -11,15 +12,26 @@ const greekYogurt: IngredientMacroLookup = {
   fatGPer100g: 0.37,
 };
 
+const apple: IngredientMacroLookup = {
+  id: 9003,
+  name: "apple",
+  caloriesPer100g: 52,
+  proteinGPer100g: 0.26,
+  carbsGPer100g: 13.8,
+  fatGPer100g: 0.17,
+};
+
 function proteinGap(overshootPct = 0.1): MacroGapDirection {
   return { macro: "proteinG", direction: "increase", overshootPct };
 }
+
+const NO_RESTRICTIONS: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
 
 describe("buildAddonForSlot", () => {
   it("sizes the add-on to the 20% calorie cap for the slot", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
     const slotCalories = 700; // cap = 140 kcal
-    const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher);
+    const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher, NO_RESTRICTIONS);
 
     expect(fetcher).toHaveBeenCalledWith("greek yogurt");
     expect(addon).not.toBeNull();
@@ -33,32 +45,76 @@ describe("buildAddonForSlot", () => {
   it("never exceeds the calorie cap for the slot", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
     const slotCalories = 500;
-    const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher);
+    const addon = await buildAddonForSlot(slotCalories, proteinGap(), fetcher, NO_RESTRICTIONS);
     expect(addon!.caloriesKcal).toBeLessThanOrEqual(slotCalories * 0.2);
   });
 
-  it("picks the ingredient matching the targeted macro", async () => {
+  it("picks the best-fit ingredient for each targeted macro when nothing is restricted", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
-    await buildAddonForSlot(700, { macro: "carbsG", direction: "increase", overshootPct: 0.1 }, fetcher);
+    await buildAddonForSlot(700, { macro: "carbsG", direction: "increase", overshootPct: 0.1 }, fetcher, NO_RESTRICTIONS);
     expect(fetcher).toHaveBeenCalledWith("banana");
 
-    await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fetcher);
+    await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fetcher, NO_RESTRICTIONS);
     expect(fetcher).toHaveBeenCalledWith("almonds");
 
-    await buildAddonForSlot(700, { macro: "calories", direction: "increase", overshootPct: 0.1 }, fetcher);
+    await buildAddonForSlot(700, { macro: "calories", direction: "increase", overshootPct: 0.1 }, fetcher, NO_RESTRICTIONS);
     expect(fetcher).toHaveBeenCalledWith("peanut butter");
   });
 
   it("returns null when the ingredient lookup fails", async () => {
     const fetcher = vi.fn().mockResolvedValue(null);
-    const addon = await buildAddonForSlot(700, proteinGap(), fetcher);
+    const addon = await buildAddonForSlot(700, proteinGap(), fetcher, NO_RESTRICTIONS);
     expect(addon).toBeNull();
   });
 
   it("returns null when a tiny meal's calorie cap rounds below the minimum add-on size", async () => {
     const fetcher = vi.fn().mockResolvedValue(greekYogurt);
     // cap = 30 * 0.2 = 6 kcal -> well under MIN_ADDON_AMOUNT_G worth of yogurt
-    const addon = await buildAddonForSlot(30, proteinGap(), fetcher);
+    const addon = await buildAddonForSlot(30, proteinGap(), fetcher, NO_RESTRICTIONS);
     expect(addon).toBeNull();
+  });
+
+  // Safety: found and fixed July 15 2026 -- this file previously never
+  // checked allergies/diet/dislikes at all.
+  describe("dietary safety", () => {
+    it("never calls the fetcher for a macro whose every candidate is unsafe (nut allergy, fat macro)", async () => {
+      const fetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["nuts"], dislikes: [] };
+      const addon = await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fetcher, ctx);
+      // almonds/walnuts/peanut butter are ALL nut-tagged -- every candidate
+      // for this macro is unsafe, so the fetcher must never be called and
+      // no addon is returned, rather than falling through to an unsafe pick.
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(addon).toBeNull();
+    });
+
+    it("never calls the fetcher for a macro whose every candidate is unsafe (vegan diet, protein macro)", async () => {
+      const fetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+      const addon = await buildAddonForSlot(700, proteinGap(), fetcher, ctx);
+      // greek yogurt/cottage cheese/protein powder are all non-vegan-compliant.
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(addon).toBeNull();
+    });
+
+    it("skips a disliked candidate and picks the next safe alternative in the same role", async () => {
+      const fetcher = vi.fn().mockResolvedValue(apple);
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: ["banana"] };
+      const addon = await buildAddonForSlot(700, { macro: "carbsG", direction: "increase", overshootPct: 0.1 }, fetcher, ctx);
+      // banana is first-choice for carbsG but disliked -- should fall
+      // through to apple (the next candidate), not skip the add-on
+      // entirely, since a safe alternative genuinely exists.
+      expect(fetcher).toHaveBeenCalledWith("apple");
+      expect(fetcher).not.toHaveBeenCalledWith("banana");
+      expect(addon).not.toBeNull();
+    });
+
+    it("an unrelated allergy doesn't affect a macro whose candidates are all safe", async () => {
+      const fetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["nuts"], dislikes: [] };
+      const addon = await buildAddonForSlot(700, proteinGap(), fetcher, ctx);
+      expect(fetcher).toHaveBeenCalledWith("greek yogurt");
+      expect(addon).not.toBeNull();
+    });
   });
 });
