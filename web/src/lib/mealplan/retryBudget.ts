@@ -59,6 +59,19 @@ export function createAiComposeBudget(): RetryBudget {
   return { remaining: AI_COMPOSE_ACTION_COST * 10 };
 }
 
+// Post-generation plan critique + repair (planCritic.ts/planRepair.ts,
+// July 15 2026) — one Claude call to critique the whole week (a
+// non-Spoonacular cost, not modeled here), then a real swap attempt
+// (~RECIPE_ACTION_COST worth of Spoonacular cost) per flagged slot. Own
+// whole-generation budget, separate from AI composition's, since this
+// runs unconditionally on every generation with an API key configured
+// rather than only for rare blocked slots — capped lower (5 slots) to
+// bound cost on a pass that isn't solving a hard failure, just polishing
+// an already-complete plan.
+export function createPlanRepairBudget(): RetryBudget {
+  return { remaining: RECIPE_ACTION_COST * 5 };
+}
+
 // No partial spend: returns false (and leaves remaining untouched) if the
 // budget can't cover the full request.
 export function trySpend(budget: RetryBudget, n = 1): boolean {

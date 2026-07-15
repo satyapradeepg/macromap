@@ -22,9 +22,9 @@ import {
 } from "./targets";
 import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
 import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
-import { rankCandidates, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
+import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
-import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST, createAiComposeBudget, AI_COMPOSE_ACTION_COST } from "./retryBudget";
+import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST, createAiComposeBudget, AI_COMPOSE_ACTION_COST, createPlanRepairBudget } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
 import {
   toleranceBand,
@@ -44,6 +44,8 @@ import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafe
 import { type PantryPriceContext } from "./pantryPricePreference";
 import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
 import { proposeMealViaClaude } from "./mealProposer";
+import { critiquePlan, type PlanSlotSummary } from "./planCritic";
+import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import {
   complexSearch,
@@ -714,6 +716,122 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
     claimResult.claimed.push({ slotId, candidate, tier: actualTier });
     blockedHints.delete(key);
+  }
+
+  // Post-generation plan critique + repair (built July 15 2026) — the
+  // per-slot pipeline above never sees the whole week at once, so it
+  // structurally can't notice cross-cutting problems like "this exact
+  // recipe shows up 4 times." One Claude call reviews the full plan and
+  // flags specific slots worth a second look; every flagged slot then
+  // gets a REAL swap attempt via the existing swapSlotCandidate
+  // mechanism, and the accept/reject decision is 100% deterministic
+  // (planRepair.ts's shouldAcceptRepair, using real macro-deviation
+  // scores) — the critic only decides what to reconsider, never what's
+  // "better." Skipped entirely, gracefully, if no ANTHROPIC_API_KEY is
+  // configured or the call fails for any reason — this is a polish pass
+  // on an already-complete plan, never something that can leave the plan
+  // worse or incomplete than before this phase ran.
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const planSummary: PlanSlotSummary[] = claimResult.claimed.map((c) => {
+        const addon = addons.get(slotKey(c.slotId));
+        return {
+          dayIndex: c.slotId.dayIndex,
+          mealType: c.slotId.mealType,
+          title: c.candidate.title,
+          proteinG: c.candidate.proteinG + (addon?.proteinG ?? 0),
+          caloriesKcal: c.candidate.caloriesKcal + (addon?.caloriesKcal ?? 0),
+          carbsG: c.candidate.carbsG + (addon?.carbsG ?? 0),
+          fatG: c.candidate.fatG + (addon?.fatG ?? 0),
+          isComposed: c.candidate.id < 0,
+        };
+      });
+
+      const critique = await critiquePlan({
+        slots: planSummary,
+        weeklyTarget: weekly,
+        dietaryStyles: input.dietaryStyles,
+        allergies: input.allergies,
+        dislikes: input.dislikes,
+      });
+
+      if (critique) {
+        console.log(
+          `[mealplan] plan critique: ${critique.overallAssessment} (${critique.flaggedSlots.length} slots flagged)`,
+        );
+        const repairBudget = createPlanRepairBudget();
+
+        for (const flag of critique.flaggedSlots) {
+          if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
+
+          const idx = claimResult.claimed.findIndex(
+            (c) => c.slotId.dayIndex === flag.dayIndex && c.slotId.mealType === flag.mealType,
+          );
+          if (idx === -1) continue;
+          const existing = claimResult.claimed[idx];
+
+          // Snacks and AI-composed meals aren't swapped by this pass —
+          // the critic is prompted not to flag composed snacks for
+          // repetition, and re-running the AI composition path here would
+          // spend a second Claude call per flagged slot on a case that
+          // already went through its own dedicated fallback above.
+          if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) continue;
+
+          const otherTitlesInPlan = claimResult.claimed.filter((_, i) => i !== idx).map((c) => c.candidate.title);
+          // Excludes every recipe already used anywhere in the plan, not
+          // just this slot's own — prevents the repair from accidentally
+          // trading one duplicate for a brand-new one elsewhere.
+          const excludeRecipeIds = claimResult.claimed.map((c) => c.candidate.id);
+
+          let swapResult;
+          try {
+            swapResult = await swapSlotCandidate({
+              dailyTargets: input.dailyTargets,
+              mealType: existing.slotId.mealType,
+              dietaryStyles: input.dietaryStyles,
+              allergies: input.allergies,
+              dislikes: input.dislikes,
+              tier: input.tier,
+              weeklyBudgetUsd: input.weeklyBudgetUsd,
+              excludeRecipeIds,
+              pantryItems: input.pantryItems,
+            });
+          } catch (err) {
+            if (!isRecoverableSpoonacularError(err)) throw err;
+            console.error(`[mealplan] repair swap failed for day ${flag.dayIndex} ${flag.mealType}, keeping original:`, err);
+            continue;
+          }
+          if (swapResult.blocked || !swapResult.candidate) continue; // keep original, no alternative found
+
+          const slotTarget = mealTypeTargets[existing.slotId.mealType];
+          const oldScore = macroDeviationScore(existing.candidate, slotTarget);
+          const newScore = macroDeviationScore(swapResult.candidate, slotTarget);
+
+          const accept = shouldAcceptRepair({
+            reason: flag.reason,
+            oldScore,
+            newScore,
+            otherTitlesInPlan,
+            newCandidateTitle: swapResult.candidate.title,
+          });
+
+          if (accept) {
+            const actualTier = swapResult.tier ?? existing.tier;
+            claimResult.claimed[idx] = { slotId: existing.slotId, candidate: swapResult.candidate, tier: actualTier };
+            // A swapped recipe invalidates any add-on sized for the meal
+            // it's replacing — same rule as the user-facing swap action
+            // (actions.ts's swapMeal).
+            addons.delete(slotKey(existing.slotId));
+            console.log(
+              `[mealplan] repair accepted for day ${flag.dayIndex} ${flag.mealType} (${flag.reason}): ` +
+                `"${existing.candidate.title}" -> "${swapResult.candidate.title}"`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[mealplan] plan critique/repair failed, keeping plan as generated:", err);
+    }
   }
 
   // Weekly totals are still computed and returned for the plan-level
