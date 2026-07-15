@@ -41,6 +41,7 @@ import { buildAddonForSlot, type SlotAddon, type IngredientMacroLookup, type Fet
 import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
 import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
+import { type PantryPriceContext } from "./pantryPricePreference";
 import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
 import { proposeMealViaClaude } from "./mealProposer";
 import { recipeCacheKey, isStale } from "./cacheKey";
@@ -79,12 +80,30 @@ const QUOTA_EXHAUSTED_HINT = "Generation temporarily unavailable for this meal �
 // (always-positive) Spoonacular recipe id.
 function composedSnackCandidate(
   target: MacroTargets,
-  pool: Record<string, { id: number; name: string; caloriesPer100g: number; proteinGPer100g: number; carbsGPer100g: number; fatGPer100g: number }>,
+  pool: Record<
+    string,
+    { id: number; name: string; caloriesPer100g: number; proteinGPer100g: number; carbsGPer100g: number; fatGPer100g: number; estimatedCostCentsPer100g: number | null }
+  >,
   varietySeed: number,
   id: number,
+  pantryPriceCtx: PantryPriceContext,
+  budgetPerMealUsd: number | null,
 ): RankedCandidate | null {
-  const composed = composeSnack(target, pool, varietySeed);
+  const composed = composeSnack(target, pool, varietySeed, pantryPriceCtx);
   if (composed.ingredients.length === 0) return null;
+
+  // Real cost now available (staticIngredientMacros.ts, retrofitted July
+  // 15 2026) — same budgetCompliant definition as ranking.ts's recipe
+  // path: only ever checked when Pro + a budget is actually set, and a
+  // null price (partial cost data) is never treated as non-compliant.
+  // Rounded to an integer -- meal_plan_slots.price_per_serving_cents is an
+  // integer column; Spoonacular's own pricePerServing hit this exact same
+  // "invalid input syntax for type integer" failure earlier in this
+  // project (a float slipped through unrounded) and the fix there was the
+  // same: round at the point a real value becomes this column's input.
+  const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
+  const budgetCompliant =
+    !pantryPriceCtx.budgetAware || pricePerServingCents === null || budgetPerMealUsd === null || pricePerServingCents <= budgetPerMealUsd * 100;
 
   return {
     id,
@@ -95,7 +114,7 @@ function composedSnackCandidate(
     caloriesKcal: composed.totalCalories,
     carbsG: composed.totalCarbsG,
     fatG: composed.totalFatG,
-    pricePerServingCents: null,
+    pricePerServingCents,
     aggregateLikes: 0,
     ingredients: composed.ingredients.map((i) => ({
       id: i.spoonacularIngredientId,
@@ -106,7 +125,7 @@ function composedSnackCandidate(
       metricUnit: "g",
     })),
     score: 0,
-    budgetCompliant: true,
+    budgetCompliant,
     // "p10" here means "composed directly to target," not a recipe-search
     // tolerance tier — matchLabelFor treats it the same as a clean match,
     // which is correct: composition doesn't have a "closest available"
@@ -239,6 +258,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     allergies: input.allergies,
     dislikes: input.dislikes,
   };
+  // Pantry/price preference (retrofitted July 15 2026) for the composed
+  // snack/add-on system — same budget-aware definition ranking.ts already
+  // uses for recipes (Pro tier + a budget actually set), so composed items
+  // participate in the same "budget preference is a Pro perk" model.
+  const pantryItemNames = input.pantryItems.map((p) => p.name);
+  const pantryPriceCtx: PantryPriceContext = {
+    pantryItemNames,
+    budgetAware: input.tier === "pro" && budgetPerMealUsd !== null,
+  };
 
   const admin = createAdminClient();
   // All slots of the SAME meal type share an identical target, so at a
@@ -352,6 +380,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       snackIngredientPool,
       varietySeed,
       syntheticSnackId--,
+      pantryPriceCtx,
+      budgetPerMealUsd,
     );
 
     if (!candidate) {
@@ -433,7 +463,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
         if (!existing) break;
 
-        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx);
+        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx);
         addonedThisDay.add(slotKey(targetSlotId));
         if (addon) {
           addons.set(slotKey(targetSlotId), addon);
@@ -527,7 +557,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
           addonedThisDay.add(slotKey(slotId));
           if (existing) {
-            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx);
+            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx);
             if (addon) addons.set(slotKey(slotId), addon);
           }
         }
@@ -607,7 +637,6 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // slot exactly as blocked as it already was — never partially applied,
   // never forces an unsafe or unrealistic result through.
   const aiComposeBudget = createAiComposeBudget();
-  const pantryItemNames = input.pantryItems.map((p) => p.name);
   for (const [key] of [...blockedHints.entries()]) {
     if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
 
@@ -643,6 +672,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       slotTarget,
     ) ?? "p30";
 
+    // Real cost now available (staticIngredientMacros.ts confirmed
+    // Spoonacular's ingredient endpoint returns real estimatedCost data by
+    // default, no extra request needed) — same budgetCompliant definition
+    // as everywhere else: only checked when Pro + a budget is set, and an
+    // unknown price is never treated as non-compliant.
+    // Rounded to an integer -- meal_plan_slots.price_per_serving_cents is an
+  // integer column; Spoonacular's own pricePerServing hit this exact same
+  // "invalid input syntax for type integer" failure earlier in this
+  // project (a float slipped through unrounded) and the fix there was the
+  // same: round at the point a real value becomes this column's input.
+  const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
+    const budgetCompliant =
+      !pantryPriceCtx.budgetAware || pricePerServingCents === null || budgetPerMealUsd === null || pricePerServingCents <= budgetPerMealUsd * 100;
+
     const candidate: RankedCandidate = {
       id: syntheticAiMealId--,
       title: composed.dishName,
@@ -652,11 +695,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       caloriesKcal: composed.totalCalories,
       carbsG: composed.totalCarbsG,
       fatG: composed.totalFatG,
-      // No reliable per-ingredient cost data confirmed for this endpoint
-      // yet (see project notes on F4/price) — left null (shows as "price
-      // unavailable" in the UI, same as an unresolved Tavily lookup)
-      // rather than fabricating a number.
-      pricePerServingCents: null,
+      pricePerServingCents,
       aggregateLikes: 0,
       ingredients: composed.ingredients.map((i) => ({
         id: i.spoonacularIngredientId,
@@ -667,7 +706,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         metricUnit: "g",
       })),
       score: 0,
-      budgetCompliant: true,
+      budgetCompliant,
       actualTier,
       isFallbackOfLastResort: true,
       aiComposed: true,
@@ -847,7 +886,12 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
       dislikes: input.dislikes,
     });
     const varietySeed = Date.now() % 3;
-    const candidate = composedSnackCandidate(perMeal, pool, varietySeed, -1);
+    const swapBudgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
+    const swapPantryPriceCtx: PantryPriceContext = {
+      pantryItemNames: input.pantryItems.map((p) => p.name),
+      budgetAware: input.tier === "pro" && swapBudgetPerMealUsd !== null,
+    };
+    const candidate = composedSnackCandidate(perMeal, pool, varietySeed, -1, swapPantryPriceCtx, swapBudgetPerMealUsd);
     if (!candidate) {
       return {
         candidate: null,

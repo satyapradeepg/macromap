@@ -15,6 +15,13 @@
 // makes) on July 15 2026 — real data, not fabricated, just pinned instead
 // of re-queried. Refresh by re-running those same two calls only if
 // snackComposition.ts's INGREDIENT_POOL name list ever changes.
+//
+// estimatedCostCentsPer100g added same day, retrofitting pantry/price
+// awareness into this system after confirming it had neither (unlike the
+// recipe-search path's real pantryOverlapDeduction/budgetCompliant
+// mechanisms). Spoonacular's ingredient information endpoint returns a
+// real `estimatedCost` field by default on the exact same call already
+// made for macros — no extra API cost to add this.
 export interface StaticIngredientMacro {
   id: number;
   name: string;
@@ -22,6 +29,7 @@ export interface StaticIngredientMacro {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  estimatedCostCentsPer100g: number;
   // Safety tags for ingredientSafety.ts — curated by hand for this fixed,
   // known 9-ingredient set (not inferred from the name string), so they're
   // exact rather than a best-effort keyword guess. containsNut covers both
@@ -46,6 +54,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 10.3,
     carbsGPer100g: 3.64,
     fatGPer100g: 0.37,
+    estimatedCostCentsPer100g: 71.43,
     containsDairy: true,
     containsNut: false,
     containsSoy: false,
@@ -58,6 +67,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 11.1,
     carbsGPer100g: 3.38,
     fatGPer100g: 4.3,
+    estimatedCostCentsPer100g: 50.0,
     containsDairy: true,
     containsNut: false,
     containsSoy: false,
@@ -70,6 +80,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 83.33,
     carbsGPer100g: 10,
     fatGPer100g: 6.67,
+    estimatedCostCentsPer100g: 278.57,
     // Conservative: formulation is unknown/ambiguous, so treat it as both
     // dairy (whey) and soy for safety purposes rather than assuming plant-based.
     containsDairy: true,
@@ -84,6 +95,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 1.09,
     carbsGPer100g: 22.8,
     fatGPer100g: 0.33,
+    estimatedCostCentsPer100g: 13.33,
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
@@ -96,6 +108,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 0.26,
     carbsGPer100g: 13.8,
     fatGPer100g: 0.17,
+    estimatedCostCentsPer100g: 33.11,
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
@@ -108,6 +121,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 0.94,
     carbsGPer100g: 11.8,
     fatGPer100g: 0.12,
+    estimatedCostCentsPer100g: 22.22,
     containsDairy: false,
     containsNut: false,
     containsSoy: false,
@@ -120,6 +134,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 21.2,
     carbsGPer100g: 21.6,
     fatGPer100g: 49.9,
+    estimatedCostCentsPer100g: 178.57,
     containsDairy: false,
     containsNut: true,
     containsSoy: false,
@@ -132,6 +147,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 22.5,
     carbsGPer100g: 22.3,
     fatGPer100g: 51.1,
+    estimatedCostCentsPer100g: 35.71,
     containsDairy: false,
     containsNut: true,
     containsSoy: false,
@@ -144,6 +160,7 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     proteinGPer100g: 15.2,
     carbsGPer100g: 13.7,
     fatGPer100g: 65.2,
+    estimatedCostCentsPer100g: 239.29,
     containsDairy: false,
     containsNut: true,
     containsSoy: false,

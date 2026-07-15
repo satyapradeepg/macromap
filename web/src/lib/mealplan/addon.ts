@@ -10,6 +10,8 @@
 
 import type { MacroGapDirection, MacroKey } from "./reconciliation";
 import { isKnownIngredientUnsafeFor, type DietaryContext } from "./ingredientSafety";
+import { rankByPantryAndPrice, type PantryPriceContext } from "./pantryPricePreference";
+import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 
 export interface IngredientMacroLookup {
   id: number;
@@ -18,6 +20,7 @@ export interface IngredientMacroLookup {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  estimatedCostCentsPer100g: number | null;
 }
 
 export type FetchIngredientMacrosFn = (query: string) => Promise<IngredientMacroLookup | null>;
@@ -30,6 +33,7 @@ export interface SlotAddon {
   proteinG: number;
   carbsG: number;
   fatG: number;
+  estimatedCostCents: number | null;
 }
 
 // Per-macro fallback list (PRD 7.3 F3: "fruit, nuts, yogurt, protein
@@ -72,21 +76,39 @@ const MIN_ADDON_AMOUNT_G = 10;
 // after each attempt and keeps going (up to the shared retry budget) until
 // the gap closes or the budget runs out, falling back to a full recipe
 // requery for whatever's left.
+const NO_PANTRY_PRICE_PREFERENCE: PantryPriceContext = { pantryItemNames: [], budgetAware: false };
+
 export async function buildAddonForSlot(
   slotCalories: number,
   gap: MacroGapDirection,
   fetchIngredientMacros: FetchIngredientMacrosFn,
   ctx: DietaryContext,
+  pantryPriceCtx: PantryPriceContext = NO_PANTRY_PRICE_PREFERENCE,
 ): Promise<SlotAddon | null> {
-  // Tries each candidate for this macro in best-fit order, skipping any
-  // that's unsafe for this profile — never falls through to an unsafe
-  // option even if every safe one fails to resolve (that's a genuine
-  // "no add-on this time," same as today's null-lookup case, not a reason
-  // to relax the safety check).
+  // Safety first (unchanged): filter to candidates safe for this profile
+  // before considering pantry/price preference at all.
+  const safeCandidates = ADDON_INGREDIENT_OPTIONS_BY_MACRO[gap.macro].filter(
+    (candidate) => isKnownIngredientUnsafeFor(candidate, ctx) === null,
+  );
+
+  // Pantry/price reordering (retrofitted July 15 2026) uses the static
+  // table's pinned cost — NOT a live fetch — purely to decide which
+  // order to TRY candidates in, preserving the "fetch until one resolves"
+  // efficiency this function has always had. All of ADDON_INGREDIENT_
+  // OPTIONS_BY_MACRO's candidates are from the known fixed pool, so this
+  // is always available (no need to fall back to a live cost peek here).
+  const { ordered } = rankByPantryAndPrice(
+    safeCandidates.map((name) => ({ name, costCentsPer100g: lookupIngredientMacrosStatic(name)?.estimatedCostCentsPer100g ?? null })),
+    pantryPriceCtx,
+  );
+
+  // Tries each candidate in the (now preference-ordered) list, skipping
+  // straight to the next if a lookup fails to resolve — never falls
+  // through to an unsafe option even if every safe one fails to resolve
+  // (a genuine "no add-on this time," same as today's null-lookup case).
   let lookup = null;
-  for (const candidate of ADDON_INGREDIENT_OPTIONS_BY_MACRO[gap.macro]) {
-    if (isKnownIngredientUnsafeFor(candidate, ctx) !== null) continue;
-    lookup = await fetchIngredientMacros(candidate);
+  for (const candidate of ordered) {
+    lookup = await fetchIngredientMacros(candidate.name);
     if (lookup) break;
   }
   if (!lookup || lookup.caloriesPer100g <= 0) return null;
@@ -106,5 +128,6 @@ export async function buildAddonForSlot(
     proteinG: lookup.proteinGPer100g * scale,
     carbsG: lookup.carbsGPer100g * scale,
     fatG: lookup.fatGPer100g * scale,
+    estimatedCostCents: lookup.estimatedCostCentsPer100g !== null ? lookup.estimatedCostCentsPer100g * scale : null,
   };
 }

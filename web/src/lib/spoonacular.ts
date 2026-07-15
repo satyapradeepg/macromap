@@ -160,6 +160,11 @@ export interface IngredientMacroLookup {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  // Real, live-confirmed field (July 15 2026): Spoonacular returns this by
+  // default on the same information call already made for macros, no
+  // extra request needed. null only if Spoonacular itself has no cost
+  // data for this specific ingredient — never fabricated/estimated here.
+  estimatedCostCentsPer100g: number | null;
 }
 
 interface SpoonacularIngredientSearchResponse {
@@ -169,6 +174,7 @@ interface SpoonacularIngredientSearchResponse {
 interface SpoonacularIngredientInformationResponse {
   id: number;
   name: string;
+  estimatedCost?: { value: number; unit: string };
   nutrition?: {
     nutrients: Array<{ name: string; amount: number }>;
   };
@@ -219,6 +225,10 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
     proteinGPer100g: nutrientAmountFrom(nutrients, "Protein"),
     carbsGPer100g: nutrientAmountFrom(nutrients, "Carbohydrates"),
     fatGPer100g: nutrientAmountFrom(nutrients, "Fat"),
+    // A present-but-zero value is indistinguishable from "genuinely no
+    // cost data" in Spoonacular's response, so both map to null here
+    // rather than a fabricated $0.00 that would look like a real answer.
+    estimatedCostCentsPer100g: info.estimatedCost?.value ? info.estimatedCost.value : null,
   };
 }
 

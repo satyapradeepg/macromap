@@ -52,6 +52,7 @@ export interface GroundedIngredientData {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  estimatedCostCentsPer100g: number | null;
 }
 
 export type FetchIngredientMacrosFn = (query: string) => Promise<GroundedIngredientData | null>;
@@ -64,6 +65,7 @@ export interface ComposedMealIngredient {
   proteinG: number;
   carbsG: number;
   fatG: number;
+  estimatedCostCents: number | null;
 }
 
 export interface ComposedMeal {
@@ -73,6 +75,9 @@ export interface ComposedMeal {
   totalProteinG: number;
   totalCarbsG: number;
   totalFatG: number;
+  // null if ANY ingredient's cost is unknown -- same "don't guess" rule
+  // as snackComposition.ts's totalEstimatedCostCents.
+  totalEstimatedCostCents: number | null;
 }
 
 const MIN_INGREDIENT_AMOUNT_G = 10;
@@ -110,6 +115,7 @@ function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): 
     proteinG: lookup.proteinGPer100g * scale,
     carbsG: lookup.carbsGPer100g * scale,
     fatG: lookup.fatGPer100g * scale,
+    estimatedCostCents: lookup.estimatedCostCentsPer100g !== null ? lookup.estimatedCostCentsPer100g * scale : null,
   };
 }
 
@@ -200,6 +206,7 @@ export async function composeMealFromProposal(
     composed.push(toComposedIngredient(fatLookup, fatSized.amountG));
   }
 
+  const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
   return {
     dishName: proposal.dishName,
     ingredients: composed,
@@ -207,5 +214,6 @@ export async function composeMealFromProposal(
     totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
     totalCarbsG: composed.reduce((s, i) => s + i.carbsG, 0),
     totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
+    totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
   };
 }

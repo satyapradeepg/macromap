@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { buildAddonForSlot, type IngredientMacroLookup } from "./addon";
 import type { MacroGapDirection } from "./reconciliation";
 import type { DietaryContext } from "./ingredientSafety";
+import type { PantryPriceContext } from "./pantryPricePreference";
 
 const greekYogurt: IngredientMacroLookup = {
   id: 1256,
@@ -10,6 +11,7 @@ const greekYogurt: IngredientMacroLookup = {
   proteinGPer100g: 10.3,
   carbsGPer100g: 3.64,
   fatGPer100g: 0.37,
+  estimatedCostCentsPer100g: 71.43,
 };
 
 const apple: IngredientMacroLookup = {
@@ -19,6 +21,7 @@ const apple: IngredientMacroLookup = {
   proteinGPer100g: 0.26,
   carbsGPer100g: 13.8,
   fatGPer100g: 0.17,
+  estimatedCostCentsPer100g: 33.11,
 };
 
 function proteinGap(overshootPct = 0.1): MacroGapDirection {
@@ -115,6 +118,67 @@ describe("buildAddonForSlot", () => {
       const addon = await buildAddonForSlot(700, proteinGap(), fetcher, ctx);
       expect(fetcher).toHaveBeenCalledWith("greek yogurt");
       expect(addon).not.toBeNull();
+    });
+  });
+
+  // Pantry/price preference: retrofitted July 15 2026 after confirming
+  // this file never considered either, unlike ranking.ts's recipe path.
+  describe("pantry/price preference", () => {
+    it("tries a pantry-matching candidate before the normal best-fit-first candidate", async () => {
+      const fetcher = vi.fn().mockResolvedValue(apple);
+      const pantryPriceCtx: PantryPriceContext = { pantryItemNames: ["apple"], budgetAware: false };
+      const addon = await buildAddonForSlot(
+        700,
+        { macro: "carbsG", direction: "increase", overshootPct: 0.1 },
+        fetcher,
+        NO_RESTRICTIONS,
+        pantryPriceCtx,
+      );
+      // banana is normally tried first for carbsG -- a pantry match on
+      // apple should be tried first instead, even though nothing is unsafe.
+      expect(fetcher).toHaveBeenCalledWith("apple");
+      expect(fetcher).not.toHaveBeenCalledWith("banana");
+      expect(addon).not.toBeNull();
+    });
+
+    it("prefers the cheapest known-cost candidate when budget-aware and no pantry match", async () => {
+      // fatG's candidates: almonds (178.57), walnuts (239.29), peanut
+      // butter (35.71) -- peanut butter is by far the cheapest but is
+      // normally tried LAST (best-fit order puts almonds first).
+      const peanutButter: IngredientMacroLookup = {
+        id: 16098,
+        name: "peanut butter",
+        caloriesPer100g: 597,
+        proteinGPer100g: 22.5,
+        carbsGPer100g: 22.3,
+        fatGPer100g: 51.1,
+        estimatedCostCentsPer100g: 35.71,
+      };
+      const fetcher = vi.fn().mockResolvedValue(peanutButter);
+      const pantryPriceCtx: PantryPriceContext = { pantryItemNames: [], budgetAware: true };
+      const addon = await buildAddonForSlot(
+        700,
+        { macro: "fatG", direction: "increase", overshootPct: 0.1 },
+        fetcher,
+        NO_RESTRICTIONS,
+        pantryPriceCtx,
+      );
+      expect(fetcher).toHaveBeenCalledWith("peanut butter");
+      expect(fetcher).not.toHaveBeenCalledWith("almonds");
+      expect(addon).not.toBeNull();
+    });
+
+    it("does not reorder by price when not budget-aware", async () => {
+      const fetcher = vi.fn().mockResolvedValue(greekYogurt);
+      await buildAddonForSlot(700, { macro: "fatG", direction: "increase", overshootPct: 0.1 }, fetcher, NO_RESTRICTIONS);
+      expect(fetcher).toHaveBeenCalledWith("almonds"); // unchanged best-fit-first order
+    });
+
+    it("records the real estimated cost on the returned add-on", async () => {
+      const fetcher = vi.fn().mockResolvedValue(greekYogurt);
+      const addon = await buildAddonForSlot(700, proteinGap(), fetcher, NO_RESTRICTIONS);
+      // 225g at 71.43 cents/100g
+      expect(addon!.estimatedCostCents).toBeCloseTo((71.43 * 225) / 100, 2);
     });
   });
 });

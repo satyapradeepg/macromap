@@ -22,6 +22,7 @@
 // reused). See INGREDIENT_POOL below.
 
 import type { MacroTargets } from "./targets";
+import { rankByPantryAndPrice, type PantryPriceContext } from "./pantryPricePreference";
 
 export type MacroRole = "protein" | "carb" | "fat";
 
@@ -32,6 +33,7 @@ export interface IngredientMacroLookup {
   proteinGPer100g: number;
   carbsGPer100g: number;
   fatGPer100g: number;
+  estimatedCostCentsPer100g: number | null;
 }
 
 // Small, fixed pool per role — real-food, not exotic, matching what
@@ -64,14 +66,26 @@ export function allPoolIngredientNames(): string[] {
 // this role is unsafe for this profile (e.g. every fat-role ingredient
 // contains nuts for a nut allergy) — that role's contribution is then
 // genuinely skipped, same graceful degradation as an unresolvable lookup.
+//
+// Pantry/price preference (retrofitted July 15 2026): among the SAFE
+// available options, a pantry match (or, failing that, the cheapest
+// known-cost option when budget-aware) is preferred — but the variety
+// seed still rotates, just scoped to WHICHEVER tier is preferred
+// (pantryPricePreference.ts's preferredCount), not the full list. Without
+// that scoping, reordering alone would only shuffle which seed index
+// happens to land on the preferred option, not actually favor it.
 function pickFromPool(
   role: MacroRole,
   varietySeed: number,
   pool: Record<string, IngredientMacroLookup>,
+  ctx: PantryPriceContext,
 ): string | null {
-  const available = INGREDIENT_POOL[role].filter((name) => pool[name] !== undefined);
+  const available = INGREDIENT_POOL[role]
+    .filter((name) => pool[name] !== undefined)
+    .map((name) => ({ name, costCentsPer100g: pool[name].estimatedCostCentsPer100g }));
   if (available.length === 0) return null;
-  return available[varietySeed % available.length];
+  const { ordered, preferredCount } = rankByPantryAndPrice(available, ctx);
+  return ordered[varietySeed % preferredCount].name;
 }
 
 export interface ComposedIngredient {
@@ -82,6 +96,9 @@ export interface ComposedIngredient {
   proteinG: number;
   carbsG: number;
   fatG: number;
+  // Real cost for this sized amount, or null if Spoonacular had no cost
+  // data for this ingredient — never estimated/fabricated.
+  estimatedCostCents: number | null;
 }
 
 export interface ComposedSnack {
@@ -90,6 +107,11 @@ export interface ComposedSnack {
   totalProteinG: number;
   totalCarbsG: number;
   totalFatG: number;
+  // null if ANY ingredient's cost is unknown -- a partial sum would
+  // understate the real price and could mislead a budget-conscious user,
+  // so an incomplete total is treated as no total, same "don't guess"
+  // rule as everything else that touches Spoonacular's real data here.
+  totalEstimatedCostCents: number | null;
 }
 
 const MIN_INGREDIENT_AMOUNT_G = 10;
@@ -115,6 +137,7 @@ function sizeIngredientForGap(
     proteinG: lookup.proteinGPer100g * scale,
     carbsG: lookup.carbsGPer100g * scale,
     fatG: lookup.fatGPer100g * scale,
+    estimatedCostCents: lookup.estimatedCostCentsPer100g !== null ? lookup.estimatedCostCentsPer100g * scale : null,
   };
 }
 
@@ -126,12 +149,13 @@ export function composeSnack(
   target: MacroTargets,
   pool: Record<string, IngredientMacroLookup>,
   varietySeed: number,
+  ctx: PantryPriceContext = { pantryItemNames: [], budgetAware: false },
 ): ComposedSnack {
   const ingredients: ComposedIngredient[] = [];
   let remainingCarbs = target.carbsG;
   let remainingFat = target.fatG;
 
-  const proteinName = pickFromPool("protein", varietySeed, pool);
+  const proteinName = pickFromPool("protein", varietySeed, pool, ctx);
   const proteinLookup = proteinName ? pool[proteinName] : undefined;
   const proteinItem = proteinLookup
     ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG)
@@ -142,7 +166,7 @@ export function composeSnack(
     remainingFat -= proteinItem.fatG;
   }
 
-  const carbName = pickFromPool("carb", varietySeed, pool);
+  const carbName = pickFromPool("carb", varietySeed, pool, ctx);
   const carbLookup = carbName ? pool[carbName] : undefined;
   const carbItem = carbLookup ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs) : null;
   if (carbItem) {
@@ -150,19 +174,24 @@ export function composeSnack(
     remainingFat -= carbItem.fatG;
   }
 
-  const fatName = pickFromPool("fat", varietySeed, pool);
+  const fatName = pickFromPool("fat", varietySeed, pool, ctx);
   const fatLookup = fatName ? pool[fatName] : undefined;
   const fatItem = fatLookup ? sizeIngredientForGap(fatLookup, fatLookup.fatGPer100g, remainingFat) : null;
   if (fatItem) {
     ingredients.push(fatItem);
   }
 
+  const anyCostUnknown = ingredients.some((i) => i.estimatedCostCents === null);
   return {
     ingredients,
     totalCalories: ingredients.reduce((sum, i) => sum + i.caloriesKcal, 0),
     totalProteinG: ingredients.reduce((sum, i) => sum + i.proteinG, 0),
     totalCarbsG: ingredients.reduce((sum, i) => sum + i.carbsG, 0),
     totalFatG: ingredients.reduce((sum, i) => sum + i.fatG, 0),
+    totalEstimatedCostCents:
+      ingredients.length > 0 && !anyCostUnknown
+        ? ingredients.reduce((sum, i) => sum + (i.estimatedCostCents ?? 0), 0)
+        : null,
   };
 }
 
