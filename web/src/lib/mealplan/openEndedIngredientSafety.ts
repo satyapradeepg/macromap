@@ -77,8 +77,44 @@ function normalize(s: string): string {
   return s.toLowerCase().trim();
 }
 
+// Word-boundary match, not a bare substring check -- found live July 15
+// 2026 while investigating a real recipe-search diet-compliance gap
+// (Spoonacular's own diet=vegetarian/vegan tag can be wrong on a real
+// recipe). A naive substring scan wrongly flagged "eggplant"/"veggie" for
+// "egg", "coconut"/"butternut"/"peanut" for "nut", "buckwheat" for
+// "wheat", and "nutmeg" for "nut" -- all single tokens that never equal
+// the bare keyword, so \b...\b correctly leaves them alone. Allows an
+// optional trailing "s" -- found while fixing this that several keyword
+// lists rely on a singular stem ("cashew", "almond", "walnut") also
+// matching its plain plural ("cashews", "almonds", "walnuts"), which
+// strict word-boundary matching alone would have silently broken (a
+// regression a first pass at this fix introduced and a test caught).
+function wordBoundaryIncludes(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
+}
+
+// Word-boundary alone doesn't cover genuine two-word compounds where the
+// risky word IS its own separate token -- "coconut milk", "peanut
+// butter", "almond cream" all have "milk"/"butter"/"cream" as a real,
+// space-separated word, so \bmilk\b still matches. These three are the
+// only keywords with a common plant-based compound form; a word like
+// "chicken" or "shrimp" has no equivalent safe compound, so this
+// exception list is deliberately short and specific, not a general
+// escape hatch.
+const PLANT_MODIFIERS = [
+  "coconut", "almond", "oat", "soy", "soya", "cashew", "rice", "hemp",
+  "peanut", "sunflower seed", "sunflower", "macadamia", "pea",
+];
+const COMPOUND_SAFE_WORDS = ["milk", "butter", "cream"];
+
+function hasSafePlantCompound(haystack: string, word: string): boolean {
+  if (!COMPOUND_SAFE_WORDS.includes(word)) return false;
+  return PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(haystack, `${mod} ${word}`));
+}
+
 function containsAny(haystack: string, needles: string[]): string | null {
-  return needles.find((n) => haystack.includes(n)) ?? null;
+  return needles.find((n) => wordBoundaryIncludes(haystack, n) && !hasSafePlantCompound(haystack, n)) ?? null;
 }
 
 // Returns a human-readable reason the ingredient is unsafe/should be
@@ -91,7 +127,7 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
   const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
 
   for (const word of userWords) {
-    if (name.includes(word)) {
+    if (wordBoundaryIncludes(name, word)) {
       return `matches excluded term "${word}"`;
     }
   }

@@ -65,6 +65,71 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
     });
   });
 
+  // Regression tests for real false positives found live July 15 2026
+  // while investigating a genuine recipe-search diet-compliance gap
+  // (Spoonacular's own diet=vegetarian/vegan tag can be wrong -- see the
+  // real-recipe tests below). Fixing THIS module's substring matching was
+  // a prerequisite for safely reusing it on real recipe ingredient text,
+  // which has far more variety than the LLM-proposal text it originally
+  // covered.
+  describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () => {
+    it("does not flag 'eggplant' or 'veggie' for an egg allergy/vegan diet", () => {
+      const allergyCtx: DietaryContext = { ...NONE, allergies: ["eggs"] };
+      expect(isOpenEndedIngredientUnsafeFor("eggplant parmesan", allergyCtx)).toBeNull();
+      const veganCtx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("eggplant", veganCtx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("veggie scramble", veganCtx)).toBeNull();
+    });
+
+    it("does not flag 'coconut', 'butternut squash', or 'nutmeg' for a nut allergy", () => {
+      const ctx: DietaryContext = { ...NONE, allergies: ["nuts"] };
+      expect(isOpenEndedIngredientUnsafeFor("coconut milk", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("butternut squash", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("nutmeg", ctx)).toBeNull();
+    });
+
+    it("does not flag 'buckwheat' for a gluten_free profile", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("buckwheat flour", ctx)).not.toBeNull(); // "flour" itself is still flagged
+      expect(isOpenEndedIngredientUnsafeFor("buckwheat", ctx)).toBeNull(); // but "buckwheat" alone is not wheat
+    });
+
+    it("does not flag plant-milk/plant-butter compounds for vegan/dairy_free", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("coconut milk", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("almond milk", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("oat milk", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("peanut butter", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("almond butter", ctx)).toBeNull();
+    });
+
+    it("still flags real dairy milk/butter/cream for vegan, not just the plant-based compounds", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("milk", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("unsalted butter", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("heavy cream", ctx)).not.toBeNull();
+    });
+
+    it("still catches plural nut forms (cashews, almonds, walnuts) -- regression check for the word-boundary fix itself", () => {
+      const ctx: DietaryContext = { ...NONE, allergies: ["nuts"] };
+      expect(isOpenEndedIngredientUnsafeFor("cashews", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("almonds", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("chopped walnuts", ctx)).not.toBeNull();
+    });
+
+    it("still catches the real live-confirmed violation: chicken broth in a vegetarian-tagged recipe", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("chicken broth", ctx)).not.toBeNull();
+    });
+
+    it("does not flag vegetable or mushroom broth/stock for vegetarian", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("vegetable broth", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("mushroom broth", ctx)).toBeNull();
+    });
+  });
+
   // dairy_free/gluten_free presets, added July 15 2026 (audit round 2) --
   // this gate previously only activated a category from literal free-text
   // allergy/dislike words, so these two first-class F2 dietary-style

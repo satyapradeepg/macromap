@@ -44,6 +44,7 @@ import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafe
 import { type PantryPriceContext } from "./pantryPricePreference";
 import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
 import { proposeMealViaClaude } from "./mealProposer";
+import { anyIngredientUnsafeFor } from "./openEndedIngredientSafety";
 import { critiquePlan, type PlanSlotSummary } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
@@ -280,7 +281,12 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const inFlight = new Map<string, Promise<RecipeCandidate[]>>();
 
   const makeFetcher = (excludeIds: number[], type: string): FetchCandidatesFn => (bounds, tier) =>
-    fetchCandidatesWithCache(admin, { bounds, tier, diet, intolerances, excludeIngredients, type }, excludeIds, inFlight);
+    fetchCandidatesWithCache(
+      admin,
+      { bounds, tier, diet, intolerances, excludeIngredients, type, dietaryStyles: input.dietaryStyles },
+      excludeIds,
+      inFlight,
+    );
 
   // Only breakfast/lunch/dinner use recipe search — snacks are built
   // separately below via ingredient composition (slotMechanism, see
@@ -509,7 +515,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
             // tier — reuse the slot's own original tier purely as a label for
             // the cache row's informational tolerance_tier column.
-            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType) },
+            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType), dietaryStyles: input.dietaryStyles },
             claimedIds,
             inFlight,
           );
@@ -580,7 +586,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const bounds = nudgedBounds(slotTarget, "increase");
           const raw = await fetchCandidatesWithCache(
             admin,
-            { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType) },
+            { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType), dietaryStyles: input.dietaryStyles },
             claimedIds,
             inFlight,
           );
@@ -882,6 +888,30 @@ interface CacheableQuery {
   // Meal-type realism — IS part of the cache key (see cacheKey.ts):
   // breakfast and main course return genuinely different result sets.
   type: string;
+  // NOT part of the cache key, same reasoning as excludeIds below -- the
+  // raw F2 preset list, carried through purely for the post-read safety
+  // backstop (see dietaryCtx below), not for querying Spoonacular (that's
+  // already done via diet/intolerances above).
+  dietaryStyles: string[];
+}
+
+// Real recipe-search gap found live July 15 2026 (audit round 3):
+// Spoonacular's own diet=vegetarian/vegan tag can be wrong -- live-
+// sampled real "vegetarian"-tagged recipes and found real animal-product
+// violations (e.g. "chicken broth" in a recipe Spoonacular itself tags
+// vegetarian) at a real, recurring rate (~2-6% across samples, not a
+// one-off). Composed snacks/add-ons already had a local safety backstop
+// (ingredientSafety.ts) on top of Spoonacular's own filtering; real
+// recipes had none at all until now -- this closes that asymmetry using
+// the same word-boundary-and-plant-modifier-aware matcher already fixed
+// in openEndedIngredientSafety.ts for the AI-composition path, reused
+// here rather than writing a third keyword-matching implementation.
+// Applied AFTER the cache read (like excludeIds below), not baked into
+// what gets cached, so the cache always stores Spoonacular's real
+// response and this filter can be tightened later without invalidating
+// anything.
+function dietaryCtxFor(query: CacheableQuery): DietaryContext {
+  return { dietaryStyles: query.dietaryStyles, allergies: [], dislikes: query.excludeIngredients };
 }
 
 // Cache key deliberately excludes excludeIds (per-user) — fetched/cached
@@ -895,7 +925,10 @@ async function fetchCandidatesWithCache(
 ): Promise<RecipeCandidate[]> {
   const raw = await fetchRawCandidates(admin, query, inFlight);
   const exclude = new Set(excludeIds);
-  return raw.filter((c) => !exclude.has(c.id));
+  const dietaryCtx = dietaryCtxFor(query);
+  return raw.filter(
+    (c) => !exclude.has(c.id) && anyIngredientUnsafeFor(c.ingredients.map((i) => i.name), dietaryCtx) === null,
+  );
 }
 
 // De-duplicates concurrent callers requesting the same (bounds, diet,
@@ -1032,7 +1065,7 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
   const fetcher: FetchCandidatesFn = (bounds, tier) =>
     fetchCandidatesWithCache(
       admin,
-      { bounds, tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(input.mealType) },
+      { bounds, tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(input.mealType), dietaryStyles: input.dietaryStyles },
       input.excludeRecipeIds,
       inFlight,
     );
