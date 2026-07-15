@@ -64,6 +64,46 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("black beans", ctx)).toBeNull();
     });
   });
+
+  // dairy_free/gluten_free presets, added July 15 2026 (audit round 2) --
+  // this gate previously only activated a category from literal free-text
+  // allergy/dislike words, so these two first-class F2 dietary-style
+  // presets never triggered it at all, the same gap found and fixed the
+  // same day for the fixed-pool gate (ingredientSafety.ts).
+  describe("dairy_free / gluten_free dietary-style presets", () => {
+    it("flags dairy for a dairy_free profile with no explicit 'dairy' allergy/dislike text", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("halloumi cheese", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", ctx)).not.toBeNull();
+    });
+
+    it("does not flag non-dairy ingredients for a dairy_free profile", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("quinoa", ctx)).toBeNull();
+    });
+
+    it("flags gluten (including seitan, a wheat-gluten product) for a gluten_free profile", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("whole wheat bread", ctx)).not.toBeNull();
+    });
+
+    it("does not apply the gluten_free check for an unrelated style like vegetarian", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).toBeNull();
+    });
+
+    it("regression: dairy_free + gluten_free with no vegan style still blocks dairy and gluten -- mirrors the fixed-pool gate's regression test", () => {
+      const ctx: DietaryContext = {
+        dietaryStyles: ["dairy_free", "gluten_free"],
+        allergies: ["tree nut", "shellfish"],
+        dislikes: ["cilantro"],
+      };
+      expect(isOpenEndedIngredientUnsafeFor("halloumi cheese", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("grilled chicken breast", ctx)).toBeNull();
+    });
+  });
 });
 
 describe("anyIngredientUnsafeFor", () => {

@@ -24,6 +24,8 @@
 // negative (unsafe ingredient allowed through) is the failure mode this
 // exists to prevent, so every ambiguous case below resolves to "unsafe."
 
+import { resolveIntolerances } from "./dietaryMapping";
+
 export interface DietaryContext {
   dietaryStyles: string[];
   allergies: string[];
@@ -40,13 +42,22 @@ const GLUTEN_SYNONYMS = ["gluten", "wheat"];
 // word -> the ingredient-name substrings it should also be treated as
 // meaning, for matching purposes (covers category-level allergy/dislike
 // words that don't literally appear in a specific ingredient's name).
-const SYNONYM_GROUPS: Array<{ words: string[]; alsoMatches: string[] }> = [
-  { words: DAIRY_SYNONYMS, alsoMatches: DAIRY_SYNONYMS },
+//
+// dietaryIntolerance (added July 15 2026, audit round 2): this gate used
+// to only trigger a category from free-text allergies/dislikes -- a
+// dairy_free/gluten_free dietary-STYLE preset never activated the DAIRY_
+// SYNONYMS/GLUTEN_SYNONYMS group at all, the same gap found and fixed the
+// same day in ingredientSafety.ts (the fixed-pool gate). Reuses
+// dietaryMapping.ts's resolveIntolerances (the same single source of
+// truth the recipe-search path already uses) rather than a second
+// hand-maintained preset list.
+const SYNONYM_GROUPS: Array<{ words: string[]; alsoMatches: string[]; dietaryIntolerance?: string }> = [
+  { words: DAIRY_SYNONYMS, alsoMatches: DAIRY_SYNONYMS, dietaryIntolerance: "dairy" },
   { words: NUT_SYNONYMS, alsoMatches: NUT_SYNONYMS },
   { words: SOY_SYNONYMS, alsoMatches: SOY_SYNONYMS },
   { words: SHELLFISH_SYNONYMS, alsoMatches: SHELLFISH_SYNONYMS },
   { words: EGG_SYNONYMS, alsoMatches: [...EGG_SYNONYMS, "mayonnaise", "mayo", "meringue", "aioli", "custard", "hollandaise"] },
-  { words: GLUTEN_SYNONYMS, alsoMatches: [...GLUTEN_SYNONYMS, "bread", "pasta", "flour", "barley", "rye", "couscous", "seitan"] },
+  { words: GLUTEN_SYNONYMS, alsoMatches: [...GLUTEN_SYNONYMS, "bread", "pasta", "flour", "barley", "rye", "couscous", "seitan"], dietaryIntolerance: "gluten" },
 ];
 
 const NON_VEGETARIAN_KEYWORDS = [
@@ -77,6 +88,7 @@ function containsAny(haystack: string, needles: string[]): string | null {
 export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: DietaryContext): string | null {
   const name = normalize(ingredientName);
   const userWords = [...ctx.allergies, ...ctx.dislikes].map(normalize).filter(Boolean);
+  const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
 
   for (const word of userWords) {
     if (name.includes(word)) {
@@ -85,7 +97,9 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
   }
 
   for (const group of SYNONYM_GROUPS) {
-    const userMentionedThisCategory = userWords.some((w) => group.words.includes(w));
+    const userMentionedThisCategory =
+      userWords.some((w) => group.words.includes(w)) ||
+      (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance));
     if (!userMentionedThisCategory) continue;
     const hit = containsAny(name, group.alsoMatches);
     if (hit) {
