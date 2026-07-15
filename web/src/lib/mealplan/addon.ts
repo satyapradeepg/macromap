@@ -34,7 +34,7 @@ export interface SlotAddon {
 // One representative single-ingredient add-on per macro (PRD 7.3 F3: "fruit,
 // nuts, yogurt, protein powder, etc.") — a fixed, deterministic choice per
 // macro rather than an open-ended search, so results are stable/testable.
-const ADDON_INGREDIENT_BY_MACRO: Record<MacroKey, string> = {
+export const ADDON_INGREDIENT_BY_MACRO: Record<MacroKey, string> = {
   proteinG: "greek yogurt",
   carbsG: "banana",
   fatG: "almonds",

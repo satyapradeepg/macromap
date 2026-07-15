@@ -37,8 +37,9 @@ import {
   nudgedBounds,
   type MacroGapDirection,
 } from "./reconciliation";
-import { buildAddonForSlot, type SlotAddon } from "./addon";
+import { buildAddonForSlot, type SlotAddon, type IngredientMacroLookup, type FetchIngredientMacrosFn } from "./addon";
 import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snackComposition";
+import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import {
   complexSearch,
@@ -49,6 +50,18 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export { SpoonacularQuotaError, SpoonacularRequestError };
+
+// Shared across every retry/reconciliation phase below: a quota/outage
+// error partway through generation should degrade whatever's affected to
+// "blocked"/"not fully reconciled" and keep the rest of the plan, not
+// discard everything already built. Anything else re-throws unchanged —
+// only these two known, recoverable Spoonacular failure modes are handled
+// this way.
+function isRecoverableSpoonacularError(err: unknown): boolean {
+  return err instanceof SpoonacularQuotaError || err instanceof SpoonacularRequestError;
+}
+
+const QUOTA_EXHAUSTED_HINT = "Generation temporarily unavailable for this meal — try again shortly.";
 
 // Recomputed fresh from claimResult.claimed + the addons map every time,
 // rather than incrementally tracked — sumActuals(claimResult.claimed) alone
@@ -100,14 +113,34 @@ function composedSnackCandidate(
   };
 }
 
+// The 9 pool ingredients are a fixed, non-user-specific set (see
+// staticIngredientMacros.ts) — reads from the pinned table instead of
+// querying Spoonacular live on every generation/swap. Falls back to a real
+// live lookup for any name the static table doesn't recognize (e.g. if
+// INGREDIENT_POOL ever grows without the static table being refreshed) so
+// results stay grounded in real data either way, never fabricated.
 async function fetchSnackIngredientPool() {
   const poolEntries = await Promise.all(
-    allPoolIngredientNames().map(async (name) => [name, await lookupIngredientMacros(name)] as const),
+    allPoolIngredientNames().map(async (name) => {
+      const staticMatch = lookupIngredientMacrosStatic(name);
+      if (staticMatch) return [name, staticMatch] as const;
+      return [name, await lookupIngredientMacros(name)] as const;
+    }),
   );
   return Object.fromEntries(
     poolEntries.filter((entry): entry is [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null),
   );
 }
+
+// Same static-first, live-fallback pattern for addon.ts's fixed
+// per-macro ingredient names (a subset of the same 9-ingredient pool) —
+// used wherever an add-on lookup previously called lookupIngredientMacros
+// directly.
+const lookupIngredientMacrosForAddon: FetchIngredientMacrosFn = async (query: string): Promise<IngredientMacroLookup | null> => {
+  const staticMatch = lookupIngredientMacrosStatic(query);
+  if (staticMatch) return staticMatch;
+  return lookupIngredientMacros(query);
+};
 
 function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
   let total = sumActuals(claimed);
@@ -201,7 +234,13 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const recipeSlotIds = allSlots.filter((s) => slotMechanism(s.mealType) === "recipe");
   const snackSlotIds = allSlots.filter((s) => slotMechanism(s.mealType) === "composed");
 
-  const cascades = await Promise.all(
+  // allSettled, not all — a Spoonacular outage/quota exhaustion on ONE
+  // slot's cascade used to reject the whole batch and abort generation
+  // entirely (the exact failure mode hit live July 15 2026: a single
+  // downstream 402 discarded every already-successful slot). A recoverable
+  // Spoonacular error now degrades that one slot to blocked instead of
+  // failing the entire plan; anything else (a real bug) still throws.
+  const cascadeSettled = await Promise.allSettled(
     recipeSlotIds.map((slotId) =>
       runCascadeForSlot(
         mealTypeTargets[slotId.mealType],
@@ -210,6 +249,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       ),
     ),
   );
+  const cascades = cascadeSettled.map((settled) => {
+    if (settled.status === "fulfilled") return settled.value;
+    if (!isRecoverableSpoonacularError(settled.reason)) throw settled.reason;
+    return { rankedCandidates: [], blocked: true, blockingHint: QUOTA_EXHAUSTED_HINT };
+  });
 
   const claimResult = resolveClaims(recipeSlotIds.map((slotId, i) => ({ slotId, cascade: cascades[i] })));
   const blockedHints = new Map<string, string>();
@@ -226,16 +270,26 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   let retryQueriesUsed = 0;
 
   // Exhaustion re-queries first (rare) — one attempt each, excluding every
-  // recipe already claimed elsewhere in this plan.
+  // recipe already claimed elsewhere in this plan. A quota/outage error
+  // here stops further exhaustion retries (every remaining attempt would
+  // fail the same way) but keeps everything claimed so far — degrades to
+  // "blocked" for whatever's left, not a whole-plan failure.
   for (const slotId of claimResult.exhaustedSlots) {
     if (!trySpend(exhaustionBudget, RECIPE_ACTION_COST)) break;
     retryQueriesUsed++;
     const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
-    const cascade = await runCascadeForSlot(
-      mealTypeTargets[slotId.mealType],
-      makeFetcher(claimedIds, mealTypeToSpoonacularType(slotId.mealType)),
-      rankOpts,
-    );
+    let cascade;
+    try {
+      cascade = await runCascadeForSlot(
+        mealTypeTargets[slotId.mealType],
+        makeFetcher(claimedIds, mealTypeToSpoonacularType(slotId.mealType)),
+        rankOpts,
+      );
+    } catch (err) {
+      if (!isRecoverableSpoonacularError(err)) throw err;
+      blockedHints.set(slotKey(slotId), QUOTA_EXHAUSTED_HINT);
+      break;
+    }
     if (!cascade.blocked && cascade.rankedCandidates.length > 0) {
       const pick = cascade.rankedCandidates[0];
       claimResult.claimed.push({ slotId, candidate: pick, tier: pick.actualTier ?? "p30" });
@@ -325,159 +379,181 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // enforcement pass further down.
     const dayRetryBudget = createRetryBudget();
 
-    let gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
-    let increaseGap = dominantIncreaseGap(gaps);
-    while (increaseGap && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
-      retryQueriesUsed++;
+    // Whole day wrapped in one try/catch: a quota/outage error can surface
+    // from several calls below (add-on lookups, recipe requeries). If it's
+    // one of those two known-recoverable Spoonacular error types, every
+    // subsequent day would fail identically (quota doesn't come back
+    // mid-request), so this stops the whole reconciliation loop here —
+    // whatever's already claimed/added-on (including partial progress
+    // earlier in THIS day, before the throw) is kept as-is, and this day
+    // plus every remaining day is honestly marked as not fully
+    // reconciled, rather than discarding the whole plan (the failure mode
+    // hit live July 15 2026).
+    try {
+      let gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
+      let increaseGap = dominantIncreaseGap(gaps);
+      while (increaseGap && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
+        retryQueriesUsed++;
 
-      const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
-      const [targetSlotId] = pickSlackSlots(eligible, mealTypeTargets, [increaseGap], 1);
-      if (!targetSlotId) break; // no slot left in this day to try an add-on on
+        const eligible = daySlots().filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
+        const [targetSlotId] = pickSlackSlots(eligible, mealTypeTargets, [increaseGap], 1);
+        if (!targetSlotId) break; // no slot left in this day to try an add-on on
 
-      const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
-      if (!existing) break;
+        const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
+        if (!existing) break;
 
-      const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacros);
-      addonedThisDay.add(slotKey(targetSlotId));
-      if (addon) {
-        addons.set(slotKey(targetSlotId), addon);
+        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon);
+        addonedThisDay.add(slotKey(targetSlotId));
+        if (addon) {
+          addons.set(slotKey(targetSlotId), addon);
+        }
+        // If no addon was returned (ingredient unresolved or too small to
+        // matter), the slot is still marked addonedThisDay so the next
+        // iteration tries a different slot rather than repeating the same
+        // failure — never fakes progress that didn't happen.
+
+        gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
+        increaseGap = dominantIncreaseGap(gaps);
       }
-      // If no addon was returned (ingredient unresolved or too small to
-      // matter), the slot is still marked addonedThisDay so the next
-      // iteration tries a different slot rather than repeating the same
-      // failure — never fakes progress that didn't happen.
 
-      gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
-      increaseGap = dominantIncreaseGap(gaps);
-    }
+      if (gaps.length > 0) {
+        const direction = dominantDirection(gaps)!;
+        // Recipe requery only applies to recipe-mechanism slots — a composed
+        // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
+        // throws for snack types); a snack with remaining slack only gets
+        // helped by phase 1's add-on, not this phase.
+        const eligible = daySlots().filter(
+          (c) => !addonedThisDay.has(slotKey(c.slotId)) && slotMechanism(c.slotId.mealType) === "recipe",
+        );
+        const affordableRequeries = Math.floor(dayRetryBudget.remaining / RECIPE_ACTION_COST);
+        const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
 
-    if (gaps.length > 0) {
-      const direction = dominantDirection(gaps)!;
-      // Recipe requery only applies to recipe-mechanism slots — a composed
-      // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
-      // throws for snack types); a snack with remaining slack only gets
-      // helped by phase 1's add-on, not this phase.
-      const eligible = daySlots().filter(
-        (c) => !addonedThisDay.has(slotKey(c.slotId)) && slotMechanism(c.slotId.mealType) === "recipe",
+        for (const slotId of slackSlotIds) {
+          if (!trySpend(dayRetryBudget, RECIPE_ACTION_COST)) break;
+          retryQueriesUsed++;
+
+          const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
+          if (existingIndex === -1) continue;
+          const existing = claimResult.claimed[existingIndex];
+
+          const claimedIds = claimResult.claimed
+            .filter((_, i) => i !== existingIndex)
+            .map((c) => c.candidate.id);
+          const slotTarget = mealTypeTargets[slotId.mealType];
+          const bounds = nudgedBounds(slotTarget, direction);
+          const raw = await fetchCandidatesWithCache(
+            admin,
+            // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
+            // tier — reuse the slot's own original tier purely as a label for
+            // the cache row's informational tolerance_tier column.
+            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType) },
+            claimedIds,
+            inFlight,
+          );
+          const ranked = rankCandidates(raw, slotTarget, rankOpts);
+          const pick = ranked.find((c) => !claimedIds.includes(c.id));
+          if (pick) {
+            // The nudge intentionally searches outside the slot's original
+            // tier — recompute the pick's real tier against the true per-meal
+            // target (not the nudged one) so the persisted label/match_label
+            // honestly reflects it, rather than carrying over a stale tier
+            // that no longer matches the actual deviation.
+            const actualTier = classifyTier(pick, slotTarget) ?? "p30";
+            claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
+          }
+          // If nothing found, leave the existing claim unchanged — the gap
+          // simply isn't closed for that slot (never fakes an exact match).
+        }
+      }
+
+      // Protein-distribution enforcement (targets.ts's proteinFloorViolations)
+      // — previously monitoring-only (PRD F3 backlog item, closed July 2026).
+      // Runs after the day-aggregate gap-closing phases above so it sees
+      // their final picks (an add-on/swap from phase 1/2 may have already
+      // pushed a flagged meal back over its floor). Still doesn't touch
+      // ranking/candidate order itself (targets.ts's comment on why a hard
+      // ranking constraint risks reintroducing the breakfast corpus-scarcity
+      // problem still holds) — this only spends budget on a targeted top-up
+      // for whichever specific meal is under floor, same "never fake
+      // progress" discipline as phases 1/2.
+      const currentMealProtein = () =>
+        daySlots().map((c) => ({
+          mealType: c.slotId.mealType,
+          proteinG: c.candidate.proteinG + (addons.get(slotKey(c.slotId))?.proteinG ?? 0),
+        }));
+
+      for (const mealType of proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein())) {
+        const slotId = daySlots().find((c) => c.slotId.mealType === mealType)?.slotId;
+        if (!slotId) continue;
+        const proteinFloor = input.dailyTargets.proteinG * PROTEIN_FLOOR_FRACTION;
+        const floorGap: MacroGapDirection = { macro: "proteinG", direction: "increase", overshootPct: 1 };
+
+        // Prefer an add-on (protein powder/yogurt) — but PRD F3 caps one
+        // add-on per slot for realism, so only attempt this if phases 1/2
+        // above didn't already attach one to this exact slot.
+        if (!addonedThisDay.has(slotKey(slotId)) && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
+          retryQueriesUsed++;
+          const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
+          addonedThisDay.add(slotKey(slotId));
+          if (existing) {
+            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon);
+            if (addon) addons.set(slotKey(slotId), addon);
+          }
+        }
+
+        // Re-check after the add-on attempt (or immediately, if this slot
+        // already had one from phases 1/2 and so was skipped above) — only
+        // fall through to a recipe swap if still genuinely under floor, and
+        // only for recipe-mechanism slots (snacks have no Spoonacular recipe
+        // to requery, same constraint as phase 2).
+        const existingNow = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
+        const proteinNow = (existingNow?.candidate.proteinG ?? 0) + (addons.get(slotKey(slotId))?.proteinG ?? 0);
+        if (existingNow && proteinNow < proteinFloor && slotMechanism(mealType) === "recipe" && trySpend(dayRetryBudget, RECIPE_ACTION_COST)) {
+          retryQueriesUsed++;
+          const claimedIds = claimResult.claimed
+            .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
+            .map((c) => c.candidate.id);
+          const slotTarget = mealTypeTargets[mealType];
+          const bounds = nudgedBounds(slotTarget, "increase");
+          const raw = await fetchCandidatesWithCache(
+            admin,
+            { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType) },
+            claimedIds,
+            inFlight,
+          );
+          const ranked = rankCandidates(raw, slotTarget, rankOpts);
+          // Requires a real protein improvement over the current pick — a
+          // swap that doesn't actually raise protein isn't worth spending
+          // budget on (would just repeat the same violation next generation).
+          const pick = ranked.find((c) => !claimedIds.includes(c.id) && c.proteinG > existingNow.candidate.proteinG);
+          if (pick) {
+            const actualTier = classifyTier(pick, slotTarget) ?? "p30";
+            const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
+            claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
+            // The old add-on (if any) was sized against the pre-swap recipe's
+            // calories and is no longer relevant to the newly-picked one.
+            addons.delete(slotKey(slotId));
+          }
+        }
+      }
+
+      const dayFinalActual = sumWithAddons(daySlots(), addons);
+      dailyStatuses.push(isWithinBand(dayFinalActual, dailyBand) ? "within_band" : "outside_band_after_retries");
+
+      const remainingViolations = proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein());
+      if (remainingViolations.length > 0) {
+        console.log(`[mealplan] day ${dayIndex}: protein floor violation persisted after enforcement in ${remainingViolations.join(", ")}`);
+      }
+    } catch (err) {
+      if (!isRecoverableSpoonacularError(err)) throw err;
+      console.error(
+        `[mealplan] day ${dayIndex}: reconciliation stopped early (Spoonacular quota/outage) — keeping the plan built so far`,
+        err,
       );
-      const affordableRequeries = Math.floor(dayRetryBudget.remaining / RECIPE_ACTION_COST);
-      const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
-
-      for (const slotId of slackSlotIds) {
-        if (!trySpend(dayRetryBudget, RECIPE_ACTION_COST)) break;
-        retryQueriesUsed++;
-
-        const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
-        if (existingIndex === -1) continue;
-        const existing = claimResult.claimed[existingIndex];
-
-        const claimedIds = claimResult.claimed
-          .filter((_, i) => i !== existingIndex)
-          .map((c) => c.candidate.id);
-        const slotTarget = mealTypeTargets[slotId.mealType];
-        const bounds = nudgedBounds(slotTarget, direction);
-        const raw = await fetchCandidatesWithCache(
-          admin,
-          // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
-          // tier — reuse the slot's own original tier purely as a label for
-          // the cache row's informational tolerance_tier column.
-          { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType) },
-          claimedIds,
-          inFlight,
-        );
-        const ranked = rankCandidates(raw, slotTarget, rankOpts);
-        const pick = ranked.find((c) => !claimedIds.includes(c.id));
-        if (pick) {
-          // The nudge intentionally searches outside the slot's original
-          // tier — recompute the pick's real tier against the true per-meal
-          // target (not the nudged one) so the persisted label/match_label
-          // honestly reflects it, rather than carrying over a stale tier
-          // that no longer matches the actual deviation.
-          const actualTier = classifyTier(pick, slotTarget) ?? "p30";
-          claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
-        }
-        // If nothing found, leave the existing claim unchanged — the gap
-        // simply isn't closed for that slot (never fakes an exact match).
+      for (let remaining = dayIndex; remaining < DAYS_PER_WEEK; remaining++) {
+        dailyStatuses.push("outside_band_after_retries");
       }
-    }
-
-    // Protein-distribution enforcement (targets.ts's proteinFloorViolations)
-    // — previously monitoring-only (PRD F3 backlog item, closed July 2026).
-    // Runs after the day-aggregate gap-closing phases above so it sees
-    // their final picks (an add-on/swap from phase 1/2 may have already
-    // pushed a flagged meal back over its floor). Still doesn't touch
-    // ranking/candidate order itself (targets.ts's comment on why a hard
-    // ranking constraint risks reintroducing the breakfast corpus-scarcity
-    // problem still holds) — this only spends budget on a targeted top-up
-    // for whichever specific meal is under floor, same "never fake
-    // progress" discipline as phases 1/2.
-    const currentMealProtein = () =>
-      daySlots().map((c) => ({
-        mealType: c.slotId.mealType,
-        proteinG: c.candidate.proteinG + (addons.get(slotKey(c.slotId))?.proteinG ?? 0),
-      }));
-
-    for (const mealType of proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein())) {
-      const slotId = daySlots().find((c) => c.slotId.mealType === mealType)?.slotId;
-      if (!slotId) continue;
-      const proteinFloor = input.dailyTargets.proteinG * PROTEIN_FLOOR_FRACTION;
-      const floorGap: MacroGapDirection = { macro: "proteinG", direction: "increase", overshootPct: 1 };
-
-      // Prefer an add-on (protein powder/yogurt) — but PRD F3 caps one
-      // add-on per slot for realism, so only attempt this if phases 1/2
-      // above didn't already attach one to this exact slot.
-      if (!addonedThisDay.has(slotKey(slotId)) && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
-        retryQueriesUsed++;
-        const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
-        addonedThisDay.add(slotKey(slotId));
-        if (existing) {
-          const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacros);
-          if (addon) addons.set(slotKey(slotId), addon);
-        }
-      }
-
-      // Re-check after the add-on attempt (or immediately, if this slot
-      // already had one from phases 1/2 and so was skipped above) — only
-      // fall through to a recipe swap if still genuinely under floor, and
-      // only for recipe-mechanism slots (snacks have no Spoonacular recipe
-      // to requery, same constraint as phase 2).
-      const existingNow = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
-      const proteinNow = (existingNow?.candidate.proteinG ?? 0) + (addons.get(slotKey(slotId))?.proteinG ?? 0);
-      if (existingNow && proteinNow < proteinFloor && slotMechanism(mealType) === "recipe" && trySpend(dayRetryBudget, RECIPE_ACTION_COST)) {
-        retryQueriesUsed++;
-        const claimedIds = claimResult.claimed
-          .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
-          .map((c) => c.candidate.id);
-        const slotTarget = mealTypeTargets[mealType];
-        const bounds = nudgedBounds(slotTarget, "increase");
-        const raw = await fetchCandidatesWithCache(
-          admin,
-          { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType) },
-          claimedIds,
-          inFlight,
-        );
-        const ranked = rankCandidates(raw, slotTarget, rankOpts);
-        // Requires a real protein improvement over the current pick — a
-        // swap that doesn't actually raise protein isn't worth spending
-        // budget on (would just repeat the same violation next generation).
-        const pick = ranked.find((c) => !claimedIds.includes(c.id) && c.proteinG > existingNow.candidate.proteinG);
-        if (pick) {
-          const actualTier = classifyTier(pick, slotTarget) ?? "p30";
-          const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
-          claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
-          // The old add-on (if any) was sized against the pre-swap recipe's
-          // calories and is no longer relevant to the newly-picked one.
-          addons.delete(slotKey(slotId));
-        }
-      }
-    }
-
-    const dayFinalActual = sumWithAddons(daySlots(), addons);
-    dailyStatuses.push(isWithinBand(dayFinalActual, dailyBand) ? "within_band" : "outside_band_after_retries");
-
-    const remainingViolations = proteinFloorViolations(input.dailyTargets.proteinG, currentMealProtein());
-    if (remainingViolations.length > 0) {
-      console.log(`[mealplan] day ${dayIndex}: protein floor violation persisted after enforcement in ${remainingViolations.join(", ")}`);
+      break;
     }
   }
 
@@ -641,9 +717,9 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
 
   // Snacks have no Spoonacular recipe to requery — "swap" recomposes with a
   // different pool option instead (3 possible combos per role, same pool
-  // size as generation's rotation). Re-fetches the small 9-ingredient pool
-  // fresh (~18pts) rather than caching it across requests, matching the
-  // recipe path's own per-swap Spoonacular call.
+  // size as generation's rotation). fetchSnackIngredientPool() reads the
+  // pinned static table (staticIngredientMacros.ts), so this is ~free, not
+  // the ~18pt live re-fetch this comment used to describe.
   if (slotMechanism(input.mealType) === "composed") {
     const pool = await fetchSnackIngredientPool();
     const varietySeed = Date.now() % 3;
