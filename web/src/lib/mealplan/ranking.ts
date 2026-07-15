@@ -175,14 +175,28 @@ export function rankCandidates(
     ];
   }
 
-  // None budget-compliant: fall back to the single cheapest macro-matching
-  // candidate rather than blocking on budget alone.
-  const rest = [...scored].sort(
-    (a, b) => (a.pricePerServingCents ?? Infinity) - (b.pricePerServingCents ?? Infinity),
-  );
-  if (rest.length === 0) return [];
-  const [cheapest, ...others] = rest;
-  return [{ ...cheapest, isFallbackOfLastResort: true }, ...sortCandidates(others, budgetAware)];
+  // None budget-compliant: this branch's own comment always said "fall
+  // back to the single cheapest MACRO-MATCHING candidate," but the
+  // implementation sorted by price alone with no macro consideration at
+  // all -- a real bug relative to its own stated intent, found while
+  // investigating audit round 2's Pro+budget fat-overshoot finding (all
+  // 3 tested budget profiles showed +16-26% fat deviation regardless of
+  // tightness). Live-confirmed root cause: at a tight enough budget,
+  // compliant.length is often 0 (even the loosest tested budget, $60/wk,
+  // had just 1/60 real compliant lunch candidates), so THIS branch -- not
+  // the fat-weighting in macroDeviationScore -- was silently picking
+  // whichever candidate happened to be cheapest, regardless of how badly
+  // it missed on protein/calories/carbs/fat. One real cached dinner pool:
+  // a 74c candidate scoring 1.069 (bad fit) was picked over an 80c
+  // candidate scoring 0.076 (near-perfect) -- six cents costing a 14x
+  // worse fit. Reuses sortCandidates (score-primary, price-as-tiebreak --
+  // the exact logic the compliant branch above already uses) so this
+  // fallback still leans toward affordability on a genuine tie, but never
+  // sacrifices a meaningfully better macro fit to save a few cents.
+  const sorted = sortCandidates(scored, budgetAware);
+  if (sorted.length === 0) return [];
+  const [best, ...others] = sorted;
+  return [{ ...best, isFallbackOfLastResort: true }, ...others];
 }
 
 function sortCandidates(candidates: RankedCandidate[], budgetAware: boolean): RankedCandidate[] {

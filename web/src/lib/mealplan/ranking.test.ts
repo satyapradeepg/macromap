@@ -121,9 +121,45 @@ describe("rankCandidates", () => {
     ];
     const ranked = rankCandidates(candidates, target, { tier: "pro", budgetPerMealUsd: 2 });
     expect(ranked).toHaveLength(3);
-    expect(ranked[0].id).toBe(2); // cheapest of the three, flagged as the fallback of last resort
+    // All 3 have identical (tied) macro scores here -- ranked[0] being the
+    // cheapest is the price TIEBREAK, not evidence the fallback considers
+    // price alone. See the regression test below for that distinction.
+    expect(ranked[0].id).toBe(2);
     expect(ranked[0].isFallbackOfLastResort).toBe(true);
     expect(ranked.slice(1).map((c) => c.id).sort()).toEqual([1, 3]); // rest still present for step-down
+  });
+
+  // Regression test for the real bug found July 15 2026 (audit round 2):
+  // when nothing is budget-compliant, the fallback used to sort by price
+  // ALONE, ignoring macro fit entirely -- live-confirmed on a real cached
+  // dinner pool, a 74c candidate scoring 1.069 was picked over an 80c
+  // candidate scoring 0.076 (a 14x better fit for 6 cents more). This is
+  // the root cause of round 2's "+16-26% fat overshoot regardless of
+  // budget tightness" finding, not fat-specific weighting.
+  it("picks the best macro fit, not blindly the cheapest, when none are budget-compliant and scores genuinely differ", () => {
+    const cheapButBadFit = candidate({
+      id: 1,
+      pricePerServingCents: 74,
+      proteinG: 20, // far off target (40)
+      caloriesKcal: 300, // far off target (500)
+      carbsG: 10,
+      fatG: 40,
+    });
+    const slightlyPricierGreatFit = candidate({
+      id: 2,
+      pricePerServingCents: 80, // just 6 cents more
+      proteinG: 40,
+      caloriesKcal: 500,
+      carbsG: 40,
+      fatG: 15, // exact match on every macro
+    });
+    const ranked = rankCandidates([cheapButBadFit, slightlyPricierGreatFit], target, {
+      tier: "pro",
+      budgetPerMealUsd: 0.5, // neither candidate is compliant at $0.50
+    });
+    expect(ranked[0].id).toBe(2); // the better fit wins despite costing more
+    expect(ranked[0].isFallbackOfLastResort).toBe(true);
+    expect(ranked[0].score).toBe(0);
   });
 
   it("breaks ties by cheapest then highest aggregateLikes (budget-aware)", () => {
