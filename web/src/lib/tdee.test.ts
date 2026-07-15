@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateBmr, calculateTdee, calculateMacroTargets } from "./tdee";
+import { calculateBmr, calculateTdee, calculateMacroTargets, AGE_RANGE } from "./tdee";
 
 describe("calculateBmr", () => {
   it("applies the +5 male constant", () => {
@@ -61,5 +61,16 @@ describe("calculateMacroTargets — goal-based caloric adjustment", () => {
     const cut = calculateMacroTargets(tdee, weightKg, "cut");
     const expectedFatG = Math.round(((tdee * 0.8) * 0.25) / 9);
     expect(cut.dailyFatG).toBe(expectedFatG);
+  });
+});
+
+describe("AGE_RANGE", () => {
+  // Raised 13 -> 18 (audit round 2, July 15 2026): Mifflin-St Jeor is
+  // validated for adults, not adolescents, and this app's own extreme
+  // inputs could compute a sub-900-calorie "maintenance" target for a
+  // 13-year-old -- a safety concern independent of any engine-precision
+  // issue. See migration 0012_raise_age_minimum.sql for the full context.
+  it("has a minimum of 18, not 13", () => {
+    expect(AGE_RANGE.min).toBe(18);
   });
 });

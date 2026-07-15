@@ -18,8 +18,9 @@ export const ACTIVITY_MULTIPLIERS: Record<ActivityLevel, number> = {
 };
 
 // PRD 7.3 F1 input validation ranges — mirrored as check constraints on
-// supabase/migrations/0001_profiles.sql's profiles table.
-export const AGE_RANGE = { min: 13, max: 100 };
+// supabase/migrations/0001_profiles.sql's profiles table (age raised from
+// 13 in migration 0012 — see that file for why).
+export const AGE_RANGE = { min: 18, max: 100 };
 export const WEIGHT_KG_RANGE = { min: 30, max: 300 };
 export const HEIGHT_CM_RANGE = { min: 100, max: 250 };
 
