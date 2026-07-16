@@ -45,9 +45,27 @@ export interface DietaryContext {
   dislikes: string[];
 }
 
-const DAIRY_SYNONYMS = ["dairy", "milk", "lactose"];
+// Widened July 16 2026 (comprehensive engine test) to match the broader
+// lists already validated in the sibling open-ended gate
+// (openEndedIngredientSafety.ts) -- this file's own comment says
+// protein powder is conservatively dairy-tagged specifically because it
+// might be whey-based, but a "whey" allergy/dislike never matched it
+// before this fix, since none of these derivative-form words were in
+// these lists.
+const DAIRY_SYNONYMS = [
+  "dairy", "milk", "lactose", "cheese", "yogurt", "yoghurt", "cream", "butter", "whey",
+  "ghee", "paneer", "kefir", "ricotta", "mascarpone", "casein", "gelato",
+];
 const NUT_SYNONYMS = ["nut", "nuts", "peanut", "peanuts", "tree nut", "tree nuts"];
-const SOY_SYNONYMS = ["soy", "soya"];
+const SOY_SYNONYMS = ["soy", "soya", "tofu", "edamame", "tempeh", "miso", "natto", "tamari", "soy lecithin", "tvp", "textured vegetable protein"];
+// Added July 16 2026 (comprehensive engine test): this file previously
+// only checked the gluten_free dietary-STYLE toggle for gluten, with no
+// free-text allergy/dislike check at all -- a user who picks the "wheat"
+// allergy preset chip (a real F2 option) but doesn't separately toggle
+// gluten_free got zero protection here. Latent today only because no
+// pool item has containsGluten: true, but this closes it before the pool
+// grows, matching the file's own stated future-proofing intent.
+const GLUTEN_SYNONYMS = ["gluten", "wheat", "malt", "semolina", "farro", "spelt", "bulgur", "panko", "udon", "orzo", "matzo"];
 
 // Word-boundary match, not a bare substring check -- fixes the same bug
 // class already fixed the same day in the sibling open-ended gate
@@ -61,10 +79,34 @@ function wordBoundaryIncludes(haystack: string, needle: string): boolean {
   return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
 }
 
+// Same plant-compound exception as the sibling open-ended gate
+// (openEndedIngredientSafety.ts) -- found while widening DAIRY_SYNONYMS
+// above to include "butter"/"milk"/"cream" (July 16 2026, comprehensive
+// engine test). Without this, a user typing "peanut butter" or "coconut
+// milk" as their literal allergy/dislike text would ALSO trigger the
+// dairy category (since "butter"/"milk" are dairy synonyms), needlessly
+// excluding real dairy-containing-but-actually-fine-for-them pool items
+// like greek yogurt/cottage cheese for someone with no real dairy
+// restriction. Deliberately short and specific, not a general escape
+// hatch -- mirrors the sibling file's own list exactly.
+const PLANT_MODIFIERS = [
+  "coconut", "almond", "oat", "soy", "soya", "cashew", "rice", "hemp",
+  "peanut", "sunflower seed", "sunflower", "macadamia", "pea",
+];
+const COMPOUND_SAFE_WORDS = ["milk", "butter", "cream"];
+
+function hasSafePlantCompound(haystack: string, word: string): boolean {
+  if (!COMPOUND_SAFE_WORDS.includes(word)) return false;
+  return PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(haystack, `${mod} ${word}`));
+}
+
 function mentionsAny(words: string[], synonyms: string[]): boolean {
   return words.some((word) => {
     const normalized = word.toLowerCase().trim();
-    return normalized.length > 0 && synonyms.some((syn) => wordBoundaryIncludes(normalized, syn));
+    return (
+      normalized.length > 0 &&
+      synonyms.some((syn) => wordBoundaryIncludes(normalized, syn) && !hasSafePlantCompound(normalized, syn))
+    );
   });
 }
 
@@ -100,8 +142,8 @@ export function isKnownIngredientUnsafeFor(ingredientKey: string, ctx: DietaryCo
   if (entry.containsSoy && mentionsAny(userWords, SOY_SYNONYMS)) {
     return "contains soy (explicit allergy/dislike)";
   }
-  if (entry.containsGluten && intolerances.includes("gluten")) {
-    return "contains gluten (gluten-free diet)";
+  if (entry.containsGluten && (mentionsAny(userWords, GLUTEN_SYNONYMS) || intolerances.includes("gluten"))) {
+    return "contains gluten (explicit allergy/dislike or gluten-free diet)";
   }
 
   if (!entry.veganCompliant && ctx.dietaryStyles.includes("vegan")) {

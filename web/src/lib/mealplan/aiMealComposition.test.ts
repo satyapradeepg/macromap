@@ -107,6 +107,47 @@ describe("composeMealFromProposal", () => {
     expect(meal).toBeNull();
   });
 
+  // Comprehensive engine test, July 16 2026: a proposal with two
+  // ingredients for the same role used to silently drop the second one
+  // entirely (Array.find only ever returns the first match) -- no error,
+  // no rejection, just an incomplete meal with undercounted macros.
+  it("rejects a proposal with two ingredients claiming the same role, rather than silently dropping the second", async () => {
+    const proposal: MealProposal = {
+      dishName: "Double Protein Bowl",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "grilled chicken breast", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "grilled chicken breast": chicken, "whole wheat bread": bread, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).toBeNull();
+    // Confirms this is rejected up front -- nothing is even looked up,
+    // not just absent from the (rejected) result.
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  // Comprehensive engine test, July 16 2026: `amountG < min || amountG >
+  // max` is FALSE for NaN (every NaN comparison is false), so a NaN
+  // fixedAmountG used to silently pass the realism check where Infinity
+  // was already correctly caught.
+  it("rejects a NaN fixed portion amount, where Infinity was already correctly caught", async () => {
+    const proposal: MealProposal = {
+      dishName: "NaN Garnish Bowl",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed", fixedAmountG: NaN },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, spinach });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).toBeNull();
+  });
+
   it("rejects when an ingredient doesn't resolve via the grounding lookup", async () => {
     const proposal: MealProposal = {
       dishName: "Mystery Dish",

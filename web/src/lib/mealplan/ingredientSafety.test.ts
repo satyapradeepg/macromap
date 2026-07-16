@@ -102,6 +102,20 @@ describe("isKnownIngredientUnsafeFor", () => {
       }
     });
 
+    // Comprehensive engine test, July 16 2026: added a GLUTEN_SYNONYMS
+    // free-text check (a "wheat" allergy previously got zero protection
+    // here without ALSO separately toggling gluten_free). Not reachable
+    // against a real pool item yet -- no item has containsGluten: true --
+    // so this locks in the same "no false positives" expectation the
+    // test above does, confirming the new check doesn't change today's
+    // behavior for the free-text path either.
+    it("does not currently flag any pool ingredient for a wheat/gluten free-text allergy -- same reason as above", () => {
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["wheat"], dislikes: [] };
+      for (const name of Object.keys(STATIC_INGREDIENT_MACROS)) {
+        expect(isKnownIngredientUnsafeFor(name, ctx), name).toBeNull();
+      }
+    });
+
     it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] };
       expect(isKnownIngredientUnsafeFor("pea protein powder", ctx)).toBeNull();
@@ -142,6 +156,41 @@ describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () 
   it("still catches a genuine 'nut'/'nuts' dislike via mentionsAny", () => {
     const ctx: DietaryContext = { ...NONE, dislikes: ["nut"] };
     expect(isKnownIngredientUnsafeFor("almonds", ctx)).not.toBeNull();
+  });
+});
+
+// Comprehensive engine test, July 16 2026: DAIRY_SYNONYMS/SOY_SYNONYMS
+// were far narrower than the sibling open-ended gate's for the same
+// allergen -- a "whey"/"tofu"/"cheese" allergy never matched
+// protein powder, even though it's conservatively tagged dairy+soy
+// specifically because it might be whey- or soy-based.
+describe("widened dairy/soy synonym coverage (comprehensive engine test, July 16 2026)", () => {
+  it("catches dairy derivative forms (whey, cheese) for protein powder", () => {
+    const wheyCtx: DietaryContext = { ...NONE, allergies: ["whey"] };
+    expect(isKnownIngredientUnsafeFor("protein powder", wheyCtx)).not.toBeNull();
+    const cheeseCtx: DietaryContext = { ...NONE, dislikes: ["cheese"] };
+    expect(isKnownIngredientUnsafeFor("protein powder", cheeseCtx)).not.toBeNull();
+  });
+
+  it("catches soy derivative forms (tofu) for protein powder", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["tofu"] };
+    expect(isKnownIngredientUnsafeFor("protein powder", ctx)).not.toBeNull();
+  });
+
+  // The plant-compound exception, ported from the sibling file: without
+  // it, widening DAIRY_SYNONYMS to include "butter"/"milk"/"cream" would
+  // make a "peanut butter" or "coconut milk" allergy/dislike ALSO
+  // activate the dairy category, needlessly excluding real dairy pool
+  // items for someone with no actual dairy restriction.
+  it("does not let a 'peanut butter' or 'coconut milk' dislike activate the dairy category", () => {
+    const peanutButterCtx: DietaryContext = { ...NONE, dislikes: ["peanut butter"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", peanutButterCtx)).toBeNull();
+    expect(isKnownIngredientUnsafeFor("cottage cheese", peanutButterCtx)).toBeNull();
+    // The nut category should still correctly trigger for the same word.
+    expect(isKnownIngredientUnsafeFor("almonds", peanutButterCtx)).not.toBeNull();
+
+    const coconutMilkCtx: DietaryContext = { ...NONE, dislikes: ["coconut milk"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", coconutMilkCtx)).toBeNull();
   });
 });
 

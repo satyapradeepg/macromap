@@ -171,8 +171,25 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
   }
 
   for (const group of SYNONYM_GROUPS) {
+    // Word-boundary match, not bare array membership -- found live July 16
+    // 2026 (comprehensive engine test). The old `group.words.includes(w)`
+    // required the user's ENTIRE free-text word to be byte-for-byte equal
+    // to a bare keyword like "shellfish", so a completely natural phrasing
+    // like "shellfish allergy" or "peanut allergy" never activated ANY
+    // category -- the single highest-severity finding of that test, since
+    // it silently disabled every synonym group (nut/dairy/soy/fish/sesame/
+    // egg/gluten) for anyone who didn't type the bare keyword alone.
+    // Also excludes the same plant-compound false positives as the
+    // ingredient-name check below -- found while implementing this fix:
+    // without it, a user typing "peanut butter" or "coconut milk" as
+    // their literal allergy/dislike text would ALSO trigger the DAIRY
+    // category (since "butter"/"milk" are dairy synonyms), needlessly
+    // excluding real dairy-free items like "greek yogurt" for someone
+    // with no actual dairy restriction. Same COMPOUND_SAFE_WORDS/
+    // PLANT_MODIFIERS exception, just applied to the user's own word
+    // instead of the ingredient name.
     const userMentionedThisCategory =
-      userWords.some((w) => group.words.includes(w)) ||
+      userWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
       (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance));
     if (!userMentionedThisCategory) continue;
     const hit = containsAny(name, group.alsoMatches);

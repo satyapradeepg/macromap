@@ -157,12 +157,19 @@ export function validateCritique(raw: unknown): PlanCritique | null {
   for (const item of obj.flaggedSlots) {
     if (typeof item !== "object" || item === null) return null;
     const i = item as Record<string, unknown>;
-    if (typeof i.dayIndex !== "number" || i.dayIndex < 0 || i.dayIndex > 6) return null;
+    // Number.isInteger, not just typeof/range comparisons -- found July 16
+    // 2026 (comprehensive engine test): dayIndex < 0 and dayIndex > 6 are
+    // BOTH false for NaN (every NaN comparison is false), so a malformed
+    // tool-call response with dayIndex: NaN used to sail through this
+    // validator whose entire job is "never trust the LLM's shape
+    // blindly." Number.isInteger(NaN) is false, closing the gap and
+    // rejecting non-integer values (e.g. 2.5) for free.
+    if (!Number.isInteger(i.dayIndex) || (i.dayIndex as number) < 0 || (i.dayIndex as number) > 6) return null;
     if (typeof i.mealType !== "string" || !VALID_MEAL_TYPES.includes(i.mealType)) return null;
     if (typeof i.reason !== "string" || !VALID_REASONS.includes(i.reason)) return null;
     if (typeof i.note !== "string") return null;
     flaggedSlots.push({
-      dayIndex: i.dayIndex,
+      dayIndex: i.dayIndex as number,
       mealType: i.mealType,
       reason: i.reason as FlaggedSlot["reason"],
       note: i.note,

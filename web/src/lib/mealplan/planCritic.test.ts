@@ -39,6 +39,24 @@ describe("validateCritique", () => {
     expect(validateCritique(raw)).toBeNull();
   });
 
+  // Comprehensive engine test, July 16 2026: dayIndex < 0 and > 6 are
+  // BOTH false for NaN, so a malformed dayIndex: NaN used to sail through.
+  it("rejects a NaN dayIndex", () => {
+    const raw = {
+      overallAssessment: "x",
+      flaggedSlots: [{ dayIndex: NaN, mealType: "lunch", reason: "repetitive", note: "n" }],
+    };
+    expect(validateCritique(raw)).toBeNull();
+  });
+
+  it("rejects a non-integer dayIndex", () => {
+    const raw = {
+      overallAssessment: "x",
+      flaggedSlots: [{ dayIndex: 2.5, mealType: "lunch", reason: "repetitive", note: "n" }],
+    };
+    expect(validateCritique(raw)).toBeNull();
+  });
+
   it("rejects an invalid mealType", () => {
     const raw = {
       overallAssessment: "x",

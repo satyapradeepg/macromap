@@ -102,6 +102,36 @@ describe("perMealTarget absolute bounds", () => {
     expect(targets.lunch.calories).toBeCloseTo(673.92, 5);
   });
 
+  // Comprehensive engine test, July 16 2026: a 0 or negative daily.calories
+  // (reachable via an unvalidated onboarding manual override) used to
+  // divide by zero or flip every per-meal macro target's sign silently.
+  describe("bad daily.calories overrides (comprehensive engine test, July 16 2026)", () => {
+    it("does not produce Infinity/NaN for a 0 daily calorie target", () => {
+      const daily = { calories: 0, proteinG: 180, carbsG: 200, fatG: 60 };
+      const breakfast = perMealTarget(daily, "breakfast");
+      expect(Number.isFinite(breakfast.calories)).toBe(true);
+      expect(Number.isFinite(breakfast.proteinG)).toBe(true);
+      expect(Number.isFinite(breakfast.carbsG)).toBe(true);
+      expect(Number.isFinite(breakfast.fatG)).toBe(true);
+      expect(breakfast.proteinG).toBeGreaterThanOrEqual(0);
+    });
+
+    it("does not flip macro targets negative for a negative daily calorie target", () => {
+      const daily = { calories: -100, proteinG: 180, carbsG: 200, fatG: 60 };
+      const breakfast = perMealTarget(daily, "breakfast");
+      expect(breakfast.calories).toBeGreaterThan(0);
+      expect(breakfast.proteinG).toBeGreaterThanOrEqual(0);
+      expect(breakfast.carbsG).toBeGreaterThanOrEqual(0);
+      expect(breakfast.fatG).toBeGreaterThanOrEqual(0);
+    });
+
+    it("does not flip macro targets negative for a negative protein/carb/fat override", () => {
+      const daily = { calories: 2000, proteinG: -50, carbsG: 200, fatG: 60 };
+      const breakfast = perMealTarget(daily, "breakfast");
+      expect(breakfast.proteinG).toBeGreaterThanOrEqual(0);
+    });
+  });
+
   // Floor split by meal type, audit round 2 (July 15 2026): breakfast and
   // lunch/dinner used to share one flat 250 kcal floor despite querying
   // genuinely different Spoonacular corpora. Live-checked real recipe

@@ -72,17 +72,29 @@ export interface RankedCandidate extends RecipeCandidate {
 // grid-search optimum (which risked overfitting one data point).
 const CARB_FAT_WEIGHT = 0.5;
 
+// A target of exactly 0 (reachable for carbsG/fatG on a real extreme-cut
+// profile -- tdee.ts clamps carbsG to 0 when protein+fat calories consume
+// the whole daily budget) used to divide by zero: a perfect-fit candidate
+// (also 0) scored NaN, and any imperfect candidate scored Infinity,
+// breaking the sort comparator's contract entirely. Found live July 16
+// 2026 (comprehensive engine test). A target of 0 with a 0 candidate
+// value is a perfect match (0 deviation); a target of 0 with ANY nonzero
+// candidate value is treated as a full (100%) deviation on that macro --
+// bounded, not infinite, so it still ranks worse than any real percentage
+// deviation without blowing up the comparator.
+function safeRelativeDeviation(candidateValue: number, targetValue: number): number {
+  if (targetValue === 0) return candidateValue === 0 ? 0 : 1;
+  return Math.abs(candidateValue - targetValue) / targetValue;
+}
+
 export function macroDeviationScore(
   candidate: { proteinG: number; caloriesKcal: number; carbsG: number; fatG: number },
   target: { proteinG: number; calories: number; carbsG: number; fatG: number },
 ): number {
-  const proteinDeviation =
-    (Math.abs(candidate.proteinG - target.proteinG) / target.proteinG) * 2;
-  const caloriesDeviation =
-    Math.abs(candidate.caloriesKcal - target.calories) / target.calories;
-  const carbsDeviation =
-    (Math.abs(candidate.carbsG - target.carbsG) / target.carbsG) * CARB_FAT_WEIGHT;
-  const fatDeviation = (Math.abs(candidate.fatG - target.fatG) / target.fatG) * CARB_FAT_WEIGHT;
+  const proteinDeviation = safeRelativeDeviation(candidate.proteinG, target.proteinG) * 2;
+  const caloriesDeviation = safeRelativeDeviation(candidate.caloriesKcal, target.calories);
+  const carbsDeviation = safeRelativeDeviation(candidate.carbsG, target.carbsG) * CARB_FAT_WEIGHT;
+  const fatDeviation = safeRelativeDeviation(candidate.fatG, target.fatG) * CARB_FAT_WEIGHT;
   return proteinDeviation + caloriesDeviation + carbsDeviation + fatDeviation;
 }
 

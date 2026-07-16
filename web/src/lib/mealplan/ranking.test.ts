@@ -76,6 +76,35 @@ describe("macroDeviationScore", () => {
     );
     expect(exactProteinCalories).toBeLessThan(worseProteinCalories);
   });
+
+  // Comprehensive engine test, July 16 2026: a target of exactly 0 (real,
+  // reachable via tdee.ts clamping carbsG to 0 for a heavy-weight cut
+  // profile) used to divide by zero, producing NaN for a perfect match
+  // and Infinity for any imperfect one.
+  describe("zero-target macro (comprehensive engine test, July 16 2026)", () => {
+    it("scores a perfect match (0 candidate value) against a 0 target as 0 deviation, not NaN", () => {
+      const score = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 500, carbsG: 0, fatG: 15 },
+        { ...target, carbsG: 0 },
+      );
+      expect(Number.isFinite(score)).toBe(true);
+    });
+
+    it("scores a nonzero candidate value against a 0 target as a bounded deviation, not Infinity", () => {
+      const score = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 500, carbsG: 20, fatG: 15 },
+        { ...target, carbsG: 0 },
+      );
+      expect(Number.isFinite(score)).toBe(true);
+    });
+
+    it("still ranks a real perfect fit ahead of a candidate with an unwanted zero-target macro", () => {
+      const zeroCarbTarget = { ...target, carbsG: 0 };
+      const perfectFit = macroDeviationScore({ proteinG: 40, caloriesKcal: 500, carbsG: 0, fatG: 15 }, zeroCarbTarget);
+      const hasUnwantedCarbs = macroDeviationScore({ proteinG: 40, caloriesKcal: 500, carbsG: 20, fatG: 15 }, zeroCarbTarget);
+      expect(perfectFit).toBeLessThan(hasUnwantedCarbs);
+    });
+  });
 });
 
 describe("rankCandidates", () => {

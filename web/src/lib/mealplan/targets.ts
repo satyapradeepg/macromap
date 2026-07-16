@@ -158,11 +158,23 @@ export function structuralCalorieFloorExceedsTarget(dailyCalories: number): bool
 
 export function perMealTarget(daily: MacroTargets, mealType: MealType): MacroTargets {
   const share = MEAL_TYPE_SHARE[mealType];
+  // Guards against a 0 or negative daily.calories reaching the scale
+  // division below -- found live July 16 2026 (comprehensive engine
+  // test), reachable via an unvalidated onboarding manual override
+  // (NumberField has no min, saveProfile persists it unchecked). A 0
+  // daily calorie target made `scale` divide by zero (every per-meal
+  // macro became Infinity); a negative one flipped every per-meal
+  // macro's sign silently, with no crash and no visible red flag.
+  // Clamping the INPUT here (not just the output) guarantees raw.calories
+  // is always > 0, so the scale division below is always well-defined.
+  // proteinG/carbsG/fatG are clamped the same way for the same reason --
+  // a negative manual override there would otherwise propagate through
+  // unchanged even once the calories-driven division itself is fixed.
   const raw: MacroTargets = {
-    calories: daily.calories * share,
-    proteinG: daily.proteinG * share,
-    carbsG: daily.carbsG * share,
-    fatG: daily.fatG * share,
+    calories: Math.max(daily.calories, 1) * share,
+    proteinG: Math.max(daily.proteinG, 0) * share,
+    carbsG: Math.max(daily.carbsG, 0) * share,
+    fatG: Math.max(daily.fatG, 0) * share,
   };
 
   const bounds = CALORIE_BOUNDS[mealType];

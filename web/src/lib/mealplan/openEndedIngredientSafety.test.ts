@@ -38,6 +38,38 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
     });
   });
 
+  // Comprehensive engine test, July 16 2026: category activation used to
+  // require the user's ENTIRE free-text word to equal a bare keyword like
+  // "shellfish" -- a natural phrasing like "shellfish allergy" silently
+  // disabled the whole synonym-category system for that word.
+  describe("natural-phrase free-text allergies (comprehensive engine test, July 16 2026)", () => {
+    it("catches a category via a natural allergy phrase, not just the bare keyword", () => {
+      const shellfishCtx: DietaryContext = { ...NONE, allergies: ["shellfish allergy"] };
+      expect(isOpenEndedIngredientUnsafeFor("grilled shrimp skewers", shellfishCtx)).not.toBeNull();
+
+      const peanutCtx: DietaryContext = { ...NONE, allergies: ["peanut allergy"] };
+      expect(isOpenEndedIngredientUnsafeFor("peanut sauce noodles", peanutCtx)).not.toBeNull();
+
+      const sesameCtx: DietaryContext = { ...NONE, allergies: ["allergic to sesame"] };
+      expect(isOpenEndedIngredientUnsafeFor("tahini", sesameCtx)).not.toBeNull();
+    });
+
+    it("still does not false-positive on a word that merely contains the keyword as a substring, not a whole word", () => {
+      const ctx: DietaryContext = { ...NONE, allergies: ["nutmeg allergy"] };
+      expect(isOpenEndedIngredientUnsafeFor("almonds", ctx)).toBeNull();
+    });
+
+    it("does not let a 'peanut butter' or 'coconut milk' dislike activate the dairy category", () => {
+      const peanutButterCtx: DietaryContext = { ...NONE, dislikes: ["peanut butter"] };
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", peanutButterCtx)).toBeNull();
+      // The nut category should still correctly trigger for the same word.
+      expect(isOpenEndedIngredientUnsafeFor("almond cake", peanutButterCtx)).not.toBeNull();
+
+      const coconutMilkCtx: DietaryContext = { ...NONE, dislikes: ["coconut milk"] };
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", coconutMilkCtx)).toBeNull();
+    });
+  });
+
   describe("dietary style", () => {
     it("flags meat/fish for vegetarian", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };

@@ -35,6 +35,18 @@ export interface QuerySignature {
   type: string;
 }
 
+// Dedupes after lowercasing, before sorting -- found live July 16 2026
+// (comprehensive engine test): orchestrate.ts builds excludeIngredients as
+// `[...allergies, ...dislikes]` with no cross-field dedup, so a user who
+// lists the same allergen in both fields (e.g. "peanuts" as both an
+// allergy and a dislike) produced ["peanuts","peanuts"], which hashed
+// DIFFERENTLY than ["peanuts"] -- a semantically identical query silently
+// missed the shared recipe_query_cache row and cost an extra real
+// Spoonacular call every time. Confirmed via direct hash comparison.
+function dedupeLowercaseSort(values: string[]): string[] {
+  return [...new Set(values.map((s) => s.toLowerCase()))].sort();
+}
+
 export function recipeCacheKey(sig: QuerySignature): string {
   const canonical = {
     minProtein: roundForKey(sig.minProtein),
@@ -42,8 +54,8 @@ export function recipeCacheKey(sig: QuerySignature): string {
     minCalories: roundForKey(sig.minCalories),
     maxCalories: roundForKey(sig.maxCalories),
     diet: sig.diet ?? null,
-    intolerances: [...sig.intolerances].map((s) => s.toLowerCase()).sort(),
-    excludeIngredients: [...sig.excludeIngredients].map((s) => s.toLowerCase()).sort(),
+    intolerances: dedupeLowercaseSort(sig.intolerances),
+    excludeIngredients: dedupeLowercaseSort(sig.excludeIngredients),
     resultCount: sig.resultCount,
     type: sig.type,
   };

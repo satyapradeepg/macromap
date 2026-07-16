@@ -95,6 +95,18 @@ const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   fixed: { min: 5, max: 150 },
 };
 
+// Number.isFinite, not just min/max comparisons -- found July 16 2026
+// (comprehensive engine test): `amountG < min || amountG > max` is FALSE
+// for NaN (every NaN comparison is false), so a NaN amount used to
+// silently pass this realism check where Infinity was already correctly
+// caught. Not reachable via a real Claude response today (JSON can't
+// emit a literal NaN token), but this is the function's own stated
+// guarantee ("fails closed on both safety and realism"), so it should
+// hold regardless of caller.
+function isRealisticAmount(amountG: number, bounds: { min: number; max: number }): boolean {
+  return Number.isFinite(amountG) && amountG >= bounds.min && amountG <= bounds.max;
+}
+
 function sizeForGap(
   macroPer100g: number,
   gapNeeded: number,
@@ -138,6 +150,20 @@ export async function composeMealFromProposal(
     if (isOpenEndedIngredientUnsafeFor(ing.name, ctx) !== null) return null;
   }
 
+  // A proposal listing more than one ingredient for the same core role
+  // used to silently lose every ingredient after the first -- `.find()`
+  // below only ever returns one match, so the second protein/carb/fat
+  // item was never fetched, sized, or counted anywhere, with no error
+  // signal (found July 16 2026, comprehensive engine test: confirmed live
+  // with a two-protein-role proposal that silently dropped the second
+  // ingredient and undercounted the meal's real macros). Same "malformed
+  // proposal, reject rather than guess" discipline as the missing-role
+  // check below -- a duplicate role is exactly as malformed as a missing
+  // one, just in the other direction.
+  for (const role of ["protein", "carb", "fat"] as const) {
+    if (proposal.ingredients.filter((i) => i.role === role).length > 1) return null;
+  }
+
   const proteinProposed = proposal.ingredients.find((i) => i.role === "protein");
   const carbProposed = proposal.ingredients.find((i) => i.role === "carb");
   const fatProposed = proposal.ingredients.find((i) => i.role === "fat");
@@ -154,7 +180,7 @@ export async function composeMealFromProposal(
 
   for (const fixedItem of fixedProposed) {
     const amountG = fixedItem.fixedAmountG ?? 0;
-    if (amountG < PORTION_BOUNDS_G.fixed.min || amountG > PORTION_BOUNDS_G.fixed.max) return null;
+    if (!isRealisticAmount(amountG, PORTION_BOUNDS_G.fixed)) return null;
     const lookup = await fetchIngredientMacros(fixedItem.name);
     if (!lookup) return null;
     const item = toComposedIngredient(lookup, amountG);
@@ -179,7 +205,7 @@ export async function composeMealFromProposal(
   if (!proteinLookup) return null;
   const proteinSized = sizeForGap(proteinLookup.proteinGPer100g, remainingProtein);
   if (!proteinSized) return null;
-  if (proteinSized.amountG < PORTION_BOUNDS_G.protein.min || proteinSized.amountG > PORTION_BOUNDS_G.protein.max) return null;
+  if (!isRealisticAmount(proteinSized.amountG, PORTION_BOUNDS_G.protein)) return null;
   const proteinItem = toComposedIngredient(proteinLookup, proteinSized.amountG);
   composed.push(proteinItem);
   remainingCarbs -= proteinItem.carbsG;
@@ -189,7 +215,7 @@ export async function composeMealFromProposal(
   if (!carbLookup) return null;
   const carbSized = sizeForGap(carbLookup.carbsGPer100g, remainingCarbs);
   if (!carbSized) return null;
-  if (carbSized.amountG < PORTION_BOUNDS_G.carb.min || carbSized.amountG > PORTION_BOUNDS_G.carb.max) return null;
+  if (!isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) return null;
   const carbItem = toComposedIngredient(carbLookup, carbSized.amountG);
   composed.push(carbItem);
   remainingFat -= carbItem.fatG;
@@ -202,7 +228,7 @@ export async function composeMealFromProposal(
   // counted (same as composeSnack's existing behavior). Only an
   // out-of-bounds amount rejects the whole dish; an absent one doesn't.
   if (fatSized) {
-    if (fatSized.amountG < PORTION_BOUNDS_G.fat.min || fatSized.amountG > PORTION_BOUNDS_G.fat.max) return null;
+    if (!isRealisticAmount(fatSized.amountG, PORTION_BOUNDS_G.fat)) return null;
     composed.push(toComposedIngredient(fatLookup, fatSized.amountG));
   }
 

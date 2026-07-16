@@ -26,6 +26,21 @@ describe("recipeCacheKey", () => {
     expect(a).toBe(b);
   });
 
+  // Comprehensive engine test, July 16 2026: orchestrate.ts builds
+  // excludeIngredients as [...allergies, ...dislikes] with no cross-field
+  // dedup, so a user listing the same allergen in both fields produced a
+  // key that differed from the deduped equivalent -- a semantically
+  // identical query silently missed the shared cache row.
+  it("is stable regardless of duplicate entries within excludeIngredients or intolerances", () => {
+    const a = recipeCacheKey(baseSig);
+    const b = recipeCacheKey({
+      ...baseSig,
+      excludeIngredients: ["Peanuts", "shellfish", "peanuts"],
+      intolerances: ["Gluten", "gluten"],
+    });
+    expect(a).toBe(b);
+  });
+
   it("differs when intolerances differ — this was previously missing from the hash entirely", () => {
     const a = recipeCacheKey(baseSig);
     const b = recipeCacheKey({ ...baseSig, intolerances: [] });

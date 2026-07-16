@@ -370,6 +370,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     }
   }
 
+  // Any exhausted slot the loop above never got to (the budget ran out
+  // via the `break` above, or a quota error broke early) used to vanish
+  // completely -- neither claimed nor blocked, not present in the final
+  // plan at all, with zero explanation. Live-confirmed July 16 2026
+  // (comprehensive engine test): a real restrictive profile produced a
+  // plan missing 3 of 35 meals this way. Every entry in exhaustedSlots
+  // must end up in exactly one of claimed/blockedHints by this point.
+  for (const slotId of claimResult.exhaustedSlots) {
+    const key = slotKey(slotId);
+    const alreadyClaimed = claimResult.claimed.some((c) => slotKey(c.slotId) === key);
+    if (!alreadyClaimed && !blockedHints.has(key)) {
+      blockedHints.set(key, "Every close match for this meal is already used elsewhere this week.");
+    }
+  }
+
   // Snack slots (snack1/snack2): composed from a small ingredient pool
   // fetched ONCE here and reused for all 14 snack slots this week — a
   // fresh 2-3 lookup per slot would cost ~84 Spoonacular points/plan (3
@@ -377,7 +392,25 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // costs ~18 points regardless of how many snack slots use it. This is a
   // real, permanent addition to baseline per-plan cost (every plan now has
   // 14 snack slots), not a rare reconciliation-only cost.
-  const snackIngredientPool = await fetchSnackIngredientPool(dietaryCtx);
+  // Wrapped in the same recoverable-error catch every other Spoonacular
+  // call site in this file already uses -- found unguarded July 16 2026
+  // (comprehensive engine test): this fetches for EVERY safe pool
+  // ingredient not in the static table, so a quota error here used to
+  // throw uncaught, propagate out of orchestrateGeneration, and get
+  // treated as total generation failure by actions.ts's top-level catch
+  // -- discarding every recipe slot already claimed above. Degrades to
+  // an empty pool instead: every snack slot below already handles a null
+  // composedSnackCandidate result by blocking that slot with a clear
+  // hint, so an empty pool just means "snacks blocked this generation,"
+  // never a lost plan.
+  let snackIngredientPool: Awaited<ReturnType<typeof fetchSnackIngredientPool>>;
+  try {
+    snackIngredientPool = await fetchSnackIngredientPool(dietaryCtx);
+  } catch (err) {
+    if (!isRecoverableSpoonacularError(err)) throw err;
+    console.error("[mealplan] snack ingredient pool fetch failed (quota/outage), snacks blocked this generation:", err);
+    snackIngredientPool = {};
+  }
 
   let syntheticSnackId = -1;
   // Distinct negative range from syntheticSnackId, purely so a synthetic
@@ -679,7 +712,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     }
     if (!proposal) continue;
 
-    const composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+    // Wrapped July 16 2026 (comprehensive engine test) -- this grounds
+    // every proposed ingredient via a real Spoonacular lookup, and used
+    // to be the one unguarded call in this whole loop: a quota error here
+    // threw uncaught, past every already-claimed slot, and got treated as
+    // total generation failure upstream (same bug class as the snack-pool
+    // fetch above, and the exact failure mode this file's July 15 fix to
+    // the cascade/exhaustion/reconciliation phases never got extended to).
+    let composed;
+    try {
+      composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+    } catch (err) {
+      if (!isRecoverableSpoonacularError(err)) throw err;
+      console.error(`[mealplan] AI composition grounding failed for ${key} (quota/outage), leaving slot blocked:`, err);
+      continue;
+    }
     if (!composed) continue; // safety/portion-realism/grounding failure -- stays honestly blocked
 
     const actualTier = classifyTier(
@@ -860,7 +907,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           (a, b) => (a.reason === "diet_violation" ? 0 : 1) - (b.reason === "diet_violation" ? 0 : 1),
         );
 
+        // Dedupes flags pointing at the same slot -- found July 16 2026
+        // (comprehensive engine test): a critique response flagging the
+        // same (dayIndex, mealType) twice (e.g. once as macro_miss, once
+        // as diet_violation) used to spend 2 of the shared 5-slot repair
+        // budget on one meal instead of 1, reducing how many distinct
+        // slots a plan's repair pass can actually address. Checked before
+        // spending any budget, not just before acting, so a duplicate
+        // costs nothing.
+        const processedFlagSlots = new Set<string>();
+
         for (const flag of sortedFlags) {
+          const flagSlotKey = `${flag.dayIndex}-${flag.mealType}`;
+          if (processedFlagSlots.has(flagSlotKey)) continue;
+          processedFlagSlots.add(flagSlotKey);
+
           if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
 
           const idx = claimResult.claimed.findIndex(
