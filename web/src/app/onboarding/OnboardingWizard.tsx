@@ -19,6 +19,7 @@ import {
   kgToLbs,
   lbsToKg,
 } from "@/lib/units";
+import type { DietaryStyle } from "@/lib/mealplan/dietaryMapping";
 import { saveProfile } from "./actions";
 
 const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
@@ -34,6 +35,12 @@ const GOAL_OPTIONS: { value: Goal; label: string; emoji: string }[] = [
   { value: "maintain", label: "Maintain", emoji: "⚖️" },
 ];
 
+// `satisfies readonly DietaryStyle[]` (audit round 3, finding 12): a new
+// entry added here without a matching dietaryMapping.ts DIETARY_STYLE_MAP
+// entry used to vanish completely -- not even surfaced as "unsupported"
+// like halal/kosher, since resolveDiet/resolveIntolerances/
+// unsupportedDietaryStyles all filter through isDietaryStyle first. This
+// turns that into a compile error instead of a silent runtime gap.
 const DIETARY_STYLE_OPTIONS = [
   "vegetarian",
   "vegan",
@@ -41,9 +48,12 @@ const DIETARY_STYLE_OPTIONS = [
   "dairy_free",
   "halal",
   "kosher",
-] as const;
+] as const satisfies readonly DietaryStyle[];
 
-const ALLERGY_PRESET_OPTIONS = ["nuts", "shellfish", "eggs", "soy"] as const;
+// The 9 FDA-recognized major allergens (2023 FASTER Act) -- previously
+// only offered nuts/shellfish/eggs/soy, leaving milk/wheat/fish/sesame to
+// depend entirely on correct free-text entry (audit round 3, finding 3).
+const ALLERGY_PRESET_OPTIONS = ["nuts", "shellfish", "eggs", "soy", "milk", "wheat", "fish", "sesame"] as const;
 
 type WeightUnit = "lbs" | "kg";
 type HeightUnit = "ftin" | "cm";

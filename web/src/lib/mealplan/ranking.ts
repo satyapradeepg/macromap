@@ -99,6 +99,25 @@ export function macroDeviationScore(
 const PANTRY_OVERLAP_WEIGHT = 0.02;
 const MAX_PANTRY_OVERLAP_DEDUCTION = 0.06;
 
+// Word-boundary match, not a bare bidirectional substring check -- found
+// live July 15 2026 (audit round 3), the same bug class already fixed the
+// same day in openEndedIngredientSafety.ts. `item.name` is raw free-text
+// pantry input (only `.trim()`'d), so a bare `a.includes(b) || b.includes(a)`
+// let pantry "pea" match recipe ingredient "peanut oil", pantry "egg"
+// match "eggplant", and pantry "nut" match "coconut milk"/"butternut
+// squash" -- all real single-word pantry entries colliding with an
+// unrelated longer word. Allows an optional trailing "s" for the same
+// plural-tolerance reason as the sibling file (so pantry "chicken breast"
+// still matches a candidate's "boneless skinless chicken breast").
+function wordBoundaryIncludes(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
+}
+
+function namesOverlap(a: string, b: string): boolean {
+  return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a);
+}
+
 function pantryOverlapDeduction(
   candidateIngredients: CandidateIngredient[],
   pantryItems: PantryItem[],
@@ -110,11 +129,7 @@ function pantryOverlapDeduction(
     const isMatch =
       item.spoonacularIngredientId !== null
         ? (ing: CandidateIngredient) => ing.id === item.spoonacularIngredientId
-        : (ing: CandidateIngredient) => {
-            const a = ing.name.toLowerCase();
-            const b = item.name.toLowerCase();
-            return a.includes(b) || b.includes(a);
-          };
+        : (ing: CandidateIngredient) => namesOverlap(ing.name.toLowerCase(), item.name.toLowerCase());
     if (candidateIngredients.some(isMatch)) matched++;
   }
   return Math.min(matched * PANTRY_OVERLAP_WEIGHT, MAX_PANTRY_OVERLAP_DEDUCTION);

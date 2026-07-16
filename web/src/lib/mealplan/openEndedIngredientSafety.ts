@@ -32,12 +32,35 @@ export interface DietaryContext {
   dislikes: string[];
 }
 
-const DAIRY_SYNONYMS = ["dairy", "milk", "lactose", "cheese", "yogurt", "yoghurt", "cream", "butter", "whey"];
+const DAIRY_SYNONYMS = [
+  "dairy", "milk", "lactose", "cheese", "yogurt", "yoghurt", "cream", "butter", "whey",
+  "ghee", "paneer", "kefir", "ricotta", "mascarpone", "casein", "gelato",
+];
 const NUT_SYNONYMS = ["nut", "nuts", "peanut", "peanuts", "tree nut", "tree nuts", "almond", "cashew", "pistachio", "hazelnut", "walnut", "pecan"];
-const SOY_SYNONYMS = ["soy", "soya", "tofu", "edamame", "tempeh"];
-const SHELLFISH_SYNONYMS = ["shellfish", "shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster", "scallop"];
+const SOY_SYNONYMS = ["soy", "soya", "tofu", "edamame", "tempeh", "miso", "natto", "tamari", "soy lecithin", "tvp", "textured vegetable protein"];
+const SHELLFISH_SYNONYMS = ["shellfish", "shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster", "oysters", "scallop", "squid", "octopus", "snail", "escargot"];
+// Added July 15 2026 (audit round 3): a declared fish allergy previously
+// had no synonym group at all -- only a literal word-boundary match of
+// the user's own typed word against the ingredient name, so "fish" never
+// matched "salmon"/"tuna"/etc. Includes the hidden/foreign-name forms
+// that also feed NON_VEGETARIAN_KEYWORDS below (dashi/bonito/katsuobushi
+// are Japanese fish stock/flakes; nam pla/nuoc mam are Thai/Vietnamese
+// fish sauce) so those get real allergy coverage too, not just a diet-
+// style check.
+const FISH_SYNONYMS = [
+  "fish", "salmon", "tuna", "cod", "anchovy", "anchovies", "sardine", "catfish", "trout",
+  "halibut", "mackerel", "tilapia", "herring", "snapper", "swordfish", "mahi mahi",
+  "bonito", "dashi", "katsuobushi", "fish sauce", "nam pla", "nuoc mam", "worcestershire",
+];
+// Added July 15 2026 (audit round 3): sesame had zero coverage anywhere --
+// not an onboarding preset, no synonym group, and "tahini" (pure ground
+// sesame) contains no substring "sesame". One of the 9 FDA-recognized
+// major allergens (2023 FASTER Act).
+const SESAME_SYNONYMS = ["sesame", "tahini", "sesame oil", "sesame seed", "sesame seeds", "benne", "gomashio"];
 const EGG_SYNONYMS = ["egg", "eggs"];
-const GLUTEN_SYNONYMS = ["gluten", "wheat"];
+const GLUTEN_SYNONYMS = [
+  "gluten", "wheat", "malt", "semolina", "farro", "spelt", "bulgur", "panko", "udon", "orzo", "matzo",
+];
 
 // word -> the ingredient-name substrings it should also be treated as
 // meaning, for matching purposes (covers category-level allergy/dislike
@@ -56,14 +79,29 @@ const SYNONYM_GROUPS: Array<{ words: string[]; alsoMatches: string[]; dietaryInt
   { words: NUT_SYNONYMS, alsoMatches: NUT_SYNONYMS },
   { words: SOY_SYNONYMS, alsoMatches: SOY_SYNONYMS },
   { words: SHELLFISH_SYNONYMS, alsoMatches: SHELLFISH_SYNONYMS },
+  { words: FISH_SYNONYMS, alsoMatches: FISH_SYNONYMS },
+  { words: SESAME_SYNONYMS, alsoMatches: SESAME_SYNONYMS },
   { words: EGG_SYNONYMS, alsoMatches: [...EGG_SYNONYMS, "mayonnaise", "mayo", "meringue", "aioli", "custard", "hollandaise"] },
   { words: GLUTEN_SYNONYMS, alsoMatches: [...GLUTEN_SYNONYMS, "bread", "pasta", "flour", "barley", "rye", "couscous", "seitan"], dietaryIntolerance: "gluten" },
 ];
 
+// Wires FISH_SYNONYMS/SHELLFISH_SYNONYMS in directly (audit round 3, finding
+// 7) rather than hand-duplicating a second fish/shellfish list here -- this
+// is what makes vegetarian/vegan checks catch bare "oysters"/"clam sauce"
+// etc. automatically instead of only when the user separately declared a
+// shellfish allergy. Also expanded finding 6's other absent common
+// categories: goat/rabbit/bison/quail, cured-meat forms (chorizo/
+// prosciutto/pepperoni/salami), hidden animal-derived additives (rennet/
+// suet/tallow/isinglass/carmine/marshmallow), and other mollusks/organs
+// (squid/octopus/snail/escargot/foie gras/liver/tripe) already covered
+// for allergy purposes via SHELLFISH_SYNONYMS but not diet-compliance.
 const NON_VEGETARIAN_KEYWORDS = [
   "chicken", "beef", "pork", "bacon", "ham", "sausage", "turkey", "lamb", "duck", "veal", "venison",
-  "fish", "salmon", "tuna", "cod", "shrimp", "prawn", "crab", "lobster", "anchovy", "sardine",
-  "gelatin", "gelatine", "lard", "worcestershire", "fish sauce", "oyster sauce",
+  "goat", "rabbit", "bison", "quail", "chorizo", "prosciutto", "pepperoni", "salami",
+  "gelatin", "gelatine", "lard", "rennet", "suet", "tallow", "isinglass", "carmine", "marshmallow",
+  "foie gras", "liver", "tripe", "oyster sauce",
+  ...FISH_SYNONYMS,
+  ...SHELLFISH_SYNONYMS,
 ];
 
 const NON_VEGAN_EXTRA_KEYWORDS = [

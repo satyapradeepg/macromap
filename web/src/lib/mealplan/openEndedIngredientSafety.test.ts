@@ -171,6 +171,74 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
   });
 });
 
+// Audit round 3 (July 15 2026): fish and sesame previously had zero
+// synonym coverage -- a declared "fish" allergy never matched any actual
+// fish, and sesame wasn't offered as a preset or covered by any group.
+describe("fish and sesame allergy coverage (audit round 3, July 15 2026)", () => {
+  it("catches specific fish for a 'fish' allergy, including a compound word (catfish)", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["fish"] };
+    expect(isOpenEndedIngredientUnsafeFor("grilled salmon", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("tuna steak", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("catfish fillet", ctx)).not.toBeNull();
+  });
+
+  it("catches hidden fish forms (dashi, bonito, fish sauce) for a 'fish' allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["fish"] };
+    expect(isOpenEndedIngredientUnsafeFor("dashi broth", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("bonito flakes", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("fish sauce", ctx)).not.toBeNull();
+  });
+
+  it("catches sesame including tahini, which contains no literal substring 'sesame'", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["sesame"] };
+    expect(isOpenEndedIngredientUnsafeFor("tahini", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("sesame oil", ctx)).not.toBeNull();
+  });
+
+  it("does not flag unrelated ingredients for fish/sesame allergies", () => {
+    const fishCtx: DietaryContext = { ...NONE, allergies: ["fish"] };
+    expect(isOpenEndedIngredientUnsafeFor("quinoa", fishCtx)).toBeNull();
+    const sesameCtx: DietaryContext = { ...NONE, allergies: ["sesame"] };
+    expect(isOpenEndedIngredientUnsafeFor("black beans", sesameCtx)).toBeNull();
+  });
+});
+
+// Audit round 3: dairy/soy/gluten synonym lists missed common derivative
+// forms, and NON_VEGETARIAN_KEYWORDS missed large common categories.
+describe("synonym and vegetarian/vegan keyword completeness (audit round 3, July 15 2026)", () => {
+  it("catches soy derivative forms (miso, natto) for a soy allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["soy"] };
+    expect(isOpenEndedIngredientUnsafeFor("miso soup", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("natto", ctx)).not.toBeNull();
+  });
+
+  it("catches gluten derivative forms (farro, udon) for a gluten_free profile", () => {
+    const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+    expect(isOpenEndedIngredientUnsafeFor("farro salad", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("udon noodles", ctx)).not.toBeNull();
+  });
+
+  it("catches dairy derivative forms (paneer, ghee) for a dairy_free profile", () => {
+    const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+    expect(isOpenEndedIngredientUnsafeFor("paneer tikka", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("ghee rice", ctx)).not.toBeNull();
+  });
+
+  it("flags previously-missed common non-vegetarian ingredients", () => {
+    const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+    expect(isOpenEndedIngredientUnsafeFor("seared scallops", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("goat curry", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("chorizo hash", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("prosciutto-wrapped melon", ctx)).not.toBeNull();
+  });
+
+  it("flags bare shellfish/mollusk terms for vegan/vegetarian even with no declared shellfish allergy", () => {
+    const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+    expect(isOpenEndedIngredientUnsafeFor("chowder with clams and mussels", ctx)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("grilled oysters", ctx)).not.toBeNull();
+  });
+});
+
 describe("anyIngredientUnsafeFor", () => {
   it("returns a reason if any ingredient in the list is unsafe", () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };

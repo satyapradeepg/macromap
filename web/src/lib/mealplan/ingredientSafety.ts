@@ -49,10 +49,22 @@ const DAIRY_SYNONYMS = ["dairy", "milk", "lactose"];
 const NUT_SYNONYMS = ["nut", "nuts", "peanut", "peanuts", "tree nut", "tree nuts"];
 const SOY_SYNONYMS = ["soy", "soya"];
 
+// Word-boundary match, not a bare substring check -- fixes the same bug
+// class already fixed the same day in the sibling open-ended gate
+// (openEndedIngredientSafety.ts). Live-confirmed (July 15 2026): a
+// bare `normalized.includes(syn)` check meant a free-text dislike of
+// "nutmeg" or "donut" contained the substring "nut" and incorrectly
+// triggered the nut category. Allows an optional trailing "s" for the
+// same plural-tolerance reason as the sibling file.
+function wordBoundaryIncludes(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
+}
+
 function mentionsAny(words: string[], synonyms: string[]): boolean {
   return words.some((word) => {
     const normalized = word.toLowerCase().trim();
-    return normalized.length > 0 && synonyms.some((syn) => normalized === syn || normalized.includes(syn));
+    return normalized.length > 0 && synonyms.some((syn) => wordBoundaryIncludes(normalized, syn));
   });
 }
 
@@ -74,7 +86,7 @@ export function isKnownIngredientUnsafeFor(ingredientKey: string, ctx: DietaryCo
 
   for (const word of userWords) {
     const normalized = word.toLowerCase().trim();
-    if (normalized.length > 0 && ingredientKey.toLowerCase().includes(normalized)) {
+    if (normalized.length > 0 && wordBoundaryIncludes(ingredientKey.toLowerCase(), normalized)) {
       return `matches excluded term "${word}"`;
     }
   }

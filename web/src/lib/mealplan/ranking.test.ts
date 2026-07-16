@@ -268,5 +268,44 @@ describe("rankCandidates", () => {
       expect(withoutOpt[0].score).toBe(macroDeviationScore(a, target));
       expect(withEmpty[0].score).toBe(macroDeviationScore(a, target));
     });
+
+    // Audit round 3 (July 15 2026): the bare bidirectional substring check
+    // let pantry "pea"/"egg"/"nut" collide with unrelated longer words.
+    describe("bidirectional substring false-positive fixes (audit round 3, July 15 2026)", () => {
+      it("does not deduct for pantry 'pea' against 'peanut oil'", () => {
+        const withPeanutOil = candidate({
+          id: 1,
+          ingredients: [{ ...chicken, name: "peanut oil" }],
+        });
+        const pantryItems: PantryItem[] = [{ name: "pea", spoonacularIngredientId: null }];
+        const ranked = rankCandidates([withPeanutOil], target, {
+          tier: "free",
+          budgetPerMealUsd: null,
+          pantryItems,
+        });
+        expect(ranked[0].score).toBe(macroDeviationScore(withPeanutOil, target));
+      });
+
+      it("does not deduct for pantry 'egg' against 'eggplant', or pantry 'nut' against 'coconut milk'/'butternut squash'", () => {
+        const withNonMatches = candidate({
+          id: 1,
+          ingredients: [
+            { ...chicken, id: 1, name: "eggplant" },
+            { ...chicken, id: 2, name: "coconut milk" },
+            { ...chicken, id: 3, name: "butternut squash" },
+          ],
+        });
+        const pantryItems: PantryItem[] = [
+          { name: "egg", spoonacularIngredientId: null },
+          { name: "nut", spoonacularIngredientId: null },
+        ];
+        const ranked = rankCandidates([withNonMatches], target, {
+          tier: "free",
+          budgetPerMealUsd: null,
+          pantryItems,
+        });
+        expect(ranked[0].score).toBe(macroDeviationScore(withNonMatches, target));
+      });
+    });
   });
 });

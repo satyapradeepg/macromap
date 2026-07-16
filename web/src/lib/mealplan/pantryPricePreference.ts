@@ -45,11 +45,24 @@ function normalize(s: string): string {
   return s.toLowerCase().trim();
 }
 
+// Word-boundary match, not a bare bidirectional substring check -- same
+// bug class already fixed the same day in openEndedIngredientSafety.ts
+// and ranking.ts's pantryOverlapDeduction (audit round 3, July 15 2026).
+// A bare `name.includes(pn) || pn.includes(name)` let pantry "pea" match
+// pool item "pea protein powder" indiscriminately and pantry "nut" match
+// both "walnuts" and "peanut butter", collapsing distinct allergen-
+// relevant items into one preference bucket. Allows an optional trailing
+// "s" so pantry "yogurt" still matches pool item "greek yogurt".
+function wordBoundaryIncludes(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
+}
+
 function matchesPantry(ingredientName: string, pantryItemNames: string[]): boolean {
   const name = normalize(ingredientName);
   return pantryItemNames.some((p) => {
     const pn = normalize(p);
-    return pn.length > 0 && (name.includes(pn) || pn.includes(name));
+    return pn.length > 0 && (wordBoundaryIncludes(name, pn) || wordBoundaryIncludes(pn, name));
   });
 }
 

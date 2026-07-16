@@ -185,4 +185,31 @@ describe("rankByPantryAndPrice", () => {
     expect(result.ordered.map((c) => c.name)).toEqual(["walnuts", "peanut butter"]);
     expect(result.preferredCount).toBe(2);
   });
+
+  // Audit round 3 (July 15 2026): the bare bidirectional substring check
+  // let pantry "nut" match both "walnuts" and "peanut butter", collapsing
+  // distinct allergen-relevant pool items into one preference bucket.
+  describe("bidirectional substring false-positive fixes (audit round 3, July 15 2026)", () => {
+    it("does not match pantry 'nut' against 'walnuts' or 'peanut butter'", () => {
+      const candidates: TestItem[] = [
+        { name: "walnuts", costCentsPer100g: 239.29 },
+        { name: "peanut butter", costCentsPer100g: 35.71 },
+        { name: "banana", costCentsPer100g: 13 },
+      ];
+      const ctx: PantryPriceContext = { pantryItemNames: ["nut"], budgetAware: false };
+      const result = rankByPantryAndPrice(candidates, ctx);
+      expect(result.ordered).toEqual(candidates);
+      expect(result.preferredCount).toBe(3);
+    });
+
+    it("still matches a real whole-word pantry item (e.g. 'walnuts' matches 'walnuts')", () => {
+      const candidates: TestItem[] = [
+        { name: "walnuts", costCentsPer100g: 239.29 },
+        { name: "banana", costCentsPer100g: 13 },
+      ];
+      const ctx: PantryPriceContext = { pantryItemNames: ["walnuts"], budgetAware: false };
+      const result = rankByPantryAndPrice(candidates, ctx);
+      expect(result.ordered[0].name).toBe("walnuts");
+    });
+  });
 });

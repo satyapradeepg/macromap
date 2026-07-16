@@ -124,6 +124,27 @@ describe("isKnownIngredientUnsafeFor", () => {
   });
 });
 
+// Audit round 3 (July 15 2026): the same word-boundary bug already fixed
+// in the sibling open-ended gate (openEndedIngredientSafety.ts) existed
+// here too, in both mentionsAny's bare substring check and the direct
+// userWord-vs-ingredientKey check.
+describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () => {
+  it("does not flag 'nutmeg' or 'donut' as a nut allergy match", () => {
+    const nutmegCtx: DietaryContext = { ...NONE, dislikes: ["nutmeg"] };
+    expect(isKnownIngredientUnsafeFor("almonds", nutmegCtx)).toBeNull();
+    expect(isKnownIngredientUnsafeFor("walnuts", nutmegCtx)).toBeNull();
+    expect(isKnownIngredientUnsafeFor("peanut butter", nutmegCtx)).toBeNull();
+
+    const donutCtx: DietaryContext = { ...NONE, dislikes: ["donut"] };
+    expect(isKnownIngredientUnsafeFor("almonds", donutCtx)).toBeNull();
+  });
+
+  it("still catches a genuine 'nut'/'nuts' dislike via mentionsAny", () => {
+    const ctx: DietaryContext = { ...NONE, dislikes: ["nut"] };
+    expect(isKnownIngredientUnsafeFor("almonds", ctx)).not.toBeNull();
+  });
+});
+
 describe("filterSafeIngredientNames", () => {
   it("removes every nut-tagged ingredient for a nut allergy, keeps the rest", () => {
     const ctx: DietaryContext = { ...NONE, allergies: ["nuts"] };
