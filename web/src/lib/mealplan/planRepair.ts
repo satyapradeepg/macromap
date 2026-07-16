@@ -18,9 +18,11 @@
 // genuinely reduces duplication rather than trading one repeat for
 // another. Ties or ambiguous cases keep the original -- never swap for a
 // non-improvement, same "never fake progress" discipline as everywhere
-// else in this pipeline.
+// else in this pipeline. The one exception is a genuine diet_violation
+// (added July 16 2026): safety overrides macro fit, so that reason skips
+// the improvement check entirely -- see shouldAcceptRepair below.
 
-export type RepairReason = "repetitive" | "macro_miss" | "other";
+export type RepairReason = "repetitive" | "macro_miss" | "diet_violation" | "other";
 
 export interface RepairCandidateInfo {
   title: string;
@@ -53,6 +55,16 @@ export function shouldAcceptRepair(params: {
   newCandidateTitle: string;
 }): boolean {
   const { reason, oldScore, newScore, otherTitlesInPlan, newCandidateTitle } = params;
+
+  // Safety-first exception (added July 16 2026, following the string-
+  // matching audit): the caller only ever invokes this with a real,
+  // already-safety-filtered replacement candidate in hand (orchestrate.ts
+  // bails out to "keep original" before calling this at all when no
+  // candidate was found) -- so for a genuine diet violation, that
+  // candidate always beats a known violation, even one with a worse
+  // macro score than the original. Every other reason still requires a
+  // real macro improvement; only safety overrides fit.
+  if (reason === "diet_violation") return true;
 
   const meaningfullyBetter = oldScore - newScore > MIN_SCORE_IMPROVEMENT;
   if (!meaningfullyBetter) return false;

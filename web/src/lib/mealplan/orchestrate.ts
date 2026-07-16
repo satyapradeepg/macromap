@@ -245,6 +245,13 @@ export interface OrchestrateResult {
   retryQueriesUsed: number;
   weeklyTarget: MacroTargets;
   weeklyActual: MacroTargets;
+  // A flagged diet_violation the repair pass couldn't resolve even after
+  // both the real-recipe swap attempt and the AI-composition fallback —
+  // see the "Post-generation plan critique + repair" section below.
+  // Expected empty in the overwhelming majority of plans. No frontend
+  // consumer yet (see plan-critic-diet-violation-spec-2026-07-16.md,
+  // OQ-B) — this is the data shape for a follow-up warning banner.
+  unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }>;
 }
 
 export async function orchestrateGeneration(input: OrchestrateInput): Promise<OrchestrateResult> {
@@ -724,19 +731,97 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     blockedHints.delete(key);
   }
 
-  // Post-generation plan critique + repair (built July 15 2026) — the
-  // per-slot pipeline above never sees the whole week at once, so it
-  // structurally can't notice cross-cutting problems like "this exact
-  // recipe shows up 4 times." One Claude call reviews the full plan and
-  // flags specific slots worth a second look; every flagged slot then
+  // Last-resort fallback for a flagged diet_violation with no real recipe
+  // alternative (added July 16 2026) — mirrors the AI-composition
+  // fallback above almost exactly, just scoped to a single already-
+  // claimed slot instead of an exhausted blockedHints entry, and returns
+  // null on ANY failure rather than partially applying anything, so the
+  // caller can fall through to disclosure (unresolvedDietaryConcerns)
+  // instead of guessing why it failed.
+  async function tryAiComposeRepair(slotId: MealSlotId, slotTarget: MacroTargets): Promise<RankedCandidate | null> {
+    let proposal;
+    try {
+      proposal = await proposeMealViaClaude({
+        mealType: slotId.mealType as "breakfast" | "lunch" | "dinner",
+        target: slotTarget,
+        dietaryStyles: input.dietaryStyles,
+        allergies: input.allergies,
+        dislikes: input.dislikes,
+        pantryItemNames,
+      });
+    } catch (err) {
+      console.error(`[mealplan] AI-composition repair call failed for ${slotKey(slotId)}:`, err);
+      return null;
+    }
+    if (!proposal) return null;
+
+    const composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+    if (!composed) return null; // safety/portion-realism/grounding failure -- never partially applied
+
+    const actualTier =
+      classifyTier({ proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories }, slotTarget) ?? "p30";
+    const pricePerServingCents =
+      composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
+    const budgetCompliant =
+      !pantryPriceCtx.budgetAware ||
+      pricePerServingCents === null ||
+      budgetPerMealUsd === null ||
+      pricePerServingCents <= budgetPerMealUsd * 100;
+
+    return {
+      id: syntheticAiMealId--,
+      title: composed.dishName,
+      imageUrl: null,
+      servings: 1,
+      proteinG: composed.totalProteinG,
+      caloriesKcal: composed.totalCalories,
+      carbsG: composed.totalCarbsG,
+      fatG: composed.totalFatG,
+      pricePerServingCents,
+      aggregateLikes: 0,
+      ingredients: composed.ingredients.map((i) => ({
+        id: i.spoonacularIngredientId,
+        name: i.ingredientName,
+        amount: i.amountG,
+        unit: "g",
+        metricAmount: i.amountG,
+        metricUnit: "g",
+      })),
+      score: 0,
+      budgetCompliant,
+      actualTier,
+      isFallbackOfLastResort: true,
+      aiComposed: true,
+    };
+  }
+
+  // Slots a diet_violation flag couldn't be resolved for even after both
+  // the real-recipe swap attempt and the AI-composition fallback above --
+  // surfaced to the caller rather than silently kept, same "disclose,
+  // don't silently under-filter" precedent as dietaryMapping.ts's
+  // unsupportedDietaryStyles (halal/kosher). Expected to be empty in the
+  // overwhelming majority of plans; only ever populated for a genuine,
+  // unresolvable safety flag, never for repetitive/macro_miss/other.
+  const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }> = [];
+
+  // Post-generation plan critique + repair (built July 15 2026, extended
+  // July 16 2026 with diet_violation) — the per-slot pipeline above never
+  // sees the whole week at once, so it structurally can't notice cross-
+  // cutting problems like "this exact recipe shows up 4 times," or check
+  // for the kind of hidden/foreign-language violation the deterministic
+  // keyword gates (ingredientSafety.ts/openEndedIngredientSafety.ts)
+  // structurally can't enumerate. One Claude call reviews the full plan
+  // and flags specific slots worth a second look; every flagged slot then
   // gets a REAL swap attempt via the existing swapSlotCandidate
   // mechanism, and the accept/reject decision is 100% deterministic
   // (planRepair.ts's shouldAcceptRepair, using real macro-deviation
-  // scores) — the critic only decides what to reconsider, never what's
-  // "better." Skipped entirely, gracefully, if no ANTHROPIC_API_KEY is
-  // configured or the call fails for any reason — this is a polish pass
-  // on an already-complete plan, never something that can leave the plan
-  // worse or incomplete than before this phase ran.
+  // scores, EXCEPT diet_violation which always accepts a real alternative
+  // regardless of score) — the critic only decides what to reconsider,
+  // never what's "better." Skipped entirely, gracefully, if no
+  // ANTHROPIC_API_KEY is configured or the call fails for any reason —
+  // this is a polish pass on an already-complete plan, never something
+  // that can leave the plan worse or incomplete than before this phase
+  // ran.
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const planSummary: PlanSlotSummary[] = claimResult.claimed.map((c) => {
@@ -767,7 +852,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         );
         const repairBudget = createPlanRepairBudget();
 
-        for (const flag of critique.flaggedSlots) {
+        // diet_violation flags process first so the shared, capped repair
+        // budget can't let cosmetic (repetitive/macro_miss/other) repairs
+        // starve a genuine safety fix earlier in the list — safety
+        // shouldn't depend on array order.
+        const sortedFlags = [...critique.flaggedSlots].sort(
+          (a, b) => (a.reason === "diet_violation" ? 0 : 1) - (b.reason === "diet_violation" ? 0 : 1),
+        );
+
+        for (const flag of sortedFlags) {
           if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
 
           const idx = claimResult.claimed.findIndex(
@@ -780,14 +873,23 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // the critic is prompted not to flag composed snacks for
           // repetition, and re-running the AI composition path here would
           // spend a second Claude call per flagged slot on a case that
-          // already went through its own dedicated fallback above.
-          if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) continue;
+          // already went through its own dedicated fallback above. A
+          // diet_violation flag on one of these should be rare (both
+          // mechanisms already run through their own safety gate at claim
+          // time) but is disclosed rather than silently dropped.
+          if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) {
+            if (flag.reason === "diet_violation") {
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+            }
+            continue;
+          }
 
           const otherTitlesInPlan = claimResult.claimed.filter((_, i) => i !== idx).map((c) => c.candidate.title);
           // Excludes every recipe already used anywhere in the plan, not
           // just this slot's own — prevents the repair from accidentally
           // trading one duplicate for a brand-new one elsewhere.
           const excludeRecipeIds = claimResult.claimed.map((c) => c.candidate.id);
+          const slotTarget = mealTypeTargets[existing.slotId.mealType];
 
           let swapResult;
           try {
@@ -805,11 +907,39 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           } catch (err) {
             if (!isRecoverableSpoonacularError(err)) throw err;
             console.error(`[mealplan] repair swap failed for day ${flag.dayIndex} ${flag.mealType}, keeping original:`, err);
+            if (flag.reason === "diet_violation") {
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+            }
             continue;
           }
-          if (swapResult.blocked || !swapResult.candidate) continue; // keep original, no alternative found
 
-          const slotTarget = mealTypeTargets[existing.slotId.mealType];
+          if (swapResult.blocked || !swapResult.candidate) {
+            // No real recipe alternative exists. A cosmetic flag just
+            // keeps the original (unchanged behavior) — but a genuine
+            // safety flag never just keeps a known violation. Try the
+            // same AI-composition last resort already used earlier in
+            // generation for exhausted cascades (its own independent
+            // safety gate, not constrained to Spoonacular's corpus)
+            // before disclosing it as unresolved.
+            if (flag.reason === "diet_violation") {
+              const composed = await tryAiComposeRepair(existing.slotId, slotTarget);
+              if (composed) {
+                claimResult.claimed[idx] = { slotId: existing.slotId, candidate: composed, tier: composed.actualTier ?? "p30" };
+                addons.delete(slotKey(existing.slotId));
+                console.log(
+                  `[mealplan] repair accepted (diet_violation, AI-composed) for day ${flag.dayIndex} ${flag.mealType}: ` +
+                    `"${existing.candidate.title}" -> "${composed.title}"`,
+                );
+              } else {
+                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+                console.error(
+                  `[mealplan] no safe alternative found for flagged diet_violation, day ${flag.dayIndex} ${flag.mealType}: ${flag.note}`,
+                );
+              }
+            }
+            continue;
+          }
+
           const oldScore = macroDeviationScore(existing.candidate, slotTarget);
           const newScore = macroDeviationScore(swapResult.candidate, slotTarget);
 
@@ -863,7 +993,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
   console.log(
     `[mealplan] generation done: ${slots.length}/${MEALS_PER_WEEK} claimed, ${blockedSlots.length} blocked, ` +
-      `retryQueriesUsed=${retryQueriesUsed}, reconciliation=${reconciliationStatus}`,
+      `retryQueriesUsed=${retryQueriesUsed}, reconciliation=${reconciliationStatus}, ` +
+      `unresolvedDietaryConcerns=${unresolvedDietaryConcerns.length}`,
   );
 
   return {
@@ -873,6 +1004,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     retryQueriesUsed,
     weeklyTarget: weekly,
     weeklyActual: actual,
+    unresolvedDietaryConcerns,
   };
 }
 

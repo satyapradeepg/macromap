@@ -80,4 +80,46 @@ describe("shouldAcceptRepair", () => {
     });
     expect(accept).toBe(true);
   });
+
+  // Safety-first exception, added July 16 2026 -- see
+  // plan-critic-diet-violation-spec-2026-07-16.md. The caller only ever
+  // invokes this with a real, already-safety-filtered replacement
+  // candidate in hand, so a diet_violation repair always accepts it,
+  // even at a real macro-fit cost.
+  describe("diet_violation safety-first exception", () => {
+    it("accepts a diet_violation repair even when the new candidate is a WORSE macro fit", () => {
+      const accept = shouldAcceptRepair({
+        reason: "diet_violation",
+        oldScore: 0.1, // the violating meal was actually a near-perfect macro fit
+        newScore: 0.9, // the safe alternative is a much worse fit
+        otherTitlesInPlan: [],
+        newCandidateTitle: "Safe Alternative Dish",
+      });
+      expect(accept).toBe(true);
+    });
+
+    it("accepts a diet_violation repair even when the new candidate duplicates another slot in the plan", () => {
+      // Unlike "repetitive", diet_violation has no duplication check --
+      // safety always wins, a repeated-but-safe dish beats a violation.
+      const accept = shouldAcceptRepair({
+        reason: "diet_violation",
+        oldScore: 0.1,
+        newScore: 0.5,
+        otherTitlesInPlan: ["Lentil Soup", "Lentil Soup"],
+        newCandidateTitle: "Lentil Soup",
+      });
+      expect(accept).toBe(true);
+    });
+
+    it("accepts a diet_violation repair on a tie or negative improvement, unlike every other reason", () => {
+      const accept = shouldAcceptRepair({
+        reason: "diet_violation",
+        oldScore: 0.2,
+        newScore: 0.2000001, // effectively identical, would fail every other reason's threshold
+        otherTitlesInPlan: [],
+        newCandidateTitle: "Safe Alternative Dish",
+      });
+      expect(accept).toBe(true);
+    });
+  });
 });

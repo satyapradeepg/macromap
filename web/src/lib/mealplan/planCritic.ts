@@ -14,6 +14,17 @@
 // of holistic judgment call this project's own bar for introducing an
 // LLM has consistently required (see aiMealComposition.ts).
 //
+// diet_violation (added July 16 2026, following the string-matching
+// audit): a second, coarser-grained safety net on top of the deterministic
+// keyword gates (ingredientSafety.ts/openEndedIngredientSafety.ts), which
+// stay the primary defense and run on every candidate during generation.
+// This catches whatever a finite keyword list structurally can't --
+// foreign-language ingredient names, obscure hidden animal products,
+// anything the deterministic lists don't yet know about. Deliberately
+// biased toward flagging on uncertainty (see the prompt below): a false
+// alarm here just costs an extra swap attempt in planRepair.ts, but a
+// missed real violation is the exact failure mode this exists to prevent.
+//
 // Model id: per ai-agents.md's standing note, confirm against the latest
 // available Sonnet-tier model at deploy time rather than trusting this
 // string indefinitely.
@@ -41,7 +52,7 @@ export interface CritiquePlanInput {
 export interface FlaggedSlot {
   dayIndex: number;
   mealType: string;
-  reason: "repetitive" | "macro_miss" | "other";
+  reason: "repetitive" | "macro_miss" | "diet_violation" | "other";
   note: string;
 }
 
@@ -65,7 +76,7 @@ const CRITIQUE_PLAN_TOOL = {
           properties: {
             dayIndex: { type: "number", description: "0-6, Monday=0" },
             mealType: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack1", "snack2"] },
-            reason: { type: "string", enum: ["repetitive", "macro_miss", "other"] },
+            reason: { type: "string", enum: ["repetitive", "macro_miss", "diet_violation", "other"] },
             note: { type: "string", description: "One sentence on why this slot was flagged." },
           },
           required: ["dayIndex", "mealType", "reason", "note"],
@@ -93,7 +104,9 @@ Dislikes: ${input.dislikes.length ? input.dislikes.join(", ") : "none"}
 
 ${rows}
 
-Flag only slots genuinely worth regenerating -- a dish appearing twice in a week of 35 meals isn't automatically a problem, but 4+ times likely is. Don't flag composed snacks for repetition; the fixed ingredient pool means some repetition there is expected and already accounted for elsewhere. Focus repetition flags on real recipes (breakfast/lunch/dinner).`;
+Flag only slots genuinely worth regenerating -- a dish appearing twice in a week of 35 meals isn't automatically a problem, but 4+ times likely is. Don't flag composed snacks for repetition; the fixed ingredient pool means some repetition there is expected and already accounted for elsewhere. Focus repetition flags on real recipes (breakfast/lunch/dinner).
+
+Also check every meal against the dietary style, allergies, and dislikes listed above. Flag any meal that violates one of them as diet_violation -- for example, a hidden animal product, a non-obvious allergen, or a foreign-language ingredient name that a simple keyword scan could plausibly miss (e.g. "nam pla," "dashi," "suet"). Be specific in the note about which ingredient and which restriction it violates. Don't flag a meal you're not reasonably confident about -- false alarms cost a swap, but so does silence, so when genuinely uncertain about a real animal product or allergen, flag it.`;
 }
 
 export async function critiquePlan(input: CritiquePlanInput): Promise<PlanCritique | null> {
@@ -127,7 +140,7 @@ export async function critiquePlan(input: CritiquePlanInput): Promise<PlanCritiq
   return validateCritique(toolUse.input);
 }
 
-const VALID_REASONS = ["repetitive", "macro_miss", "other"];
+const VALID_REASONS = ["repetitive", "macro_miss", "diet_violation", "other"];
 const VALID_MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack1", "snack2"];
 
 // Never trusts the LLM's JSON shape blindly -- malformed output returns

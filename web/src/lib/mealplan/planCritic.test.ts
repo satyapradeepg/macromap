@@ -55,6 +55,19 @@ describe("validateCritique", () => {
     expect(validateCritique(raw)).toBeNull();
   });
 
+  // Added July 16 2026, per plan-critic-diet-violation-spec-2026-07-16.md.
+  it("accepts a diet_violation reason", () => {
+    const raw = {
+      overallAssessment: "One meal contains a hidden animal product.",
+      flaggedSlots: [
+        { dayIndex: 3, mealType: "dinner", reason: "diet_violation", note: "Uses fish sauce (nam pla), violates the vegan diet." },
+      ],
+    };
+    const result = validateCritique(raw);
+    expect(result).not.toBeNull();
+    expect(result!.flaggedSlots[0].reason).toBe("diet_violation");
+  });
+
   it("rejects null or non-object input", () => {
     expect(validateCritique(null)).toBeNull();
     expect(validateCritique("a string")).toBeNull();
