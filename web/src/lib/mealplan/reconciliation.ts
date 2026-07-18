@@ -92,6 +92,24 @@ export function isWithinBand(actual: MacroTargets, band: MacroBand): boolean {
   return macroGapDirections(actual, band).length === 0;
 }
 
+// User-facing signal only — deliberately separate from reconciliationStatus,
+// which is an all-or-nothing AND across 7 days x 4 macros at a strict ±5%
+// each (see orchestrate.ts) and so almost never reads "within_band" even for
+// an excellent week. This instead grades the WEEK's own total deviation
+// directly against the WEEK's own target, independent of the daily retry
+// gate, so a plan that's genuinely close doesn't get reported the same as
+// one that's genuinely broken (e.g. corpus-scarcity collapses).
+export type WeeklyAccuracyTier = "on_target" | "close" | "off_target";
+
+export function weeklyAccuracyTier(actual: MacroTargets, target: MacroTargets): WeeklyAccuracyTier {
+  const maxDeviationPct = Math.max(
+    ...MACRO_KEYS.map((key) => Math.abs(actual[key] - target[key]) / target[key]),
+  );
+  if (maxDeviationPct <= 0.05) return "on_target";
+  if (maxDeviationPct <= 0.15) return "close";
+  return "off_target";
+}
+
 // A single re-query can only nudge protein+calories bounds one way at a
 // time (see nudgedBounds) — if multiple macros are out of band in opposite
 // directions, pick the one with the largest relative overshoot to drive

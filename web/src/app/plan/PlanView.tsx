@@ -9,7 +9,7 @@ import {
   type MealType,
   type MacroTargets,
 } from "@/lib/mealplan/targets";
-import { toleranceBand, isWithinBand } from "@/lib/mealplan/reconciliation";
+import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { recipeVideoSearchUrl } from "@/lib/youtube";
 import { generatePlan, swapMeal } from "./actions";
@@ -166,9 +166,13 @@ export function PlanBoard({
       {plan && (
         <div className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
           <p className="font-semibold text-foreground">
-            {plan.reconciliationStatus === "within_band"
-              ? "This week is within your weekly targets"
-              : "This week lands slightly outside your weekly targets"}
+            {
+              {
+                on_target: "This week is within your weekly targets",
+                close: "This week lands close to your weekly targets",
+                off_target: "This week is meaningfully off your weekly targets",
+              }[weeklyAccuracyTier(plan.weeklyActual, plan.weeklyTarget)]
+            }
           </p>
           <p className="mt-1 font-mono text-xs text-muted">
             Calories: {Math.round(plan.weeklyActual.calories)} / {Math.round(plan.weeklyTarget.calories)} · Protein:{" "}

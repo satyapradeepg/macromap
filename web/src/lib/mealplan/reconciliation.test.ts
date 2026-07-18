@@ -9,6 +9,7 @@ import {
   dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
+  weeklyAccuracyTier,
 } from "./reconciliation";
 import type { ClaimedSlot } from "./claim";
 import type { RankedCandidate } from "./ranking";
@@ -74,6 +75,34 @@ describe("isWithinBand", () => {
     const dailyTarget = { calories: 2000, proteinG: 200, carbsG: 200, fatG: 70 };
     const band = toleranceBand(dailyTarget);
     expect(isWithinBand({ ...dailyTarget, carbsG: 150 }, band)).toBe(false);
+  });
+});
+
+describe("weeklyAccuracyTier", () => {
+  it("is on_target within 5% on every macro", () => {
+    expect(weeklyAccuracyTier({ ...weeklyTarget, calories: weeklyTarget.calories * 1.03 }, weeklyTarget)).toBe(
+      "on_target",
+    );
+  });
+
+  it("is close when the worst macro misses by 5-15%, even if a narrow daily band would reject it", () => {
+    expect(weeklyAccuracyTier({ ...weeklyTarget, calories: weeklyTarget.calories * 0.997 }, weeklyTarget)).toBe(
+      "on_target",
+    );
+    expect(weeklyAccuracyTier({ ...weeklyTarget, proteinG: weeklyTarget.proteinG * 0.9 }, weeklyTarget)).toBe(
+      "close",
+    );
+  });
+
+  it("is off_target when the worst macro misses by more than 15%, e.g. a corpus-scarcity collapse", () => {
+    expect(weeklyAccuracyTier({ ...weeklyTarget, calories: weeklyTarget.calories * 0.172 }, weeklyTarget)).toBe(
+      "off_target",
+    );
+  });
+
+  it("grades by the single worst macro, not an average", () => {
+    const actual = { ...weeklyTarget, calories: weeklyTarget.calories * 1.01, fatG: weeklyTarget.fatG * 1.4 };
+    expect(weeklyAccuracyTier(actual, weeklyTarget)).toBe("off_target");
   });
 });
 
