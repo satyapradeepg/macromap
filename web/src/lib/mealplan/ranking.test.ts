@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  bestScaleAndScore,
   macroDeviationScore,
   rankCandidates,
   type PantryItem,
@@ -104,6 +105,76 @@ describe("macroDeviationScore", () => {
       const hasUnwantedCarbs = macroDeviationScore({ proteinG: 40, caloriesKcal: 500, carbsG: 20, fatG: 15 }, zeroCarbTarget);
       expect(perfectFit).toBeLessThan(hasUnwantedCarbs);
     });
+  });
+});
+
+describe("bestScaleAndScore", () => {
+  it("resolves scale=1 for a candidate that's already a perfect fit", () => {
+    const result = bestScaleAndScore(
+      { proteinG: 40, caloriesKcal: 500, carbsG: 40, fatG: 15 },
+      target,
+    );
+    expect(result.scale).toBeCloseTo(1, 5);
+    expect(result.score).toBeCloseTo(0, 5);
+  });
+
+  it("scales an ideally-ratio'd but wrong-size candidate exactly to a perfect fit", () => {
+    // Every macro is exactly 0.8x the target -- same ratio as the target,
+    // just the wrong absolute serving size. The one scale (1.25) that
+    // undoes that ratio is a perfect fit on all 4 macros simultaneously,
+    // and it's within [0.6, 1.6] so no clamping is needed.
+    const result = bestScaleAndScore(
+      { proteinG: 32, caloriesKcal: 400, carbsG: 32, fatG: 12 },
+      target,
+    );
+    expect(result.scale).toBeCloseTo(1.25, 5);
+    expect(result.score).toBeCloseTo(0, 5);
+  });
+
+  it("keeps scale=1 for a badly-ratio'd candidate where no single scale helps", () => {
+    // Protein under target, calories over target, carbs/fat already exact.
+    // Scaling toward either the protein or calories breakpoint pulls the
+    // OTHER macro (and the already-exact carbs/fat) further off by more
+    // than it gains -- the true optimum, evaluated at every breakpoint, is
+    // still the unscaled candidate.
+    const result = bestScaleAndScore({ proteinG: 34, caloriesKcal: 575, carbsG: 40, fatG: 15 }, target);
+    expect(result.scale).toBeCloseTo(1, 5);
+    expect(result.score).toBeCloseTo(0.45, 5);
+  });
+
+  it("clamps to MAX_SCALE (1.6) rather than rejecting a candidate whose ideal scale exceeds it", () => {
+    // Every macro uniformly 0.4x target -- ideal scale is 2.5, clamped to
+    // 1.6. Still a clear improvement over the unscaled candidate (which
+    // scores far worse), so the clamped boundary should win, not scale=1.
+    const candidate = { proteinG: 16, caloriesKcal: 200, carbsG: 16, fatG: 6 };
+    const result = bestScaleAndScore(candidate, target);
+    expect(result.scale).toBeCloseTo(1.6, 5);
+    expect(result.score).toBeLessThan(macroDeviationScore(candidate, target));
+  });
+
+  it("clamps to MIN_SCALE (0.6) rather than rejecting a candidate whose ideal scale is below it", () => {
+    // Every macro uniformly 2.5x target -- ideal scale is 0.4, clamped to 0.6.
+    const candidate = { proteinG: 100, caloriesKcal: 1250, carbsG: 100, fatG: 37.5 };
+    const result = bestScaleAndScore(candidate, target);
+    expect(result.scale).toBeCloseTo(0.6, 5);
+    expect(result.score).toBeLessThan(macroDeviationScore(candidate, target));
+  });
+
+  it("skips a zero-valued candidate macro's breakpoint instead of dividing by zero", () => {
+    const result = bestScaleAndScore({ proteinG: 0, caloriesKcal: 500, carbsG: 40, fatG: 15 }, target);
+    expect(Number.isFinite(result.scale)).toBe(true);
+    expect(Number.isFinite(result.score)).toBe(true);
+  });
+
+  it("stays finite when the target has a zero-valued macro", () => {
+    const result = bestScaleAndScore(
+      { proteinG: 40, caloriesKcal: 500, carbsG: 20, fatG: 15 },
+      { ...target, carbsG: 0 },
+    );
+    expect(Number.isFinite(result.scale)).toBe(true);
+    expect(Number.isFinite(result.score)).toBe(true);
+    expect(result.scale).toBeGreaterThanOrEqual(0.6);
+    expect(result.scale).toBeLessThanOrEqual(1.6);
   });
 });
 
@@ -218,10 +289,64 @@ describe("rankCandidates", () => {
 
   it("attaches each candidate's real actualTier classification", () => {
     const exact = candidate({ id: 1, proteinG: 40, caloriesKcal: 500 });
-    const outsideP10 = candidate({ id: 2, proteinG: 46, caloriesKcal: 580 });
+    // Protein under target, calories over target, carbs/fat exact -- picked
+    // so that scaling toward either macro's own breakpoint makes the OTHER
+    // macro (and the already-exact carbs/fat) worse by more than it gains,
+    // so bestScaleAndScore's own optimum stays at scale=1 (unlike a
+    // uniformly-off candidate, which scaling would legitimately promote
+    // into p10 -- this fixture is deliberately un-scalable into p10, not
+    // just "not scaled" by omission).
+    const outsideP10 = candidate({ id: 2, proteinG: 34, caloriesKcal: 575 });
     const ranked = rankCandidates([exact, outsideP10], target, { tier: "free", budgetPerMealUsd: null });
     expect(ranked.find((c) => c.id === 1)!.actualTier).toBe("p10");
     expect(ranked.find((c) => c.id === 2)!.actualTier).toBe("p20");
+  });
+
+  describe("portion scaling", () => {
+    it("scales proteinG/caloriesKcal/carbsG/fatG/servings/pricePerServingCents together and reports scaleFactor", () => {
+      // Same 0.8x-uniform fixture as bestScaleAndScore's "ideally-ratio'd"
+      // test -- ideal scale is 1.25, a perfect fit on all 4 macros.
+      const candidate1 = candidate({
+        id: 1,
+        proteinG: 32,
+        caloriesKcal: 400,
+        carbsG: 32,
+        fatG: 12,
+        servings: 2,
+        pricePerServingCents: 200,
+      });
+      const [ranked] = rankCandidates([candidate1], target, { tier: "free", budgetPerMealUsd: null });
+      expect(ranked.scaleFactor).toBeCloseTo(1.25, 5);
+      expect(ranked.proteinG).toBeCloseTo(40, 5);
+      expect(ranked.caloriesKcal).toBeCloseTo(500, 5);
+      expect(ranked.carbsG).toBeCloseTo(40, 5);
+      expect(ranked.fatG).toBeCloseTo(15, 5);
+      expect(ranked.servings).toBeCloseTo(2.5, 5);
+      expect(ranked.pricePerServingCents).toBe(250); // 200 * 1.25, rounded
+    });
+
+    it("leaves pricePerServingCents null when the native candidate had no price", () => {
+      const candidate1 = candidate({ id: 1, proteinG: 32, caloriesKcal: 400, carbsG: 32, fatG: 12, pricePerServingCents: null });
+      const [ranked] = rankCandidates([candidate1], target, { tier: "free", budgetPerMealUsd: null });
+      expect(ranked.pricePerServingCents).toBeNull();
+    });
+
+    it("budget-checks the scaled price, not the native one", () => {
+      // Native price ($1.00) is under a $1.20 budget, but the ideal scale
+      // (1.25x) pushes the real cost to $1.25 -- over budget. Budget
+      // compliance must reflect what's actually being served.
+      const candidate1 = candidate({
+        id: 1,
+        proteinG: 32,
+        caloriesKcal: 400,
+        carbsG: 32,
+        fatG: 12,
+        pricePerServingCents: 100,
+      });
+      const [ranked] = rankCandidates([candidate1], target, { tier: "pro", budgetPerMealUsd: 1.2 });
+      expect(ranked.pricePerServingCents).toBe(125);
+      expect(ranked.budgetCompliant).toBe(false);
+    });
   });
 
   describe("pantry overlap (F6/F3)", () => {

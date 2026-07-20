@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST } from "./retryBudget";
+import {
+  createRetryBudget,
+  createSelectionAddonBudget,
+  trySpend,
+  RECIPE_ACTION_COST,
+  ADDON_ATTEMPT_COST,
+} from "./retryBudget";
 
 describe("retryBudget", () => {
   it("starts with the given total", () => {
@@ -38,5 +44,15 @@ describe("retryBudget", () => {
     expect(trySpend(budget, 3)).toBe(true);
     expect(budget.remaining).toBe(0);
     expect(trySpend(budget, 1)).toBe(false);
+  });
+});
+
+describe("createSelectionAddonBudget", () => {
+  it("covers one addon attempt for every recipe slot in a week (3 meals x 7 days = 21)", () => {
+    const budget = createSelectionAddonBudget();
+    expect(budget.remaining).toBe(21);
+    let attempts = 0;
+    while (trySpend(budget, ADDON_ATTEMPT_COST)) attempts++;
+    expect(attempts).toBe(21);
   });
 });

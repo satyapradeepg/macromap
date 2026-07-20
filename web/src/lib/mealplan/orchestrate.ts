@@ -21,10 +21,19 @@ import {
   type MealType,
 } from "./targets";
 import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
-import { classifyTier, type MacroBounds, type ToleranceTier } from "./tolerance";
+import { classifyTier, TOLERANCE_PCT, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
-import { createRetryBudget, trySpend, RECIPE_ACTION_COST, ADDON_ATTEMPT_COST, createAiComposeBudget, AI_COMPOSE_ACTION_COST, createPlanRepairBudget } from "./retryBudget";
+import {
+  createRetryBudget,
+  trySpend,
+  RECIPE_ACTION_COST,
+  ADDON_ATTEMPT_COST,
+  createAiComposeBudget,
+  AI_COMPOSE_ACTION_COST,
+  createPlanRepairBudget,
+  createSelectionAddonBudget,
+} from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
 import {
   toleranceBand,
@@ -135,6 +144,8 @@ function composedSnackCandidate(
     // tradeoff the way recipe search does.
     actualTier: "p10",
     isFallbackOfLastResort: false,
+    // Composed directly to target, not scaled from a fixed-size recipe.
+    scaleFactor: 1,
   };
 }
 
@@ -290,7 +301,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const makeFetcher = (excludeIds: number[], type: string): FetchCandidatesFn => (bounds, tier) =>
     fetchCandidatesWithCache(
       admin,
-      { bounds, tier, diet, intolerances, excludeIngredients, type, dietaryStyles: input.dietaryStyles },
+      { bounds, tier, diet, intolerances, excludeIngredients, type, dietaryStyles: input.dietaryStyles, allergies: input.allergies },
       excludeIds,
       inFlight,
     );
@@ -439,6 +450,105 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     claimResult.claimed.push({ slotId, candidate, tier: "p10" });
   }
 
+  // Addon-at-selection (Phase 2, July 20 2026 spec). Portion scaling
+  // (ranking.ts's bestScaleAndScore) can only perfectly fit ONE macro's
+  // ratio per candidate — confirmed live to leave a real residual gap on
+  // the others (e.g. a baseline profile's fat deviation got WORSE even as
+  // calories/protein improved). This gives every freshly-claimed recipe
+  // slot one shot at closing whatever gap scaling couldn't reach, using the
+  // already-proven `buildAddonForSlot` mechanism (previously only invoked
+  // reactively during the day-by-day reconciliation loop below). Composed
+  // snacks/AI-composed meals are skipped — they're already sized directly
+  // to target (scaleFactor 1), nothing for an addon to top up.
+  //
+  // `addons` is declared here (not below, where it used to live) so this
+  // pass and the reconciliation loop below share one Map — an addon
+  // attached here is indistinguishable to everything downstream (sumWithAddons,
+  // the final OrchestratedSlot assembly) from one attached during
+  // reconciliation.
+  const addons = new Map<string, SlotAddon>();
+  const selectionAddonBudget = createSelectionAddonBudget();
+
+  // Only called from the initial pass below. Tried also calling this again
+  // after every later reconciliation swap (to give a freshly-swapped pick a
+  // fair shot at whatever gap it has) — live-confirmed July 20 2026 that
+  // this over-added macros in combination with reconciliation's own
+  // corrective swaps, making every profile's accuracy worse, not better.
+  // Reconciliation's swap sites now just clear a stale addon and leave the
+  // slot addon-free instead of re-rolling one; see phase 2's swap-eligibility
+  // soft preference below for how addon'd slots stay protected from being
+  // disturbed in the first place, absent that.
+  async function tryAttachAddon(claimed: ClaimedSlot): Promise<void> {
+    if (slotMechanism(claimed.slotId.mealType) !== "recipe") return;
+    const target = mealTypeTargets[claimed.slotId.mealType];
+    const candidateAsTargets: MacroTargets = {
+      calories: claimed.candidate.caloriesKcal,
+      proteinG: claimed.candidate.proteinG,
+      carbsG: claimed.candidate.carbsG,
+      fatG: claimed.candidate.fatG,
+    };
+    // p10 (10%), not the aggregate reconciliation band's tighter 5% -- a
+    // single freshly-scaled recipe is noisier than a multi-slot aggregate,
+    // so this reuses the already-tuned per-candidate "closest match"
+    // tolerance from tolerance.ts instead of a new magic number.
+    //
+    // Tried p20 (20%) live July 20 2026, hoping stricter coverage would
+    // leave more non-addon'd slot inventory per day for the swap-eligibility
+    // soft preference below to work with -- it overshot the other way
+    // (addon-at-selection stopped firing at all in that run, carbs got
+    // worse than Phase 1 alone). Reverted to p10. See that same commit's
+    // notes for the honest, unresolved tension this keeps running into:
+    // reconciliation's dominantDirection picks whichever macro has the
+    // single largest RAW overshoot, unweighted -- it has no notion that
+    // fixing fat matters less to the overall score than protein/calories
+    // (macroDeviationScore's own weights), so it keeps chasing whichever
+    // macro has the biggest number and can undo an addon's fat-fixing work
+    // as a side effect even with this soft preference in place. Fully
+    // solving that needs reconciliation itself to be macro-weight-aware or
+    // addon-target-aware, not a threshold tweak -- flagged, not solved,
+    // this session.
+    const gap = dominantIncreaseGap(macroGapDirections(candidateAsTargets, toleranceBand(target, TOLERANCE_PCT.p10)));
+    if (!gap || !trySpend(selectionAddonBudget, ADDON_ATTEMPT_COST)) return;
+    retryQueriesUsed++;
+    const addon = await buildAddonForSlot(
+      claimed.candidate.caloriesKcal,
+      gap,
+      lookupIngredientMacrosForAddon,
+      dietaryCtx,
+      pantryPriceCtx,
+    );
+    if (!addon) return;
+    // Never-worse guard (found live + confirmed offline July 20 2026, via a
+    // free cached-pool simulation): closing ONE macro's gap is not the same
+    // as improving the slot's overall accuracy -- a real ingredient always
+    // carries incidental calories/carbs/fat alongside whatever it targets,
+    // and in the offline check only 4/26 candidate addons across 3 profiles
+    // actually improved the slot's own macroDeviationScore once all 4
+    // macros were accounted for. Mirrors bestScaleAndScore's own discipline
+    // (ranking.ts) of never accepting a change unless it's demonstrably
+    // better than doing nothing.
+    const withAddon = {
+      proteinG: claimed.candidate.proteinG + addon.proteinG,
+      caloriesKcal: claimed.candidate.caloriesKcal + addon.caloriesKcal,
+      carbsG: claimed.candidate.carbsG + addon.carbsG,
+      fatG: claimed.candidate.fatG + addon.fatG,
+    };
+    if (macroDeviationScore(withAddon, target) >= macroDeviationScore(claimed.candidate, target)) return;
+    addons.set(slotKey(claimed.slotId), addon);
+  }
+
+  try {
+    for (const claimed of claimResult.claimed) {
+      await tryAttachAddon(claimed);
+    }
+  } catch (err) {
+    if (!isRecoverableSpoonacularError(err)) throw err;
+    // Same "keep whatever's already built, never discard claims" rule as
+    // every other Spoonacular-touching phase in this file — a quota/outage
+    // error here just means fewer selection-time addons, not plan failure.
+    console.error("[mealplan] addon-at-selection failed (quota/outage), continuing without further selection-time addons:", err);
+  }
+
   // Daily reconciliation (reworked from weekly-only — a plan can look fine
   // on a whole-week average while individual days swing wildly; Prospre-
   // style plans reconcile per day). Runs once per day, days 0-6 in order.
@@ -477,12 +587,19 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // 7 such days sits inside the same multiple of the summed target) — so
   // there's no separate weekly check needed on top of this.
   const dailyBand = toleranceBand(input.dailyTargets);
-  const addons = new Map<string, SlotAddon>();
   const dailyStatuses: Array<"within_band" | "outside_band_after_retries"> = [];
 
   for (let dayIndex = 0; dayIndex < DAYS_PER_WEEK; dayIndex++) {
     const daySlots = () => claimResult.claimed.filter((c) => c.slotId.dayIndex === dayIndex);
-    const addonedThisDay = new Set<string>();
+    // Seeded from any addon already attached during addon-at-selection above
+    // (or, in principle, a slot re-visited within this same loop) — PRD F3
+    // caps one add-on per slot for realism, so reconciliation must never
+    // attempt a second one on a slot that already has one.
+    const addonedThisDay = new Set(
+      daySlots()
+        .filter((c) => addons.has(slotKey(c.slotId)))
+        .map((c) => slotKey(c.slotId)),
+    );
     // Fresh per-day budget (see the comment above the loop) — not shared
     // with any other day, only with this day's own protein-floor
     // enforcement pass further down.
@@ -511,10 +628,36 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(targetSlotId));
         if (!existing) break;
 
+        const dayActualBefore = sumWithAddons(daySlots(), addons);
         const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx);
         addonedThisDay.add(slotKey(targetSlotId));
+        // Never-worse guard (found live + confirmed offline July 20 2026):
+        // this pre-existing phase only ever checked "does this ingredient
+        // close the ONE gap it targeted" -- never whether adding it (with
+        // its own incidental calories/carbs/fat) actually leaves the DAY
+        // closer to its target overall. A free offline simulation against
+        // real cached pools found this pre-existing mechanism failed that
+        // check 0/21 times across 3 profiles -- it had been silently
+        // making the day's weighted accuracy worse every time it fired,
+        // this whole time, independent of anything built this session.
         if (addon) {
-          addons.set(slotKey(targetSlotId), addon);
+          // macroDeviationScore's candidate side uses caloriesKcal (asymmetric
+          // naming vs MacroTargets' calories, already established elsewhere
+          // in this file/ranking.ts) -- remap rather than fight it.
+          const asCandidate = (a: MacroTargets) => ({ proteinG: a.proteinG, caloriesKcal: a.calories, carbsG: a.carbsG, fatG: a.fatG });
+          const dayActualWith = {
+            calories: dayActualBefore.calories + addon.caloriesKcal,
+            proteinG: dayActualBefore.proteinG + addon.proteinG,
+            carbsG: dayActualBefore.carbsG + addon.carbsG,
+            fatG: dayActualBefore.fatG + addon.fatG,
+          };
+          if (macroDeviationScore(asCandidate(dayActualWith), input.dailyTargets) < macroDeviationScore(asCandidate(dayActualBefore), input.dailyTargets)) {
+            addons.set(slotKey(targetSlotId), addon);
+          }
+          // Guard-rejected addons are discarded, not kept -- but the slot
+          // stays marked addonedThisDay (same as an unresolved lookup
+          // below) so the next iteration tries a different slot rather
+          // than re-attempting the same non-improving one.
         }
         // If no addon was returned (ingredient unresolved or too small to
         // matter), the slot is still marked addonedThisDay so the next
@@ -531,11 +674,33 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
         // throws for snack types); a snack with remaining slack only gets
         // helped by phase 1's add-on, not this phase.
-        const eligible = daySlots().filter(
-          (c) => !addonedThisDay.has(slotKey(c.slotId)) && slotMechanism(c.slotId.mealType) === "recipe",
-        );
+        //
+        // Prefer swapping slots that DON'T already carry a selection-time
+        // addon, only reaching into addon'd ones if there isn't enough
+        // non-addon'd slack to close the gap. Found live July 20 2026, in
+        // two steps: excluding addon'd slots entirely (the original design)
+        // starved this phase once addon-at-selection started touching
+        // roughly half the week's recipe slots -- a day that overshot after
+        // selection-time addons had no way back into band. But swapping
+        // them completely unrestricted let this phase freely cannibalize
+        // addon-at-selection's fat-fixing work (whichever macro this
+        // phase's own dominantDirection cares about that round, not
+        // specifically fat), reopening the exact regression Phase 2 was
+        // built to close. This soft preference gets both: non-addon'd slots
+        // (plenty of real slack in a typical week) absorb ordinary
+        // correction first, addon'd slots stay protected unless truly
+        // necessary.
+        const recipeSlotsToday = daySlots().filter((c) => slotMechanism(c.slotId.mealType) === "recipe");
+        const nonAddonedEligible = recipeSlotsToday.filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
+        const addonedEligible = recipeSlotsToday.filter((c) => addonedThisDay.has(slotKey(c.slotId)));
         const affordableRequeries = Math.floor(dayRetryBudget.remaining / RECIPE_ACTION_COST);
-        const slackSlotIds = pickSlackSlots(eligible, mealTypeTargets, gaps, affordableRequeries);
+        const slackSlotIds = pickSlackSlots(nonAddonedEligible, mealTypeTargets, gaps, affordableRequeries);
+        if (slackSlotIds.length < affordableRequeries) {
+          const stillNeeded = affordableRequeries - slackSlotIds.length;
+          for (const id of pickSlackSlots(addonedEligible, mealTypeTargets, gaps, stillNeeded)) {
+            slackSlotIds.push(id);
+          }
+        }
 
         for (const slotId of slackSlotIds) {
           if (!trySpend(dayRetryBudget, RECIPE_ACTION_COST)) break;
@@ -555,7 +720,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
             // tier — reuse the slot's own original tier purely as a label for
             // the cache row's informational tolerance_tier column.
-            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType), dietaryStyles: input.dietaryStyles },
+            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
             claimedIds,
             inFlight,
           );
@@ -569,6 +734,24 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // that no longer matches the actual deviation.
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
+            // The old add-on (if any -- from addon-at-selection or an
+            // earlier phase this same day) was sized against the pre-swap
+            // recipe's calories and is no longer relevant to the newly-
+            // picked one. Same cleanup as the protein-floor swap below and
+            // actions.ts's user-initiated swap path. Also un-mark
+            // addonedThisDay so this slot is fairly reconsidered by any
+            // later phase this day, same as a slot that never had one.
+            //
+            // Deliberately NOT re-attempting an addon here (tried live July
+            // 20 2026: re-attaching after every swap compounded with the
+            // soft-preference above to over-add macros -- worse on every
+            // dimension than doing nothing). This phase only reaches an
+            // addon'd slot at all when the soft preference above already
+            // couldn't find enough non-addon'd slack, so it should stay
+            // rare; leaving the slot addon-free after a swap here is the
+            // conservative choice.
+            addons.delete(slotKey(slotId));
+            addonedThisDay.delete(slotKey(slotId));
           }
           // If nothing found, leave the existing claim unchanged — the gap
           // simply isn't closed for that slot (never fakes an exact match).
@@ -600,6 +783,14 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // Prefer an add-on (protein powder/yogurt) — but PRD F3 caps one
         // add-on per slot for realism, so only attempt this if phases 1/2
         // above didn't already attach one to this exact slot.
+        //
+        // Deliberately NOT guarded by macroDeviationScore improvement (unlike
+        // phases 1/2 above, July 20 2026) -- this phase exists to enforce a
+        // hard per-meal protein FLOOR (a safety/nutrition requirement), not
+        // to optimize weighted accuracy. An addon that pushes a meal over
+        // its floor is the correct outcome here even if it costs a few
+        // points on the day's overall weighted score elsewhere -- the two
+        // goals are genuinely different, not the same check applied twice.
         if (!addonedThisDay.has(slotKey(slotId)) && trySpend(dayRetryBudget, ADDON_ATTEMPT_COST)) {
           retryQueriesUsed++;
           const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
@@ -626,7 +817,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const bounds = nudgedBounds(slotTarget, "increase");
           const raw = await fetchCandidatesWithCache(
             admin,
-            { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType), dietaryStyles: input.dietaryStyles },
+            { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
             claimedIds,
             inFlight,
           );
@@ -641,7 +832,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
             // The old add-on (if any) was sized against the pre-swap recipe's
             // calories and is no longer relevant to the newly-picked one.
+            // Deliberately not re-attempting one here -- see phase 2's swap
+            // above for why (live-confirmed to over-add macros).
             addons.delete(slotKey(slotId));
+            addonedThisDay.delete(slotKey(slotId));
           }
         }
       }
@@ -755,6 +949,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       actualTier,
       isFallbackOfLastResort: true,
       aiComposed: true,
+      // Composed directly to target, not scaled from a fixed-size recipe.
+      scaleFactor: 1,
     };
   }
 
@@ -922,6 +1118,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       actualTier,
       isFallbackOfLastResort: true,
       aiComposed: true,
+      // Composed directly to target, not scaled from a fixed-size recipe.
+      scaleFactor: 1,
     };
   }
 
@@ -1169,6 +1367,21 @@ interface CacheableQuery {
   // backstop (see dietaryCtx below), not for querying Spoonacular (that's
   // already done via diet/intolerances above).
   dietaryStyles: string[];
+  // NOT part of the cache key, same reasoning as dietaryStyles above -- the
+  // raw, un-merged allergy list, carried through purely for the post-read
+  // safety backstop. Found live July 20 2026: without this, dietaryCtxFor
+  // below had no way to tell a real allergy apart from a dislike (both
+  // arrive pre-merged into excludeIngredients for the Spoonacular query),
+  // so it hardcoded allergies to [] and passed the whole merged list as
+  // dislikes -- silently downgrading every real allergy to "dislike"
+  // severity for this check. openEndedIngredientSafety.ts's category-wide
+  // synonym expansion (nuts/dairy/soy/etc.) is deliberately allergy-only,
+  // never dislike-only (a dislike of "blue cheese" must not block all
+  // dairy) -- so that downgrade meant a declared "tree nuts" allergy never
+  // caught "almond meal" in a real recipe's ingredients, only an exact
+  // "tree nuts" phrase match. Confirmed live: exactly this leak, on the
+  // stacked-safety profile (5 allergies incl. tree nuts).
+  allergies: string[];
 }
 
 // Real recipe-search gap found live July 15 2026 (audit round 3):
@@ -1187,7 +1400,7 @@ interface CacheableQuery {
 // response and this filter can be tightened later without invalidating
 // anything.
 function dietaryCtxFor(query: CacheableQuery): DietaryContext {
-  return { dietaryStyles: query.dietaryStyles, allergies: [], dislikes: query.excludeIngredients };
+  return { dietaryStyles: query.dietaryStyles, allergies: query.allergies, dislikes: query.excludeIngredients };
 }
 
 // Cache key deliberately excludes excludeIds (per-user) — fetched/cached
@@ -1341,7 +1554,7 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
   const fetcher: FetchCandidatesFn = (bounds, tier) =>
     fetchCandidatesWithCache(
       admin,
-      { bounds, tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(input.mealType), dietaryStyles: input.dietaryStyles },
+      { bounds, tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(input.mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
       input.excludeRecipeIds,
       inFlight,
     );

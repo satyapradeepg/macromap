@@ -45,6 +45,13 @@ export interface PlanSlotView {
   carbsG: number;
   fatG: number;
   pricePerServingCents: number | null;
+  // Multiplier applied to a recipe's native serving to fit its slot's macro
+  // target (ranking.ts's bestScaleAndScore, July 20 2026 spec). 1 for
+  // composed snacks/AI-composed meals (already sized directly to target).
+  // Not surfaced in the UI today (decided against a visible "1.4x serving"
+  // note) — kept for display/debugging since every macro field above
+  // already reflects the scaled amount, not the recipe's native one.
+  scaleFactor: number;
   toleranceTier: ToleranceTier;
   matchLabel: string | null;
   addon: PlanSlotAddonView | null;
@@ -135,6 +142,7 @@ export async function getMostRecentPlan(
         carbsG: s.carbs_g,
         fatG: s.fat_g,
         pricePerServingCents: s.price_per_serving_cents,
+        scaleFactor: s.scale_factor,
         toleranceTier: s.tolerance_tier,
         matchLabel: s.match_label,
         addon: addonRow

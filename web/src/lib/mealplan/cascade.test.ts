@@ -40,7 +40,12 @@ describe("runCascadeForSlot", () => {
 
   it("labels a candidate outside p10 but within p20 as p20, even though it came from the p30 fetch", async () => {
     // p10 bounds: protein 36-44, calories 450-550. p20 bounds: 32-48, 400-600.
-    const fetch = vi.fn().mockResolvedValue([candidate({ proteinG: 46, caloriesKcal: 580 })]);
+    // Protein under target, calories over target, carbs/fat exact -- picked
+    // so portion scaling (ranking.ts's bestScaleAndScore) can't rescue this
+    // into p10: pulling either macro toward its own breakpoint pushes the
+    // other macro, and the already-exact carbs/fat, further off by more
+    // than it gains, so the true score-optimum stays at scale=1.
+    const fetch = vi.fn().mockResolvedValue([candidate({ proteinG: 34, caloriesKcal: 575 })]);
     const result = await runCascadeForSlot(target, fetch, rankOpts);
     expect(result.rankedCandidates[0].actualTier).toBe("p20");
   });
@@ -86,6 +91,7 @@ describe("matchLabelFor", () => {
       budgetCompliant: true,
       actualTier: "p10" as const,
       isFallbackOfLastResort: false,
+      scaleFactor: 1,
     };
     expect(matchLabelFor("p10", c, target)).toBeNull();
   });
@@ -97,6 +103,7 @@ describe("matchLabelFor", () => {
       budgetCompliant: true,
       actualTier: "p20" as const,
       isFallbackOfLastResort: false,
+      scaleFactor: 1,
     };
     const label = matchLabelFor("p20", c, target);
     expect(label).toContain("Closest match");
@@ -110,6 +117,7 @@ describe("matchLabelFor", () => {
       budgetCompliant: false,
       actualTier: "p10" as const,
       isFallbackOfLastResort: true,
+      scaleFactor: 1,
     };
     expect(matchLabelFor("p10", c, target)).toContain("Closest to your budget");
   });
@@ -124,6 +132,7 @@ describe("matchLabelFor", () => {
       budgetCompliant: false,
       actualTier: "p10" as const,
       isFallbackOfLastResort: false,
+      scaleFactor: 1,
     };
     expect(matchLabelFor("p10", c, target)).toContain("Closest to your budget");
   });

@@ -35,6 +35,7 @@ function claimedSlot(id: number, index: number, overrides: Partial<RankedCandida
       budgetCompliant: true,
       actualTier: "p10",
       isFallbackOfLastResort: false,
+      scaleFactor: 1,
       ...overrides,
     },
   };
@@ -46,6 +47,19 @@ describe("toleranceBand", () => {
   it("is +/-5% of the weekly target", () => {
     const band = toleranceBand(weeklyTarget);
     expect(band.calories).toEqual({ min: 13300, max: 14700 });
+  });
+
+  it("still defaults to +/-5% when no pct is passed (regression guard for the optional param)", () => {
+    const band = toleranceBand(weeklyTarget);
+    expect(band.proteinG).toEqual({ min: 1330, max: 1470 });
+    expect(band.carbsG).toEqual({ min: 1330, max: 1470 });
+    expect(band.fatG).toEqual({ min: 475, max: 525 });
+  });
+
+  it("uses an explicit pct override instead of the default when passed (Phase 2 addon-at-selection uses p10/0.1)", () => {
+    const band = toleranceBand(weeklyTarget, 0.1);
+    expect(band.calories.min).toBeCloseTo(12600, 5);
+    expect(band.calories.max).toBeCloseTo(15400, 5);
   });
 });
 

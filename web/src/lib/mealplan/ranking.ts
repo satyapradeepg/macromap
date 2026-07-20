@@ -51,6 +51,15 @@ export interface RankedCandidate extends RecipeCandidate {
   // 'ai_composed') from a plain composed SNACK (recipe_source
   // 'composed') even though both use a synthetic negative id.
   aiComposed?: boolean;
+  // Portion scaling (Epic E2 follow-up, July 20 2026 spec): the multiplier
+  // applied to the candidate's native per-serving macros/price/servings to
+  // better fit `target`. 1 means unscaled. Every other field on this
+  // RankedCandidate (proteinG, caloriesKcal, carbsG, fatG,
+  // pricePerServingCents, servings) already reflects the SCALED value, not
+  // the original RecipeCandidate's native one -- scaleFactor exists so the
+  // native value stays recoverable (amount / scaleFactor) and so it can be
+  // persisted for display/debugging.
+  scaleFactor: number;
 }
 
 // Protein weighted 2x, carbs/fat weighted 0.5x, per F1's macro-split
@@ -96,6 +105,51 @@ export function macroDeviationScore(
   const carbsDeviation = safeRelativeDeviation(candidate.carbsG, target.carbsG) * CARB_FAT_WEIGHT;
   const fatDeviation = safeRelativeDeviation(candidate.fatG, target.fatG) * CARB_FAT_WEIGHT;
   return proteinDeviation + caloriesDeviation + carbsDeviation + fatDeviation;
+}
+
+// Portion scaling (July 20 2026 spec, following the head-to-head Prospre
+// comparison): Spoonacular's native per-serving macros are treated today as
+// a fixed, unscalable amount, but real recipes can realistically be served
+// at more or less than one native serving. macroDeviationScore is a sum of
+// terms each piecewise-linear (and, since each |.| term is convex and the
+// weights are positive, convex overall) in `scale`, so its true minimum is
+// always attained either at scale=1 (no scaling) or at one of the 4
+// per-macro "perfect fit" breakpoints (target_i / candidate_i) -- no
+// numerical search needed, just evaluate the (clamped) breakpoints and
+// scale=1, keep the best. Always scoring scale=1 as one of the candidates
+// guarantees this can never pick something worse than today's unscaled
+// behavior.
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 1.6;
+
+export function bestScaleAndScore(
+  candidate: { proteinG: number; caloriesKcal: number; carbsG: number; fatG: number },
+  target: { proteinG: number; calories: number; carbsG: number; fatG: number },
+): { scale: number; score: number } {
+  const breakpoints = [1];
+  for (const [c, t] of [
+    [candidate.proteinG, target.proteinG],
+    [candidate.caloriesKcal, target.calories],
+    [candidate.carbsG, target.carbsG],
+    [candidate.fatG, target.fatG],
+  ] as const) {
+    if (c > 0) breakpoints.push(t / c);
+  }
+
+  let best = { scale: 1, score: macroDeviationScore(candidate, target) };
+  for (const raw of breakpoints) {
+    if (!Number.isFinite(raw)) continue;
+    const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, raw));
+    const scaled = {
+      proteinG: candidate.proteinG * scale,
+      caloriesKcal: candidate.caloriesKcal * scale,
+      carbsG: candidate.carbsG * scale,
+      fatG: candidate.fatG * scale,
+    };
+    const score = macroDeviationScore(scaled, target);
+    if (score < best.score) best = { scale, score };
+  }
+  return best;
 }
 
 // PRD 7.3 F3: pantry overlap is "a small deduction" that "never overrides
@@ -175,18 +229,36 @@ export function rankCandidates(
   const budgetLimitCents = budgetAware ? opts.budgetPerMealUsd! * 100 : null;
   const pantryItems = opts.pantryItems ?? [];
 
-  const scored = candidates.map((candidate) => ({
-    ...candidate,
-    score:
-      macroDeviationScore(candidate, target) -
-      pantryOverlapDeduction(candidate.ingredients, pantryItems),
-    budgetCompliant:
-      !budgetAware ||
-      candidate.pricePerServingCents === null ||
-      candidate.pricePerServingCents <= budgetLimitCents!,
-    actualTier: classifyTier(candidate, target),
-    isFallbackOfLastResort: false,
-  }));
+  const scored = candidates.map((candidate) => {
+    const { scale, score } = bestScaleAndScore(candidate, target);
+    // Every macro/price/servings field below is scaled -- classifyTier,
+    // budgetCompliant, and every downstream reader of this RankedCandidate
+    // (matchLabelFor, daily/weekly actual-summing, reconciliation) must all
+    // see what was actually picked, not the native Spoonacular amount.
+    const scaledCandidate = {
+      ...candidate,
+      proteinG: candidate.proteinG * scale,
+      caloriesKcal: candidate.caloriesKcal * scale,
+      carbsG: candidate.carbsG * scale,
+      fatG: candidate.fatG * scale,
+      servings: candidate.servings * scale,
+      pricePerServingCents:
+        candidate.pricePerServingCents === null
+          ? null
+          : Math.round(candidate.pricePerServingCents * scale),
+    };
+    return {
+      ...scaledCandidate,
+      score: score - pantryOverlapDeduction(candidate.ingredients, pantryItems),
+      budgetCompliant:
+        !budgetAware ||
+        scaledCandidate.pricePerServingCents === null ||
+        scaledCandidate.pricePerServingCents <= budgetLimitCents!,
+      actualTier: classifyTier(scaledCandidate, target),
+      isFallbackOfLastResort: false,
+      scaleFactor: scale,
+    };
+  });
 
   if (!budgetAware) {
     return sortCandidates(scored, budgetAware);

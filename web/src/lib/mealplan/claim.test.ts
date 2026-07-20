@@ -20,6 +20,7 @@ function ranked(id: number, overrides: Partial<RankedCandidate> = {}): RankedCan
     budgetCompliant: true,
     actualTier: "p10",
     isFallbackOfLastResort: false,
+    scaleFactor: 1,
     ...overrides,
   };
 }

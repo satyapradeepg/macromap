@@ -28,10 +28,10 @@ export interface MacroBand {
   fatG: { min: number; max: number };
 }
 
-export function toleranceBand(target: MacroTargets): MacroBand {
+export function toleranceBand(target: MacroTargets, pct: number = BAND_PCT): MacroBand {
   const band = (value: number) => ({
-    min: value * (1 - BAND_PCT),
-    max: value * (1 + BAND_PCT),
+    min: value * (1 - pct),
+    max: value * (1 + pct),
   });
   return {
     calories: band(target.calories),

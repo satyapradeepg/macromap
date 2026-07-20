@@ -72,6 +72,24 @@ export function createPlanRepairBudget(): RetryBudget {
   return { remaining: RECIPE_ACTION_COST * 5 };
 }
 
+// Addon-at-selection (Phase 2, July 20 2026 spec) — one addon attempt per
+// recipe slot (breakfast/lunch/dinner x 7 days = 21; composed snacks never
+// go through this path) is the real ceiling. Whole-generation, not
+// day-scoped, since it runs once during initial claim resolution before the
+// per-day reconciliation loop even starts. Sized to the real max so the
+// budget itself is never the bottleneck — the spec's own dry-run estimated
+// only ~20-25% of slots actually need one.
+//
+// Deliberately NOT re-attempted after a later reconciliation swap (tried
+// live July 20 2026 -- combined with reconciliation's own corrective swaps,
+// re-attaching after every swap over-added macros and made every profile's
+// accuracy worse, not better). Reconciliation's swap phase now clears a
+// stale addon on swap but leaves the slot addon-free rather than
+// re-rolling one.
+export function createSelectionAddonBudget(): RetryBudget {
+  return createRetryBudget(21);
+}
+
 // No partial spend: returns false (and leaves remaining untouched) if the
 // budget can't cover the full request.
 export function trySpend(budget: RetryBudget, n = 1): boolean {
