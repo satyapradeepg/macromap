@@ -145,6 +145,151 @@ export async function proposeMealViaClaude(input: ProposeMealInput): Promise<Mea
   return validateProposal(toolUse.input);
 }
 
+// Batch-aware variant (added 2026-07-20) — the single-slot function above
+// calls Claude once per blocked slot, each time with ONLY that slot's own
+// target and zero visibility into the other slots also being filled this
+// same generation. Found live: a genuinely blocked slot is never alone —
+// orchestrate.ts's AI-compose fallback only ever runs on whatever's left
+// after the entire recipe-search+reconciliation pipeline gives up, so by
+// the time it fires there are usually 2-3+ blocked slots at once, all
+// solved in isolation. This batches them into ONE call so Claude can trade
+// off across the group (e.g. lean higher-protein on one dish, lower on
+// another) instead of forcing every single dish to independently hit its
+// own narrow share. Deliberately still not "the whole week" — scoped to
+// exactly the slots THIS fallback is being asked to fill right now, same
+// as the function above; the broader weekly-reconciliation system is a
+// separate, already-existing concern (see reconciliation.ts).
+export interface ProposeMealsBatchInput {
+  slots: Array<{ mealType: "breakfast" | "lunch" | "dinner"; target: MacroTargets }>;
+  aggregateTarget: MacroTargets;
+  dietaryStyles: string[];
+  allergies: string[];
+  dislikes: string[];
+  pantryItemNames: string[];
+}
+
+const PROPOSE_MEALS_BATCH_TOOL = {
+  name: "propose_meals",
+  description: "Propose several real, realistic dishes at once (one per requested slot) and their ingredient lists, balanced together against a combined target.",
+  input_schema: {
+    type: "object",
+    properties: {
+      meals: {
+        type: "array",
+        description: "Exactly one entry per requested slot below, in the SAME order the slots were listed.",
+        items: {
+          type: "object",
+          properties: {
+            dishName: { type: "string", description: "A real, specific dish name a person would recognize, e.g. 'Seitan Scramble with Spinach and Whole Wheat Toast'." },
+            ingredients: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string", description: "A real, searchable whole-food or common grocery ingredient name (not a brand name)." },
+                  role: { type: "string", enum: ["protein", "carb", "fat", "fixed"] },
+                  fixedAmountG: { type: "number", description: "Only for role='fixed' (a small garnish/aromatic): a realistic gram amount, e.g. 40 for a side of spinach." },
+                },
+                required: ["name", "role"],
+              },
+            },
+          },
+          required: ["dishName", "ingredients"],
+        },
+      },
+    },
+    required: ["meals"],
+  },
+};
+
+export function buildBatchPrompt(input: ProposeMealsBatchInput): string {
+  const { slots, aggregateTarget, dietaryStyles, allergies, dislikes, pantryItemNames } = input;
+  const slotLines = slots
+    .map(
+      (s, i) =>
+        `Slot ${i + 1} (${s.mealType}) — individually needs roughly ${Math.round(s.target.calories)} cal / ${Math.round(s.target.proteinG)}g protein / ${Math.round(s.target.carbsG)}g carbs / ${Math.round(s.target.fatG)}g fat`,
+    )
+    .join("\n");
+
+  return `Propose ${slots.length} realistic meals to fill these slots, in this exact order:
+${slotLines}
+
+The individual numbers above are each slot's own even share, but what actually matters most is the COMBINED total across all ${slots.length} dishes together:
+- ${Math.round(aggregateTarget.calories)} calories
+- ${Math.round(aggregateTarget.proteinG)}g protein
+- ${Math.round(aggregateTarget.carbsG)}g carbs
+- ${Math.round(aggregateTarget.fatG)}g fat
+
+You do NOT need every single dish to hit its own individual share exactly — feel free to lean one dish higher in protein and another lower, as long as the total across all ${slots.length} lands close to the combined target above. Use this freedom deliberately (e.g. a naturally protein-dense dish for one slot, a lighter one for another) rather than proposing ${slots.length} near-identical meals.
+
+Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
+- Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
+- Allergies (absolute, safety-critical -- think about hidden forms, not just the literal word): ${allergies.length ? allergies.join(", ") : "none"}
+- Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
+
+${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuinely fit a dish, but never at the expense of the constraints above or of realism): ${pantryItemNames.join(", ")}` : ""}
+
+Requirements for EACH proposal:
+1. Name a REAL, coherent, recognizable dish for its meal type -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
+2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
+3. Each "protein" ingredient MUST be dense enough to plausibly hit that dish's own protein share within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
+4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
+5. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
+}
+
+// Extracted as its own pure function (mirrors validateProposal above) so
+// the malformed/mismatched-response handling is unit-testable without
+// mocking fetch — this codebase's established pattern (proposeMealViaClaude
+// itself has no dedicated unit test either; only validateProposal does).
+// Returns null (never throws) for anything unusable -- one bad entry, or
+// the wrong count, invalidates the WHOLE batch rather than trusting a
+// partial result, same "never partially applied" discipline as everywhere
+// else in this fallback.
+export function validateBatchProposals(rawMeals: unknown, expectedCount: number): MealProposal[] | null {
+  if (!Array.isArray(rawMeals) || rawMeals.length !== expectedCount) return null;
+
+  const proposals: MealProposal[] = [];
+  for (const raw of rawMeals) {
+    const proposal = validateProposal(raw);
+    if (!proposal) return null;
+    proposals.push(proposal);
+  }
+  return proposals;
+}
+
+export async function proposeMealsBatchViaClaude(input: ProposeMealsBatchInput): Promise<MealProposal[] | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY is not set");
+  }
+  if (input.slots.length === 0) return null;
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1024 + input.slots.length * 512,
+      tools: [PROPOSE_MEALS_BATCH_TOOL],
+      tool_choice: { type: "tool", name: "propose_meals" },
+      messages: [{ role: "user", content: buildBatchPrompt(input) }],
+    }),
+  });
+
+  if (!response.ok) return null;
+
+  const body = await response.json();
+  const toolUse = (body.content ?? []).find((block: { type: string }) => block.type === "tool_use");
+  if (!toolUse) return null;
+
+  const rawMeals = (toolUse.input as Record<string, unknown> | null)?.meals;
+  return validateBatchProposals(rawMeals, input.slots.length);
+}
+
 const VALID_ROLES: MealRole[] = ["protein", "carb", "fat", "fixed"];
 
 // Never trusts the LLM's JSON shape blindly -- malformed output returns

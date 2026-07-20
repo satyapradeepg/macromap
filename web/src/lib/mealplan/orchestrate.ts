@@ -43,7 +43,7 @@ import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
 import { type PantryPriceContext } from "./pantryPricePreference";
 import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
-import { proposeMealViaClaude } from "./mealProposer";
+import { proposeMealViaClaude, proposeMealsBatchViaClaude } from "./mealProposer";
 import { anyIngredientUnsafeFor } from "./openEndedIngredientSafety";
 import { critiquePlan, type PlanSlotSummary } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
@@ -684,34 +684,17 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // or portion-realism checks, an ingredient doesn't resolve) leaves the
   // slot exactly as blocked as it already was — never partially applied,
   // never forces an unsafe or unrealistic result through.
-  const aiComposeBudget = createAiComposeBudget();
-  for (const [key] of [...blockedHints.entries()]) {
-    if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
-
-    const slotId = allSlots.find((s) => slotKey(s) === key);
-    // Snack slots are composed separately above and never end up in
-    // blockedHints via this path in practice, but guard explicitly rather
-    // than assume — this fallback is scoped to recipe-mechanism slots.
-    if (!slotId || slotMechanism(slotId.mealType) !== "recipe") continue;
-
-    const slotTarget = mealTypeTargets[slotId.mealType];
-
-    let proposal;
-    try {
-      proposal = await proposeMealViaClaude({
-        mealType: slotId.mealType as "breakfast" | "lunch" | "dinner",
-        target: slotTarget,
-        dietaryStyles: input.dietaryStyles,
-        allergies: input.allergies,
-        dislikes: input.dislikes,
-        pantryItemNames,
-      });
-    } catch (err) {
-      console.error(`[mealplan] AI composition call failed for ${key}, leaving slot blocked:`, err);
-      continue;
-    }
-    if (!proposal) continue;
-
+  // Turns an already-obtained proposal (from either the batch or single-slot
+  // path below) into a claimable candidate, or null on any recoverable
+  // failure (safety/portion-realism/grounding) -- same "stays honestly
+  // blocked" contract as before batching was introduced. Shared by both
+  // paths so the grounding/pricing/tier math is identical regardless of
+  // which one produced the proposal.
+  async function composeProposalToCandidate(
+    proposal: NonNullable<Awaited<ReturnType<typeof proposeMealViaClaude>>>,
+    slotTarget: MacroTargets,
+    key: string,
+  ): Promise<RankedCandidate | null> {
     // Wrapped July 16 2026 (comprehensive engine test) -- this grounds
     // every proposed ingredient via a real Spoonacular lookup, and used
     // to be the one unguarded call in this whole loop: a quota error here
@@ -725,9 +708,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     } catch (err) {
       if (!isRecoverableSpoonacularError(err)) throw err;
       console.error(`[mealplan] AI composition grounding failed for ${key} (quota/outage), leaving slot blocked:`, err);
-      continue;
+      return null;
     }
-    if (!composed) continue; // safety/portion-realism/grounding failure -- stays honestly blocked
+    if (!composed) return null; // safety/portion-realism/grounding failure -- stays honestly blocked
 
     const actualTier = classifyTier(
       { proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories },
@@ -740,15 +723,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // as everywhere else: only checked when Pro + a budget is set, and an
     // unknown price is never treated as non-compliant.
     // Rounded to an integer -- meal_plan_slots.price_per_serving_cents is an
-  // integer column; Spoonacular's own pricePerServing hit this exact same
-  // "invalid input syntax for type integer" failure earlier in this
-  // project (a float slipped through unrounded) and the fix there was the
-  // same: round at the point a real value becomes this column's input.
-  const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
+    // integer column; Spoonacular's own pricePerServing hit this exact same
+    // "invalid input syntax for type integer" failure earlier in this
+    // project (a float slipped through unrounded) and the fix there was the
+    // same: round at the point a real value becomes this column's input.
+    const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
     const budgetCompliant =
       !pantryPriceCtx.budgetAware || pricePerServingCents === null || budgetPerMealUsd === null || pricePerServingCents <= budgetPerMealUsd * 100;
 
-    const candidate: RankedCandidate = {
+    return {
       id: syntheticAiMealId--,
       title: composed.dishName,
       imageUrl: null,
@@ -773,9 +756,101 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       isFallbackOfLastResort: true,
       aiComposed: true,
     };
+  }
 
-    claimResult.claimed.push({ slotId, candidate, tier: actualTier });
-    blockedHints.delete(key);
+  // Single-slot path (the original, pre-batch mechanism) -- now also the
+  // fallback used if the batch call below fails or comes back malformed,
+  // so batching can never REDUCE resilience versus the old one-call-per-
+  // slot behavior, only improve on it when it works.
+  async function attemptSingleSlotAiCompose(slotId: MealSlotId, slotTarget: MacroTargets, key: string): Promise<RankedCandidate | null> {
+    let proposal;
+    try {
+      proposal = await proposeMealViaClaude({
+        mealType: slotId.mealType as "breakfast" | "lunch" | "dinner",
+        target: slotTarget,
+        dietaryStyles: input.dietaryStyles,
+        allergies: input.allergies,
+        dislikes: input.dislikes,
+        pantryItemNames,
+      });
+    } catch (err) {
+      console.error(`[mealplan] AI composition call failed for ${key}, leaving slot blocked:`, err);
+      return null;
+    }
+    if (!proposal) return null;
+    return composeProposalToCandidate(proposal, slotTarget, key);
+  }
+
+  // Batch-aware AI composition (added 2026-07-20) -- a genuinely blocked
+  // slot is never alone by the time this fallback fires (it only runs on
+  // whatever the entire recipe-search+reconciliation pipeline already gave
+  // up on), so the old one-call-per-slot version solved every slot in
+  // total isolation from every other one still blocked in the SAME
+  // generation. Batches them into ONE Claude call with the combined target
+  // across the group (see mealProposer.ts's proposeMealsBatchViaClaude),
+  // so Claude can lean higher-protein on one dish and lower on another
+  // instead of forcing each dish to independently hit its own narrow
+  // share. Falls back to the original per-slot path (never just gives up)
+  // if the batch call errors or returns something unusable.
+  const aiComposeBudget = createAiComposeBudget();
+  const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets }> = [];
+  for (const [key] of [...blockedHints.entries()]) {
+    const slotId = allSlots.find((s) => slotKey(s) === key);
+    // Snack slots are composed separately above and never end up in
+    // blockedHints via this path in practice, but guard explicitly rather
+    // than assume — this fallback is scoped to recipe-mechanism slots.
+    if (!slotId || slotMechanism(slotId.mealType) !== "recipe") continue;
+    if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
+    eligible.push({ key, slotId, target: mealTypeTargets[slotId.mealType] });
+  }
+
+  if (eligible.length > 0) {
+    const aggregateTarget = eligible.reduce<MacroTargets>(
+      (sum, e) => ({
+        calories: sum.calories + e.target.calories,
+        proteinG: sum.proteinG + e.target.proteinG,
+        carbsG: sum.carbsG + e.target.carbsG,
+        fatG: sum.fatG + e.target.fatG,
+      }),
+      { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+    );
+
+    let batchProposals: Awaited<ReturnType<typeof proposeMealsBatchViaClaude>> = null;
+    try {
+      batchProposals = await proposeMealsBatchViaClaude({
+        slots: eligible.map((e) => ({ mealType: e.slotId.mealType as "breakfast" | "lunch" | "dinner", target: e.target })),
+        aggregateTarget,
+        dietaryStyles: input.dietaryStyles,
+        allergies: input.allergies,
+        dislikes: input.dislikes,
+        pantryItemNames,
+      });
+    } catch (err) {
+      console.error(`[mealplan] batch AI composition call failed, falling back to per-slot:`, err);
+    }
+
+    if (batchProposals && batchProposals.length === eligible.length) {
+      for (let i = 0; i < eligible.length; i++) {
+        const { key, slotId, target } = eligible[i];
+        const candidate = await composeProposalToCandidate(batchProposals[i], target, key);
+        if (candidate) {
+          claimResult.claimed.push({ slotId, candidate, tier: candidate.actualTier ?? "p30" });
+          blockedHints.delete(key);
+        }
+      }
+    } else {
+      // Batch attempt didn't produce a usable result (network error,
+      // malformed tool call, wrong count) -- fall back to the original
+      // one-call-per-slot path for every slot still in this batch, exactly
+      // as if batching had never been attempted.
+      for (const { key, slotId, target } of eligible) {
+        const candidate = await attemptSingleSlotAiCompose(slotId, target, key);
+        if (candidate) {
+          claimResult.claimed.push({ slotId, candidate, tier: candidate.actualTier ?? "p30" });
+          blockedHints.delete(key);
+        }
+      }
+    }
   }
 
   // Last-resort fallback for a flagged diet_violation with no real recipe

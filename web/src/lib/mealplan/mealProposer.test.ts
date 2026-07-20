@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateProposal, buildPrompt, safeProteinExamples } from "./mealProposer";
+import { validateProposal, buildPrompt, safeProteinExamples, buildBatchPrompt, validateBatchProposals } from "./mealProposer";
 
 describe("validateProposal", () => {
   it("accepts a well-formed proposal", () => {
@@ -148,5 +148,88 @@ describe("buildPrompt", () => {
       pantryItemNames: [],
     });
     expect(prompt).not.toContain("Pantry on hand");
+  });
+});
+
+// Batch-aware AI-compose (added 2026-07-20) -- gives Claude visibility
+// into ALL currently-blocked slots + their combined target in one call,
+// instead of one call per slot blind to the others.
+describe("buildBatchPrompt", () => {
+  it("lists every slot individually, in order, plus the combined aggregate target", () => {
+    const prompt = buildBatchPrompt({
+      slots: [
+        { mealType: "breakfast", target: { calories: 400, proteinG: 22, carbsG: 48, fatG: 13 } },
+        { mealType: "breakfast", target: { calories: 400, proteinG: 22, carbsG: 48, fatG: 13 } },
+        { mealType: "lunch", target: { calories: 600, proteinG: 35, carbsG: 60, fatG: 18 } },
+      ],
+      aggregateTarget: { calories: 1400, proteinG: 79, carbsG: 156, fatG: 44 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt).toContain("Slot 1 (breakfast)");
+    expect(prompt).toContain("Slot 2 (breakfast)");
+    expect(prompt).toContain("Slot 3 (lunch)");
+    expect(prompt).toContain("1400");
+    expect(prompt).toContain("79");
+    expect(prompt).toContain("Propose 3 realistic meals");
+    expect(prompt).toContain("exactly 3 meals");
+  });
+
+  it("explicitly grants freedom to redistribute macros across the batch rather than matching each slot exactly", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt.toLowerCase()).toContain("do not need every single dish to hit its own individual share exactly");
+  });
+
+  it("still filters protein examples by allergies/dietary style, same as the single-slot prompt", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "breakfast", target: { calories: 400, proteinG: 30, carbsG: 40, fatG: 12 } }],
+      aggregateTarget: { calories: 400, proteinG: 30, carbsG: 40, fatG: 12 },
+      dietaryStyles: ["vegan"],
+      allergies: ["nuts", "shellfish", "soy", "dairy"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const suggestionLine = prompt.split("\n").find((l) => l.includes("Options that fit the constraints above"))!;
+    expect(suggestionLine.toLowerCase()).not.toContain("tempeh");
+  });
+});
+
+describe("validateBatchProposals", () => {
+  const wellFormed = { dishName: "X", ingredients: [{ name: "seitan", role: "protein" }] };
+
+  it("accepts an array matching the expected count", () => {
+    const result = validateBatchProposals([wellFormed, wellFormed], 2);
+    expect(result).toHaveLength(2);
+  });
+
+  it("rejects a count mismatch (too few)", () => {
+    expect(validateBatchProposals([wellFormed], 2)).toBeNull();
+  });
+
+  it("rejects a count mismatch (too many)", () => {
+    expect(validateBatchProposals([wellFormed, wellFormed, wellFormed], 2)).toBeNull();
+  });
+
+  it("rejects the whole batch if even one entry is malformed", () => {
+    const malformed = { dishName: "", ingredients: [] };
+    expect(validateBatchProposals([wellFormed, malformed], 2)).toBeNull();
+  });
+
+  it("rejects a non-array input", () => {
+    expect(validateBatchProposals("not an array", 1)).toBeNull();
+    expect(validateBatchProposals(null, 1)).toBeNull();
+  });
+
+  it("rejects an empty array when a positive count was expected", () => {
+    expect(validateBatchProposals([], 2)).toBeNull();
   });
 });
