@@ -133,17 +133,24 @@ export function isKnownIngredientUnsafeFor(ingredientKey: string, ctx: DietaryCo
     }
   }
 
-  if (entry.containsNut && mentionsAny(userWords, NUT_SYNONYMS)) {
-    return "contains nuts (explicit allergy/dislike)";
+  // Category-tag checks (below, via entry.containsX) are deliberately
+  // allergy/dietary-style ONLY, never dislikes -- same bug and same fix as
+  // the sibling open-ended gate (openEndedIngredientSafety.ts), found live
+  // July 20 2026: a free-text DISLIKE of "blue cheese" matched "cheese" in
+  // DAIRY_SYNONYMS and excluded every containsDairy-tagged pool item
+  // (yogurt, cottage cheese, protein powder), not just blue cheese itself.
+  // A dislike only ever earns the direct ingredientKey match above.
+  if (entry.containsNut && mentionsAny(ctx.allergies, NUT_SYNONYMS)) {
+    return "contains nuts (explicit allergy)";
   }
-  if (entry.containsDairy && (mentionsAny(userWords, DAIRY_SYNONYMS) || intolerances.includes("dairy"))) {
-    return "contains dairy (explicit allergy/dislike or dairy-free diet)";
+  if (entry.containsDairy && (mentionsAny(ctx.allergies, DAIRY_SYNONYMS) || intolerances.includes("dairy"))) {
+    return "contains dairy (explicit allergy or dairy-free diet)";
   }
-  if (entry.containsSoy && mentionsAny(userWords, SOY_SYNONYMS)) {
-    return "contains soy (explicit allergy/dislike)";
+  if (entry.containsSoy && mentionsAny(ctx.allergies, SOY_SYNONYMS)) {
+    return "contains soy (explicit allergy)";
   }
-  if (entry.containsGluten && (mentionsAny(userWords, GLUTEN_SYNONYMS) || intolerances.includes("gluten"))) {
-    return "contains gluten (explicit allergy/dislike or gluten-free diet)";
+  if (entry.containsGluten && (mentionsAny(ctx.allergies, GLUTEN_SYNONYMS) || intolerances.includes("gluten"))) {
+    return "contains gluten (explicit allergy or gluten-free diet)";
   }
 
   if (!entry.veganCompliant && ctx.dietaryStyles.includes("vegan")) {

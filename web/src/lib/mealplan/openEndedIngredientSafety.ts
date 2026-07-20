@@ -161,7 +161,9 @@ function containsAny(haystack: string, needles: string[]): string | null {
 // "nothing here flagged it," same caveat as any keyword-based check.
 export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: DietaryContext): string | null {
   const name = normalize(ingredientName);
-  const userWords = [...ctx.allergies, ...ctx.dislikes].map(normalize).filter(Boolean);
+  const allergyWords = ctx.allergies.map(normalize).filter(Boolean);
+  const dislikeWords = ctx.dislikes.map(normalize).filter(Boolean);
+  const userWords = [...allergyWords, ...dislikeWords];
   const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
 
   for (const word of userWords) {
@@ -170,6 +172,15 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     }
   }
 
+  // Category-wide expansion (below) is deliberately allergy/dietary-style
+  // ONLY, never dislikes -- found live July 20 2026 (dimension-5 dislike
+  // stress test): a free-text DISLIKE of "blue cheese" word-boundary-
+  // matched "cheese" in DAIRY_SYNONYMS and silently excluded the entire
+  // dairy category (yogurt/milk/cream/butter too), starving 3 breakfast
+  // slots that had nothing to do with blue cheese. A dislike is a soft,
+  // single-item preference -- it only ever earns the direct name match
+  // above, never a category-wide exclusion, which is reserved for real
+  // allergies/dietary styles where over-blocking is the safe default.
   for (const group of SYNONYM_GROUPS) {
     // Word-boundary match, not bare array membership -- found live July 16
     // 2026 (comprehensive engine test). The old `group.words.includes(w)`
@@ -189,7 +200,7 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     // PLANT_MODIFIERS exception, just applied to the user's own word
     // instead of the ingredient name.
     const userMentionedThisCategory =
-      userWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
+      allergyWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
       (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance));
     if (!userMentionedThisCategory) continue;
     const hit = containsAny(name, group.alsoMatches);

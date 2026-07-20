@@ -59,14 +59,40 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("almonds", ctx)).toBeNull();
     });
 
-    it("does not let a 'peanut butter' or 'coconut milk' dislike activate the dairy category", () => {
-      const peanutButterCtx: DietaryContext = { ...NONE, dislikes: ["peanut butter"] };
+    it("does not let a 'peanut butter' or 'coconut milk' allergy activate the dairy category", () => {
+      const peanutButterCtx: DietaryContext = { ...NONE, allergies: ["peanut butter"] };
       expect(isOpenEndedIngredientUnsafeFor("whole milk", peanutButterCtx)).toBeNull();
       // The nut category should still correctly trigger for the same word.
       expect(isOpenEndedIngredientUnsafeFor("almond cake", peanutButterCtx)).not.toBeNull();
 
-      const coconutMilkCtx: DietaryContext = { ...NONE, dislikes: ["coconut milk"] };
+      const coconutMilkCtx: DietaryContext = { ...NONE, allergies: ["coconut milk"] };
       expect(isOpenEndedIngredientUnsafeFor("whole milk", coconutMilkCtx)).toBeNull();
+    });
+  });
+
+  // Dimension-5 dislike stress test, July 20 2026: category expansion
+  // (the SYNONYM_GROUPS loop) used to check allergies+dislikes combined --
+  // a free-text DISLIKE of "blue cheese" matched "cheese" in DAIRY_SYNONYMS
+  // and activated the whole dairy category, rejecting an AI-composed
+  // yogurt breakfast for a user who never said anything about dairy in
+  // general. Live-reproduced via a 6-dislike stress profile (3 breakfast
+  // slots stayed blocked because of this). Category expansion is now
+  // allergy/dietary-style ONLY; a dislike only ever earns a direct match.
+  describe("dislikes no longer conflate with allergies for category-wide exclusion (2026-07-20)", () => {
+    it("a 'blue cheese' dislike does not exclude yogurt/milk/other dairy", () => {
+      const ctx: DietaryContext = { ...NONE, dislikes: ["blue cheese"] };
+      expect(isOpenEndedIngredientUnsafeFor("plain nonfat greek yogurt", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", ctx)).toBeNull();
+    });
+
+    it("an actual 'dairy'/'milk' allergy still excludes the whole category", () => {
+      const ctx: DietaryContext = { ...NONE, allergies: ["dairy"] };
+      expect(isOpenEndedIngredientUnsafeFor("plain nonfat greek yogurt", ctx)).not.toBeNull();
+    });
+
+    it("a dislike still directly blocks an ingredient literally named after it", () => {
+      const ctx: DietaryContext = { ...NONE, dislikes: ["greek yogurt"] };
+      expect(isOpenEndedIngredientUnsafeFor("plain nonfat greek yogurt", ctx)).not.toBeNull();
     });
   });
 

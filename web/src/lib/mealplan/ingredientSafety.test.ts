@@ -44,8 +44,8 @@ describe("isKnownIngredientUnsafeFor", () => {
       expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).not.toBeNull();
     });
 
-    it("catches 'milk' as a dairy synonym", () => {
-      const ctx: DietaryContext = { ...NONE, dislikes: ["milk"] };
+    it("catches 'milk' as a dairy synonym, as an allergy", () => {
+      const ctx: DietaryContext = { ...NONE, allergies: ["milk"] };
       expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).not.toBeNull();
     });
 
@@ -153,9 +153,19 @@ describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () 
     expect(isKnownIngredientUnsafeFor("almonds", donutCtx)).toBeNull();
   });
 
-  it("still catches a genuine 'nut'/'nuts' dislike via mentionsAny", () => {
-    const ctx: DietaryContext = { ...NONE, dislikes: ["nut"] };
+  it("still catches a genuine 'nut'/'nuts' allergy via mentionsAny", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["nut"] };
     expect(isKnownIngredientUnsafeFor("almonds", ctx)).not.toBeNull();
+  });
+
+  // Found live July 20 2026 (dimension-5 dislike stress test): category
+  // expansion via mentionsAny is now allergy/dietary-style ONLY -- a bare
+  // dislike no longer expands into the whole synonym category, only a
+  // direct match against the ingredient's own name (see the "conflated
+  // with allergies" regression tests below for the full bug this fixes).
+  it("does NOT expand a bare 'nut' dislike into the whole nut category", () => {
+    const ctx: DietaryContext = { ...NONE, dislikes: ["nut"] };
+    expect(isKnownIngredientUnsafeFor("almonds", ctx)).toBeNull();
   });
 });
 
@@ -165,10 +175,10 @@ describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () 
 // protein powder, even though it's conservatively tagged dairy+soy
 // specifically because it might be whey- or soy-based.
 describe("widened dairy/soy synonym coverage (comprehensive engine test, July 16 2026)", () => {
-  it("catches dairy derivative forms (whey, cheese) for protein powder", () => {
+  it("catches dairy derivative forms (whey, cheese) for protein powder, as allergies", () => {
     const wheyCtx: DietaryContext = { ...NONE, allergies: ["whey"] };
     expect(isKnownIngredientUnsafeFor("protein powder", wheyCtx)).not.toBeNull();
-    const cheeseCtx: DietaryContext = { ...NONE, dislikes: ["cheese"] };
+    const cheeseCtx: DietaryContext = { ...NONE, allergies: ["cheese"] };
     expect(isKnownIngredientUnsafeFor("protein powder", cheeseCtx)).not.toBeNull();
   });
 
@@ -182,15 +192,44 @@ describe("widened dairy/soy synonym coverage (comprehensive engine test, July 16
   // make a "peanut butter" or "coconut milk" allergy/dislike ALSO
   // activate the dairy category, needlessly excluding real dairy pool
   // items for someone with no actual dairy restriction.
-  it("does not let a 'peanut butter' or 'coconut milk' dislike activate the dairy category", () => {
-    const peanutButterCtx: DietaryContext = { ...NONE, dislikes: ["peanut butter"] };
+  it("does not let a 'peanut butter' or 'coconut milk' allergy activate the dairy category", () => {
+    const peanutButterCtx: DietaryContext = { ...NONE, allergies: ["peanut butter"] };
     expect(isKnownIngredientUnsafeFor("greek yogurt", peanutButterCtx)).toBeNull();
     expect(isKnownIngredientUnsafeFor("cottage cheese", peanutButterCtx)).toBeNull();
     // The nut category should still correctly trigger for the same word.
     expect(isKnownIngredientUnsafeFor("almonds", peanutButterCtx)).not.toBeNull();
 
-    const coconutMilkCtx: DietaryContext = { ...NONE, dislikes: ["coconut milk"] };
+    const coconutMilkCtx: DietaryContext = { ...NONE, allergies: ["coconut milk"] };
     expect(isKnownIngredientUnsafeFor("greek yogurt", coconutMilkCtx)).toBeNull();
+  });
+});
+
+// Dimension-5 dislike stress test, July 20 2026: userWords used to combine
+// allergies+dislikes for BOTH the direct match AND the category-tag checks
+// (entry.containsNut/containsDairy/...) -- a free-text DISLIKE of "blue
+// cheese" word-boundary-matched "cheese" in DAIRY_SYNONYMS and excluded
+// every containsDairy-tagged pool item (yogurt, cottage cheese, protein
+// powder), not just blue cheese itself. Live-reproduced via a 6-dislike
+// stress profile: 3 breakfast slots stayed blocked because the AI-compose
+// fallback's yogurt-based proposals kept getting rejected for a user who
+// never said anything about dairy in general.
+describe("dislikes no longer conflate with allergies for category-wide exclusion (2026-07-20)", () => {
+  it("a 'blue cheese' dislike does not exclude yogurt/milk/other dairy", () => {
+    const ctx: DietaryContext = { ...NONE, dislikes: ["blue cheese"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).toBeNull();
+    expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).toBeNull();
+    expect(isKnownIngredientUnsafeFor("protein powder", ctx)).toBeNull();
+  });
+
+  it("an actual 'dairy'/'milk' allergy still excludes the whole category", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["dairy"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).not.toBeNull();
+    expect(isKnownIngredientUnsafeFor("cottage cheese", ctx)).not.toBeNull();
+  });
+
+  it("a dislike still directly blocks an ingredient literally named after it", () => {
+    const ctx: DietaryContext = { ...NONE, dislikes: ["greek yogurt"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).not.toBeNull();
   });
 });
 
