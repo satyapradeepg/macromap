@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateProposal, buildPrompt, safeProteinExamples, buildBatchPrompt, validateBatchProposals } from "./mealProposer";
+import { validateProposal, buildPrompt, safeProteinExamples, buildBatchPrompt, validateBatchProposals, rescaleToAggregate } from "./mealProposer";
 
 describe("validateProposal", () => {
   it("accepts a well-formed proposal", () => {
@@ -189,6 +189,24 @@ describe("buildBatchPrompt", () => {
     expect(prompt.toLowerCase()).toContain("do not need every single dish to hit its own individual share exactly");
   });
 
+  // Found live July 20 2026 (extreme-max-boundary profile): a 7-slot batch
+  // call only used its redistribution freedom for 1/7 dishes -- the vague
+  // "feel free to lean higher/lower" wording didn't actually steer Claude
+  // toward concentrating protein into fewer dense dishes. Strengthened to
+  // explicitly recommend concentration over even spreading.
+  it("explicitly recommends concentrating protein into fewer dense dishes rather than spreading evenly", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "breakfast", target: { calories: 1200, proteinG: 84, carbsG: 141, fatG: 33 } }],
+      aggregateTarget: { calories: 1200, proteinG: 84, carbsG: 141, fatG: 33 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt.toLowerCase()).toContain("concentrate");
+    expect(prompt.toLowerCase()).toContain("densest protein source");
+  });
+
   it("still filters protein examples by allergies/dietary style, same as the single-slot prompt", () => {
     const prompt = buildBatchPrompt({
       slots: [{ mealType: "breakfast", target: { calories: 400, proteinG: 30, carbsG: 40, fatG: 12 } }],
@@ -204,32 +222,98 @@ describe("buildBatchPrompt", () => {
 });
 
 describe("validateBatchProposals", () => {
-  const wellFormed = { dishName: "X", ingredients: [{ name: "seitan", role: "protein" }] };
+  const wellFormed = {
+    dishName: "X",
+    targetCalories: 500,
+    targetProteinG: 30,
+    targetCarbsG: 50,
+    targetFatG: 15,
+    ingredients: [{ name: "seitan", role: "protein" }],
+  };
+  const aggregateTarget = { calories: 1000, proteinG: 60, carbsG: 100, fatG: 30 };
 
-  it("accepts an array matching the expected count", () => {
-    const result = validateBatchProposals([wellFormed, wellFormed], 2);
+  it("accepts an array matching the expected count, pairing each proposal with its own rescaled target", () => {
+    const result = validateBatchProposals([wellFormed, wellFormed], 2, aggregateTarget);
     expect(result).toHaveLength(2);
+    expect(result![0].proposal.dishName).toBe("X");
+    // Both dishes stated identical targets (500/30/50/15 each, summing to
+    // 1000/60/100/30) which already exactly matches the aggregate, so
+    // rescaling should be a no-op here.
+    expect(result![0].target).toEqual({ calories: 500, proteinG: 30, carbsG: 50, fatG: 15 });
   });
 
   it("rejects a count mismatch (too few)", () => {
-    expect(validateBatchProposals([wellFormed], 2)).toBeNull();
+    expect(validateBatchProposals([wellFormed], 2, aggregateTarget)).toBeNull();
   });
 
   it("rejects a count mismatch (too many)", () => {
-    expect(validateBatchProposals([wellFormed, wellFormed, wellFormed], 2)).toBeNull();
+    expect(validateBatchProposals([wellFormed, wellFormed, wellFormed], 2, aggregateTarget)).toBeNull();
   });
 
   it("rejects the whole batch if even one entry is malformed", () => {
     const malformed = { dishName: "", ingredients: [] };
-    expect(validateBatchProposals([wellFormed, malformed], 2)).toBeNull();
+    expect(validateBatchProposals([wellFormed, malformed], 2, aggregateTarget)).toBeNull();
   });
 
   it("rejects a non-array input", () => {
-    expect(validateBatchProposals("not an array", 1)).toBeNull();
-    expect(validateBatchProposals(null, 1)).toBeNull();
+    expect(validateBatchProposals("not an array", 1, aggregateTarget)).toBeNull();
+    expect(validateBatchProposals(null, 1, aggregateTarget)).toBeNull();
   });
 
   it("rejects an empty array when a positive count was expected", () => {
-    expect(validateBatchProposals([], 2)).toBeNull();
+    expect(validateBatchProposals([], 2, aggregateTarget)).toBeNull();
+  });
+
+  it("rejects an entry missing a target field", () => {
+    const { targetProteinG, ...missingProtein } = wellFormed;
+    void targetProteinG;
+    expect(validateBatchProposals([missingProtein], 1, { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 })).toBeNull();
+  });
+
+  it("rejects an entry with a non-positive or non-numeric target field", () => {
+    expect(validateBatchProposals([{ ...wellFormed, targetProteinG: 0 }], 1, aggregateTarget)).toBeNull();
+    expect(validateBatchProposals([{ ...wellFormed, targetProteinG: -5 }], 1, aggregateTarget)).toBeNull();
+    expect(validateBatchProposals([{ ...wellFormed, targetCalories: "500" }], 1, aggregateTarget)).toBeNull();
+  });
+
+  it("rescales stated targets so they sum exactly to the real aggregate", () => {
+    // Two dishes each state 500/30/50/15 (sums to 1000/60/100/30), but the
+    // real aggregate is double that -- every dish's target should double too.
+    const doubledAggregate = { calories: 2000, proteinG: 120, carbsG: 200, fatG: 60 };
+    const result = validateBatchProposals([wellFormed, wellFormed], 2, doubledAggregate);
+    expect(result![0].target).toEqual({ calories: 1000, proteinG: 60, carbsG: 100, fatG: 30 });
+    expect(result![1].target).toEqual({ calories: 1000, proteinG: 60, carbsG: 100, fatG: 30 });
+  });
+});
+
+describe("rescaleToAggregate", () => {
+  it("preserves each dish's relative share of a macro while correcting the total to match exactly", () => {
+    // Dish A claims 150g protein, dish B claims 50g (a real 3:1 concentration
+    // decision) but the real aggregate is 210g, not their stated 200g sum.
+    const raw = [
+      { calories: 700, proteinG: 150, carbsG: 60, fatG: 20 },
+      { calories: 500, proteinG: 50, carbsG: 80, fatG: 15 },
+    ];
+    const aggregate = { calories: 1200, proteinG: 210, carbsG: 140, fatG: 35 };
+    const rescaled = rescaleToAggregate(raw, aggregate);
+
+    const totalProtein = rescaled[0].proteinG + rescaled[1].proteinG;
+    expect(totalProtein).toBeCloseTo(210, 5);
+    // The 3:1 ratio survives the correction.
+    expect(rescaled[0].proteinG / rescaled[1].proteinG).toBeCloseTo(3, 5);
+  });
+
+  it("is a no-op when the stated sum already matches the aggregate exactly", () => {
+    const raw = [{ calories: 500, proteinG: 30, carbsG: 50, fatG: 15 }];
+    const aggregate = { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 };
+    expect(rescaleToAggregate(raw, aggregate)).toEqual(raw);
+  });
+
+  it("does not divide by zero when a stated macro sums to zero across all dishes", () => {
+    const raw = [{ calories: 500, proteinG: 0, carbsG: 50, fatG: 15 }];
+    const aggregate = { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 };
+    const rescaled = rescaleToAggregate(raw, aggregate);
+    expect(rescaled[0].proteinG).toBe(0);
+    expect(Number.isFinite(rescaled[0].proteinG)).toBe(true);
   });
 });

@@ -170,7 +170,7 @@ export interface ProposeMealsBatchInput {
 
 const PROPOSE_MEALS_BATCH_TOOL = {
   name: "propose_meals",
-  description: "Propose several real, realistic dishes at once (one per requested slot) and their ingredient lists, balanced together against a combined target.",
+  description: "Propose several real, realistic dishes at once (one per requested slot), each with its own deliberately-allocated target, balanced together against a combined target.",
   input_schema: {
     type: "object",
     properties: {
@@ -181,6 +181,10 @@ const PROPOSE_MEALS_BATCH_TOOL = {
           type: "object",
           properties: {
             dishName: { type: "string", description: "A real, specific dish name a person would recognize, e.g. 'Seitan Scramble with Spinach and Whole Wheat Toast'." },
+            targetCalories: { type: "number", description: "This SPECIFIC dish's own allocated calorie target -- your deliberate allocation, not necessarily the slot's even share. All meals' targetCalories together should sum close to the combined total given below." },
+            targetProteinG: { type: "number", description: "This SPECIFIC dish's own allocated protein target in grams -- concentrate this higher for dishes built on a dense protein source, lower for others. All meals' targetProteinG together should sum close to the combined total given below." },
+            targetCarbsG: { type: "number", description: "This SPECIFIC dish's own allocated carb target in grams." },
+            targetFatG: { type: "number", description: "This SPECIFIC dish's own allocated fat target in grams." },
             ingredients: {
               type: "array",
               items: {
@@ -194,7 +198,7 @@ const PROPOSE_MEALS_BATCH_TOOL = {
               },
             },
           },
-          required: ["dishName", "ingredients"],
+          required: ["dishName", "targetCalories", "targetProteinG", "targetCarbsG", "targetFatG", "ingredients"],
         },
       },
     },
@@ -220,7 +224,7 @@ The individual numbers above are each slot's own even share, but what actually m
 - ${Math.round(aggregateTarget.carbsG)}g carbs
 - ${Math.round(aggregateTarget.fatG)}g fat
 
-You do NOT need every single dish to hit its own individual share exactly — feel free to lean one dish higher in protein and another lower, as long as the total across all ${slots.length} lands close to the combined target above. Use this freedom deliberately (e.g. a naturally protein-dense dish for one slot, a lighter one for another) rather than proposing ${slots.length} near-identical meals.
+You do NOT need every single dish to hit its own individual share exactly -- each meal you propose has its OWN target fields (targetCalories/targetProteinG/targetCarbsG/targetFatG) that you set yourself, and THOSE are what actually get used, not the even share shown above. If a slot's own protein share is demanding for a normal single-meal portion (roughly above 50g), the most reliable strategy is to CONCENTRATE rather than spread evenly: pick the single densest protein source available (protein powder, seitan, lean poultry) for 1-2 of these dishes, set THEIR targetProteinG notably higher than that slot's even share, and set the REMAINING dishes' targetProteinG lower (leaning more on carbs/fat instead) -- their targetCalories should still add up sensibly with the lower protein. This is much more likely to produce realistic portions across the whole batch than asking every dish to independently hit a demanding number. Only aim for near-even targets across dishes if every slot's own share is already easily achievable. Every dish's targets, added together, should land close to the combined total above -- exact precision isn't required (it will be auto-corrected), but a genuinely deliberate allocation is.
 
 Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
@@ -231,10 +235,74 @@ ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuin
 
 Requirements for EACH proposal:
 1. Name a REAL, coherent, recognizable dish for its meal type -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
-2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
-3. Each "protein" ingredient MUST be dense enough to plausibly hit that dish's own protein share within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
-4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
-5. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
+2. Set this dish's OWN targetCalories/targetProteinG/targetCarbsG/targetFatG deliberately (see the concentration guidance above) -- this is your real allocation for this specific dish, not a copy of the slot's even share.
+3. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
+4. Each "protein" ingredient MUST be dense enough to plausibly hit THIS DISH'S OWN targetProteinG (the number you set above, not the slot's even share) within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
+5. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
+6. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
+}
+
+// Pairs a validated proposal with its OWN per-dish target -- the thing
+// that actually makes redistribution real. Without this, every dish in a
+// batch got sized against the flat per-slot share regardless of what
+// Claude conceptually intended (found live July 20 2026: the prompt
+// promised freedom to concentrate protein into fewer dishes, but nothing
+// downstream ever consumed that intent -- every proposal was still sized
+// against the same fixed individual target). The target here is Claude's
+// own deliberate allocation, rescaled below to guarantee it sums exactly
+// to the real aggregate -- still just an ALLOCATION input to the same
+// deterministic sizing math as before, never a substitute for it (the
+// dish's actual final macros still come from real ingredient lookups,
+// same grounding rule as everywhere else in this file).
+export interface BatchMealProposal {
+  proposal: MealProposal;
+  target: MacroTargets;
+}
+
+const TARGET_FIELDS = ["targetCalories", "targetProteinG", "targetCarbsG", "targetFatG"] as const;
+
+function parseMacroTargetFields(obj: Record<string, unknown>): MacroTargets | null {
+  const values: number[] = [];
+  for (const field of TARGET_FIELDS) {
+    const v = obj[field];
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return null;
+    values.push(v);
+  }
+  return { calories: values[0], proteinG: values[1], carbsG: values[2], fatG: values[3] };
+}
+
+// Never trusts the LLM's arithmetic -- Claude's stated per-dish targets
+// are a deliberate ALLOCATION decision (which dish gets more/less), not
+// reliable ground truth for the exact totals. Scales each macro
+// independently so the rescaled targets sum EXACTLY to the real aggregate
+// (per macro) while preserving each dish's relative share for that macro
+// -- e.g. if Claude allocated a 3:1 protein ratio between two dishes, that
+// ratio survives even though the absolute numbers get corrected.
+export function rescaleToAggregate(rawTargets: MacroTargets[], aggregateTarget: MacroTargets): MacroTargets[] {
+  const sum = rawTargets.reduce<MacroTargets>(
+    (acc, t) => ({
+      calories: acc.calories + t.calories,
+      proteinG: acc.proteinG + t.proteinG,
+      carbsG: acc.carbsG + t.carbsG,
+      fatG: acc.fatG + t.fatG,
+    }),
+    { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+  );
+
+  const scaleFor = (key: keyof MacroTargets): number => (sum[key] > 0 ? aggregateTarget[key] / sum[key] : 1);
+  const scales: MacroTargets = {
+    calories: scaleFor("calories"),
+    proteinG: scaleFor("proteinG"),
+    carbsG: scaleFor("carbsG"),
+    fatG: scaleFor("fatG"),
+  };
+
+  return rawTargets.map((t) => ({
+    calories: t.calories * scales.calories,
+    proteinG: t.proteinG * scales.proteinG,
+    carbsG: t.carbsG * scales.carbsG,
+    fatG: t.fatG * scales.fatG,
+  }));
 }
 
 // Extracted as its own pure function (mirrors validateProposal above) so
@@ -245,19 +313,31 @@ Requirements for EACH proposal:
 // the wrong count, invalidates the WHOLE batch rather than trusting a
 // partial result, same "never partially applied" discipline as everywhere
 // else in this fallback.
-export function validateBatchProposals(rawMeals: unknown, expectedCount: number): MealProposal[] | null {
+export function validateBatchProposals(
+  rawMeals: unknown,
+  expectedCount: number,
+  aggregateTarget: MacroTargets,
+): BatchMealProposal[] | null {
   if (!Array.isArray(rawMeals) || rawMeals.length !== expectedCount) return null;
 
-  const proposals: MealProposal[] = [];
+  const parsed: Array<{ proposal: MealProposal; rawTarget: MacroTargets }> = [];
   for (const raw of rawMeals) {
     const proposal = validateProposal(raw);
     if (!proposal) return null;
-    proposals.push(proposal);
+    if (typeof raw !== "object" || raw === null) return null;
+    const rawTarget = parseMacroTargetFields(raw as Record<string, unknown>);
+    if (!rawTarget) return null;
+    parsed.push({ proposal, rawTarget });
   }
-  return proposals;
+
+  const rescaled = rescaleToAggregate(
+    parsed.map((p) => p.rawTarget),
+    aggregateTarget,
+  );
+  return parsed.map((p, i) => ({ proposal: p.proposal, target: rescaled[i] }));
 }
 
-export async function proposeMealsBatchViaClaude(input: ProposeMealsBatchInput): Promise<MealProposal[] | null> {
+export async function proposeMealsBatchViaClaude(input: ProposeMealsBatchInput): Promise<BatchMealProposal[] | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is not set");
@@ -287,7 +367,7 @@ export async function proposeMealsBatchViaClaude(input: ProposeMealsBatchInput):
   if (!toolUse) return null;
 
   const rawMeals = (toolUse.input as Record<string, unknown> | null)?.meals;
-  return validateBatchProposals(rawMeals, input.slots.length);
+  return validateBatchProposals(rawMeals, input.slots.length, input.aggregateTarget);
 }
 
 const VALID_ROLES: MealRole[] = ["protein", "carb", "fat", "fixed"];

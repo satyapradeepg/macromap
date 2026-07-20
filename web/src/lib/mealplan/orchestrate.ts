@@ -831,8 +831,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
     if (batchProposals && batchProposals.length === eligible.length) {
       for (let i = 0; i < eligible.length; i++) {
-        const { key, slotId, target } = eligible[i];
-        const candidate = await composeProposalToCandidate(batchProposals[i], target, key);
+        const { key, slotId } = eligible[i];
+        // Sizes against THIS dish's own rescaled target (Claude's
+        // deliberate per-dish allocation, corrected to sum exactly to the
+        // aggregate) rather than the flat per-slot share -- this is what
+        // actually makes the batch prompt's "concentrate protein into
+        // fewer dishes" guidance take effect downstream, added 2026-07-20
+        // after finding the redistribution was previously promised in the
+        // prompt but never wired through to the sizing math.
+        const { proposal, target: ownTarget } = batchProposals[i];
+        const candidate = await composeProposalToCandidate(proposal, ownTarget, key);
         if (candidate) {
           claimResult.claimed.push({ slotId, candidate, tier: candidate.actualTier ?? "p30" });
           blockedHints.delete(key);
