@@ -52,6 +52,30 @@ describe("runCascadeForSlot", () => {
     expect(result.blockingHint).toContain("protein");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  // Found live July 20 2026 (extreme-max-boundary profile): the blocking
+  // hint used to always say "reduce it by 10g" regardless of how far over
+  // target actually was -- honest for a small miss, misleading once the
+  // gap is large (a flat 10g nudge doesn't fix an 84g/meal target).
+  describe("blockingHint scales with how far over target the protein actually is", () => {
+    it("suggests a small, honest reduction for a target just above the typically-achievable range", async () => {
+      const closeTarget = { proteinG: 58, calories: 500, carbsG: 40, fatG: 15 };
+      const fetch = vi.fn().mockResolvedValue([]);
+      const result = await runCascadeForSlot(closeTarget, fetch, rankOpts);
+      expect(result.blockingHint).toContain("58g");
+      expect(result.blockingHint).toContain("reducing it by");
+      expect(result.blockingHint).not.toContain("won't fix this");
+    });
+
+    it("gives an honest structural-mismatch message instead of a fake-precise number for a far-over target", async () => {
+      const extremeTarget = { proteinG: 84, calories: 1200, carbsG: 141, fatG: 33 };
+      const fetch = vi.fn().mockResolvedValue([]);
+      const result = await runCascadeForSlot(extremeTarget, fetch, rankOpts);
+      expect(result.blockingHint).toContain("84g");
+      expect(result.blockingHint).toContain("won't fix this");
+      expect(result.blockingHint).not.toContain("reducing it by");
+    });
+  });
 });
 
 describe("matchLabelFor", () => {

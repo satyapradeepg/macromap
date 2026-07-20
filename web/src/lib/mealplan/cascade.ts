@@ -76,6 +76,33 @@ function formatDelta(n: number): string {
   return n >= 0 ? `+${n}` : `${n}`;
 }
 
+// A single meal's protein target above this is achievable only with an
+// unusually dense ingredient (protein-powder tier, ~75-80g/100g) — most
+// real recipes and normally-composed dishes top out well under this.
+// Advisory only, used to pick which hint below is honest, not a hard
+// technical bound (composeMealFromProposal's own PORTION_BOUNDS_G is that).
+const TYPICALLY_ACHIEVABLE_PROTEIN_G = 50;
+
+// Found live July 20 2026 (extreme-max-boundary profile testing): a flat
+// "reduce it by 10g" was shown regardless of how far over target actually
+// was — honest and actionable for a small miss (target barely above what
+// real recipes can hit), but misleading once the gap is large: a 10g
+// nudge on an 84g/meal target implies a minor tweak fixes what's actually
+// a structural mismatch (no realistic single dish reliably delivers that
+// much protein), the same class of "don't paper over a genuine limit"
+// framing this project already applies elsewhere (e.g.
+// structuralCalorieFloorExceedsTarget's disclosure).
 function blockingHintFor(target: { proteinG: number; calories: number }): string {
-  return `Your protein target for this meal is very high (${Math.round(target.proteinG)}g) — try reducing it by 10g and regenerating.`;
+  const proteinG = Math.round(target.proteinG);
+  const gapAboveTypical = proteinG - TYPICALLY_ACHIEVABLE_PROTEIN_G;
+
+  if (gapAboveTypical <= 15) {
+    // Close enough that a small, honest nudge really is a real fix --
+    // suggest the actual gap (rounded up to the nearest 5g), not a fixed
+    // number that may not even apply.
+    const suggestedReduction = Math.max(5, Math.ceil(gapAboveTypical / 5) * 5);
+    return `Your protein target for this meal is very high (${proteinG}g) — try reducing it by ${suggestedReduction}g and regenerating.`;
+  }
+
+  return `Your protein target for this meal is very high (${proteinG}g) for a single meal — a small tweak won't fix this. Try lowering your overall daily protein or calorie goal to bring individual meal targets down to a realistic range.`;
 }
