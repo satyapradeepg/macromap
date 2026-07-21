@@ -977,6 +977,35 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     return composeProposalToCandidate(proposal, slotTarget, key);
   }
 
+  // Applies an AI-composed result to its eligible slot -- either a NEW
+  // claim (genuinely blocked, claimedIndex undefined) or a REPLACEMENT for
+  // an already-claimed bad-fit slot (claimedIndex set, see the widened
+  // trigger above). The replacement path is guarded by a "never worse than
+  // doing nothing" check, mirroring bestScaleAndScore's own
+  // scale=1-always-included guarantee and closing the exact bug class
+  // (accepting a "fix" without checking it actually helped) found and
+  // fixed elsewhere in this pipeline earlier this session: only swap if
+  // the AI-composed pick's macroDeviationScore is strictly lower than what
+  // was already claimed. A worse or equal AI-compose result leaves the
+  // existing real candidate untouched.
+  function applyAiComposeResult(
+    entry: { key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number },
+    candidate: RankedCandidate | null,
+  ): void {
+    if (!candidate) return;
+    if (entry.claimedIndex === undefined) {
+      claimResult.claimed.push({ slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" });
+      blockedHints.delete(entry.key);
+      return;
+    }
+    const existing = claimResult.claimed[entry.claimedIndex];
+    const existingScore = macroDeviationScore(existing.candidate, entry.target);
+    const newScore = macroDeviationScore(candidate, entry.target);
+    if (newScore < existingScore) {
+      claimResult.claimed[entry.claimedIndex] = { slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" };
+    }
+  }
+
   // Batch-aware AI composition (added 2026-07-20) -- a genuinely blocked
   // slot is never alone by the time this fallback fires (it only runs on
   // whatever the entire recipe-search+reconciliation pipeline already gave
@@ -988,8 +1017,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // instead of forcing each dish to independently hit its own narrow
   // share. Falls back to the original per-slot path (never just gives up)
   // if the batch call errors or returns something unusable.
+  // claimedIndex is set only for a slot that ALREADY has a real candidate
+  // claimed (see the bad-fit pass below) -- distinguishes "genuinely
+  // blocked, add a new claim" from "already claimed, only replace if
+  // AI-compose demonstrably improves on it" in the result-handling below.
   const aiComposeBudget = createAiComposeBudget();
-  const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets }> = [];
+  const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number }> = [];
+  // Genuinely blocked slots first, so they keep budget priority over the
+  // bad-fit-but-claimed pass below -- a slot contributing nothing today
+  // matters more to fix than one contributing something, however bad.
   for (const [key] of [...blockedHints.entries()]) {
     const slotId = allSlots.find((s) => slotKey(s) === key);
     // Snack slots are composed separately above and never end up in
@@ -998,6 +1034,24 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     if (!slotId || slotMechanism(slotId.mealType) !== "recipe") continue;
     if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
     eligible.push({ key, slotId, target: mealTypeTargets[slotId.mealType] });
+  }
+
+  // Widened trigger (2026-07-21 spec): a slot with at least one real
+  // candidate isn't "blocked" by resolveClaims's own definition, so it
+  // never reached the loop above no matter how bad that candidate's fit
+  // is. Real cached-pool survey found this is a real, sizeable gap -- 22
+  // thin pools (1-4 real candidates) scoring ~4.6x worse on average than a
+  // healthy pool, none of which ever got an AI-compose chance. actualTier
+  // === null (outside even p30) reuses an already-meaningful boundary
+  // rather than inventing a new threshold. Only ever REPLACES the existing
+  // claim, and only if AI-compose demonstrably scores better (see the
+  // never-regress check in both result branches below) -- this can only
+  // improve a slot's accuracy, never make an already-claimed slot worse.
+  for (const [claimedIndex, c] of claimResult.claimed.entries()) {
+    if (slotMechanism(c.slotId.mealType) !== "recipe") continue;
+    if (c.candidate.actualTier !== null) continue;
+    if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
+    eligible.push({ key: slotKey(c.slotId), slotId: c.slotId, target: mealTypeTargets[c.slotId.mealType], claimedIndex });
   }
 
   if (eligible.length > 0) {
@@ -1027,32 +1081,29 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
     if (batchProposals && batchProposals.length === eligible.length) {
       for (let i = 0; i < eligible.length; i++) {
-        const { key, slotId } = eligible[i];
+        const entry = eligible[i];
         // Sizes against THIS dish's own rescaled target (Claude's
         // deliberate per-dish allocation, corrected to sum exactly to the
         // aggregate) rather than the flat per-slot share -- this is what
         // actually makes the batch prompt's "concentrate protein into
         // fewer dishes" guidance take effect downstream, added 2026-07-20
         // after finding the redistribution was previously promised in the
-        // prompt but never wired through to the sizing math.
+        // prompt but never wired through to the sizing math. The
+        // never-regress comparison in applyAiComposeResult still scores
+        // against entry.target (the slot's own real per-meal-type target),
+        // not this internal rescaled allocation.
         const { proposal, target: ownTarget } = batchProposals[i];
-        const candidate = await composeProposalToCandidate(proposal, ownTarget, key);
-        if (candidate) {
-          claimResult.claimed.push({ slotId, candidate, tier: candidate.actualTier ?? "p30" });
-          blockedHints.delete(key);
-        }
+        const candidate = await composeProposalToCandidate(proposal, ownTarget, entry.key);
+        applyAiComposeResult(entry, candidate);
       }
     } else {
       // Batch attempt didn't produce a usable result (network error,
       // malformed tool call, wrong count) -- fall back to the original
       // one-call-per-slot path for every slot still in this batch, exactly
       // as if batching had never been attempted.
-      for (const { key, slotId, target } of eligible) {
-        const candidate = await attemptSingleSlotAiCompose(slotId, target, key);
-        if (candidate) {
-          claimResult.claimed.push({ slotId, candidate, tier: candidate.actualTier ?? "p30" });
-          blockedHints.delete(key);
-        }
+      for (const entry of eligible) {
+        const candidate = await attemptSingleSlotAiCompose(entry.slotId, entry.target, entry.key);
+        applyAiComposeResult(entry, candidate);
       }
     }
   }

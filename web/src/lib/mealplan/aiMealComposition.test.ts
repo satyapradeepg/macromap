@@ -148,6 +148,56 @@ describe("composeMealFromProposal", () => {
     expect(meal).toBeNull();
   });
 
+  // Found live 2026-07-21 (thin-corpus AI-compose investigation): fixedAmountG
+  // is optional in both the tool schema and the prompt's own wording, so a
+  // real Claude proposal routinely omits it for a garnish/side item. That
+  // used to default to 0, which fails isRealisticAmount's 5g floor and
+  // silently rejected an otherwise-perfect composition -- reproduced here
+  // with the exact same fixture as the passing "well-portioned dish" test
+  // above, just with the fixed item's amount omitted.
+  it("still composes when a fixed-role item omits fixedAmountG, using a realistic default", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, spinach });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    const spinachItem = meal!.ingredients.find((i) => i.ingredientName === "spinach")!;
+    expect(spinachItem.amountG).toBe(40);
+  });
+
+  // Found live 2026-07-21, same investigation: a fixed item's name
+  // sometimes doesn't resolve via the grounding lookup at all (e.g.
+  // "steamed broccoli florets" returned no match live). Same class of bug
+  // as the missing-fixedAmountG case above -- a fixed item is never
+  // load-bearing for the macro target, so a failed lookup should drop that
+  // one garnish, not reject an otherwise-good protein/carb/fat solve.
+  it("still composes when a fixed-role item's name doesn't resolve via the grounding lookup", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "steamed broccoli florets", role: "fixed", fixedAmountG: 80 },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    expect(meal!.ingredients.find((i) => i.ingredientName === "steamed broccoli florets")).toBeUndefined();
+  });
+
+  // Protein/carb/fat lookup failures are unlike fixed-item ones -- these
+  // roles ARE load-bearing for the macro target, so they must still reject
+  // rather than silently drop (a missing protein source can't just be
+  // skipped the way a garnish can).
   it("rejects when an ingredient doesn't resolve via the grounding lookup", async () => {
     const proposal: MealProposal = {
       dishName: "Mystery Dish",

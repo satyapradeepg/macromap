@@ -35,8 +35,24 @@ describe("validateProposal", () => {
     expect(validateProposal(raw)).toBeNull();
   });
 
-  it("rejects a fixed-role ingredient missing fixedAmountG", () => {
+  // Found 2026-07-21 while wiring up the carb-budget prompt hint: this used
+  // to reject the whole proposal, upstream of composeMealFromProposal's own
+  // DEFAULT_FIXED_AMOUNT_G fallback -- meaning that fallback (added earlier
+  // the same day, in response to a live-confirmed false rejection) could
+  // never actually run in real production traffic, since a real Claude
+  // proposal routinely omits fixedAmountG for a garnish and never made it
+  // past this validator to reach that fallback. fixedAmountG is genuinely
+  // optional on ProposedIngredient; only an invalid non-number value (e.g.
+  // a string) should still reject, covered by the next test.
+  it("accepts a fixed-role ingredient missing fixedAmountG (left undefined for composeMealFromProposal's own default)", () => {
     const raw = { dishName: "X", ingredients: [{ name: "spinach", role: "fixed" }] };
+    const result = validateProposal(raw);
+    expect(result).not.toBeNull();
+    expect(result!.ingredients[0].fixedAmountG).toBeUndefined();
+  });
+
+  it("still rejects a fixed-role ingredient with a non-number fixedAmountG", () => {
+    const raw = { dishName: "X", ingredients: [{ name: "spinach", role: "fixed", fixedAmountG: "forty" }] };
     expect(validateProposal(raw)).toBeNull();
   });
 
@@ -149,6 +165,39 @@ describe("buildPrompt", () => {
     });
     expect(prompt).not.toContain("Pantry on hand");
   });
+
+  // Live-validated 2026-07-21 (thin-corpus AI-compose investigation):
+  // Claude's default plant-protein choices (lentils, quinoa) are carb-heavy
+  // enough that sizing them to hit a moderate protein target blows a tight
+  // carb budget before the carb-role ingredient is even added -- confirmed
+  // via a live instrumented trace (remainingCarbs went to -32.85 after
+  // sizing lentils alone). A carb-budget-aware hint fixed this on 3/3
+  // tested corpus-scarce targets once added. Unconditional (not gated on
+  // the target's carb/protein ratio) -- an earlier attempt at a cheap ratio
+  // gate (carbsG < proteinG) failed to fire on a real case that still
+  // needed the hint (carbsG=26.64 > proteinG=22.4, since lentils' own
+  // ~2.2:1 carb-to-protein ratio blew that budget too), and this fallback
+  // is already narrow/rare (only blocked or bad-fit slots), so the
+  // always-on cost is bounded.
+  it("warns that a starchy legume/grain sized for protein can blow the carb budget, and points back to the already-filtered example list", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 300, proteinG: 24, carbsG: 21, fatG: 9 },
+      dietaryStyles: ["vegan"],
+      allergies: ["nuts", "soy"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("carb budget");
+    expect(lower).toContain("lentils");
+    // Must reuse the already-filtered requirement-3 list, not introduce a
+    // NEW unfiltered example -- an earlier draft of this hint hardcoded
+    // "tofu" as an example, reintroducing the exact tempeh/soy-allergy
+    // contradiction this file's own July 16 2026 fix already solved once.
+    expect(lower).not.toContain("tofu,");
+    expect(lower).toContain("requirement 3");
+  });
 });
 
 // Batch-aware AI-compose (added 2026-07-20) -- gives Claude visibility
@@ -218,6 +267,25 @@ describe("buildBatchPrompt", () => {
     });
     const suggestionLine = prompt.split("\n").find((l) => l.includes("Options that fit the constraints above"))!;
     expect(suggestionLine.toLowerCase()).not.toContain("tempeh");
+  });
+
+  // Same carb-budget mechanism as buildPrompt's own test above, per-dish
+  // rather than per-slot since each dish sets its own targetCarbsG/
+  // targetProteinG allocation in the batch schema.
+  it("warns that a starchy legume/grain sized for a dish's protein allocation can blow ITS carb allocation", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "lunch", target: { calories: 300, proteinG: 24, carbsG: 21, fatG: 9 } }],
+      aggregateTarget: { calories: 300, proteinG: 24, carbsG: 21, fatG: 9 },
+      dietaryStyles: ["vegan"],
+      allergies: ["nuts", "soy"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("carb budget");
+    expect(lower).toContain("lentils");
+    expect(lower).not.toContain("tofu,");
+    expect(lower).toContain("requirement 4");
   });
 });
 

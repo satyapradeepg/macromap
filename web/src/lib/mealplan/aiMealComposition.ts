@@ -95,6 +95,22 @@ const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   fixed: { min: 5, max: 150 },
 };
 
+// Found live 2026-07-21 (thin-corpus AI-compose investigation): fixedAmountG
+// is optional in both the tool schema and the prompt's own wording ("fixed
+// ones don't need to hit any macro, just be a normal small serving") -- the
+// prompt never tells Claude a gram amount is mandatory, so garnish/side
+// items (parsley, a lemon wedge, cherry tomatoes) routinely arrive with no
+// fixedAmountG at all. That defaulted to 0 below, which fails
+// isRealisticAmount (min 5) and silently rejected the WHOLE composition --
+// live-confirmed to reproduce with an otherwise-perfect macro fit (every
+// other role landing within a few percent of target) purely because one
+// garnish had no amount. A normal small side/garnish serving, not a hard
+// macro solve, so a fixed realistic default is the right fallback here
+// (matches the doc comment's own "e.g. 40 for a side of spinach" example)
+// rather than making the prompt/schema demand a number from the LLM for
+// something it explicitly doesn't need to size precisely.
+const DEFAULT_FIXED_AMOUNT_G = 40;
+
 // Number.isFinite, not just min/max comparisons -- found July 16 2026
 // (comprehensive engine test): `amountG < min || amountG > max` is FALSE
 // for NaN (every NaN comparison is false), so a NaN amount used to
@@ -179,10 +195,22 @@ export async function composeMealFromProposal(
   let remainingFat = target.fatG;
 
   for (const fixedItem of fixedProposed) {
-    const amountG = fixedItem.fixedAmountG ?? 0;
+    const amountG = fixedItem.fixedAmountG ?? DEFAULT_FIXED_AMOUNT_G;
     if (!isRealisticAmount(amountG, PORTION_BOUNDS_G.fixed)) return null;
+    // Found live 2026-07-21 (same investigation as DEFAULT_FIXED_AMOUNT_G
+    // above): a fixed item's name sometimes doesn't resolve via Spoonacular's
+    // ingredient search at all -- e.g. "steamed broccoli florets" or "steamed
+    // baby carrots" returned no match, while the same vegetable without the
+    // prep-word prefix likely would. A failed lookup used to reject the WHOLE
+    // composition here, same class of bug as the missing-amount case: fixed
+    // items are explicitly non-critical for macro accuracy ("don't need to
+    // hit any macro, just be a normal small serving"), so a garnish that
+    // can't be looked up should just be dropped from the dish, not sink an
+    // otherwise-good protein/carb/fat solve. Unlike protein/carb/fat lookup
+    // failures (still a hard reject below) -- those roles are load-bearing
+    // for the actual macro target, a fixed item never is.
     const lookup = await fetchIngredientMacros(fixedItem.name);
-    if (!lookup) return null;
+    if (!lookup) continue;
     const item = toComposedIngredient(lookup, amountG);
     composed.push(item);
     remainingProtein -= item.proteinG;

@@ -111,7 +111,8 @@ Requirements for your proposal:
 1. Name a REAL, coherent, recognizable dish for ${mealType} -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
 2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
 3. The "protein" ingredient MUST be dense enough to plausibly hit the protein target within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it -- pick something that's actually protein-dense enough for how much protein is actually needed here. Options that fit the constraints above for this meal: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
-4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").`;
+4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
+5. Watch the carb budget, not just protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit the protein target on its own can easily blow the carb budget before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If the carb target is not generously larger than the protein target, prefer whichever option from the list in requirement 3 is protein-dense with the LEAST carbs of its own, so the carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve the carb budget well.`;
 }
 
 export async function proposeMealViaClaude(input: ProposeMealInput): Promise<MealProposal | null> {
@@ -239,7 +240,8 @@ Requirements for EACH proposal:
 3. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
 4. Each "protein" ingredient MUST be dense enough to plausibly hit THIS DISH'S OWN targetProteinG (the number you set above, not the slot's even share) within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
 5. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
-6. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
+6. Watch each dish's own carb budget, not just its protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit a dish's targetProteinG on its own can easily blow that dish's targetCarbsG before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If a dish's carb allocation is not generously larger than its protein allocation, prefer whichever option from the list in requirement 4 is protein-dense with the LEAST carbs of its own for THAT dish, so its carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve a dish's carb budget well.
+7. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
 }
 
 // Pairs a validated proposal with its OWN per-dish target -- the thing
@@ -387,7 +389,20 @@ export function validateProposal(raw: unknown): MealProposal | null {
     const i = item as Record<string, unknown>;
     if (typeof i.name !== "string" || !i.name.trim()) return null;
     if (typeof i.role !== "string" || !VALID_ROLES.includes(i.role as MealRole)) return null;
-    if (i.role === "fixed" && typeof i.fixedAmountG !== "number") return null;
+    // Used to require a numeric fixedAmountG for every "fixed" item and
+    // reject the whole proposal otherwise -- but fixedAmountG is genuinely
+    // optional on ProposedIngredient, and the prompt itself never tells
+    // Claude a gram amount is mandatory for a garnish/side ("don't need to
+    // hit any macro, just be a normal small serving"). This gate rejected
+    // proposals upstream of composeMealFromProposal's own
+    // DEFAULT_FIXED_AMOUNT_G fallback (2026-07-21) before that fallback
+    // could ever run in real production traffic -- found while wiring up
+    // the carb-budget prompt hint, not by the live testing that found the
+    // original bug (that testing called composeMealFromProposal directly,
+    // bypassing this validator). A missing amount is not malformed input;
+    // an invalid non-number one still is (e.g. a string), so that case
+    // stays a hard reject below via the fixedAmountG-parsing check.
+    if (i.role === "fixed" && i.fixedAmountG !== undefined && typeof i.fixedAmountG !== "number") return null;
     ingredients.push({
       name: i.name,
       role: i.role as MealRole,
