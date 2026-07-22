@@ -238,6 +238,29 @@ describe("buildPrompt", () => {
     expect(lower).not.toContain("tofu,");
     expect(lower).toContain("requirement 3");
   });
+
+  // Best-effort mitigation for a genuine prompt-adherence gap (2026-07-22,
+  // stacked-safety investigation): Claude occasionally proposes an
+  // ingredient that directly contradicts a constraint stated in the same
+  // prompt (seitan for gluten_free, almonds for a nuts allergy) --
+  // always caught by the real safety gate downstream, but the whole
+  // AI-compose attempt is wasted. This is a cheap, single-call nudge
+  // (a required tool-schema field asking Claude to re-check its own
+  // picks), not a guaranteed fix -- verified live separately, not by
+  // this test, which only confirms the prompt actually asks for it.
+  it("instructs Claude to fill in a final constraint self-check after picking ingredients", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: ["vegetarian", "gluten_free"],
+      allergies: ["nuts"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("constraintcheck");
+    expect(lower).toContain("last");
+  });
 });
 
 // Batch-aware AI-compose (added 2026-07-20) -- gives Claude visibility
@@ -309,6 +332,28 @@ describe("buildBatchPrompt", () => {
     expect(suggestionLine.toLowerCase()).not.toContain("tempeh");
   });
 
+  // Found while designing the constraintCheck self-check field (2026-07-22,
+  // stacked-safety investigation): the concentration-guidance paragraph
+  // hardcoded "protein powder, seitan, lean poultry" as example dense
+  // proteins, completely unfiltered against the actual constraints -- and
+  // it appears BEFORE the "Hard constraints" section even states them.
+  // Same bug class as the July 16 tempeh-for-soy-allergy fix, just worse:
+  // the unsafe example came before the constraint, not two lines after it.
+  // Likely a real contributing cause of the repeated seitan-under-
+  // gluten_free live failures, not just Claude ignoring instructions.
+  it("does not hardcode an unfiltered protein example in the concentration-guidance paragraph", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "breakfast", target: { calories: 1200, proteinG: 84, carbsG: 141, fatG: 33 } }],
+      aggregateTarget: { calories: 1200, proteinG: 84, carbsG: 141, fatG: 33 },
+      dietaryStyles: ["gluten_free"],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const concentrationParagraph = prompt.match(/most reliable strategy is to CONCENTRATE.*?for 1-2 of these dishes/)![0];
+    expect(concentrationParagraph.toLowerCase()).not.toContain("seitan");
+  });
+
   // Stacked-safety investigation, 2026-07-22: gates against the MOST
   // demanding slot in the batch, not any single slot's own even share --
   // the prompt explicitly tells Claude it can concentrate a slot's
@@ -350,6 +395,22 @@ describe("buildBatchPrompt", () => {
     expect(lower).toContain("lentils");
     expect(lower).not.toContain("tofu,");
     expect(lower).toContain("requirement 4");
+  });
+
+  // Same self-check mitigation as buildPrompt's own test above, per-dish
+  // since each meal in the batch schema needs its own constraintCheck.
+  it("instructs Claude to fill in a final constraint self-check for each dish, after picking its ingredients", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "lunch", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: ["vegetarian", "gluten_free"],
+      allergies: ["nuts"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("constraintcheck");
+    expect(lower).toContain("last");
   });
 });
 
