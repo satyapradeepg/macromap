@@ -39,6 +39,12 @@ export interface PlanSlotSummary {
   carbsG: number;
   fatG: number;
   isComposed: boolean;
+  // Added so diet_violation can check against real ingredient data instead
+  // of guessing from the title alone -- confirmed live (2026-07-22) that
+  // title-only inference produces false alarms (a recipe titled "Ham and
+  // Swiss Panini" whose real ingredients contain no ham at all) that waste
+  // a repair-budget slot swapping an already-safe dish.
+  ingredients: string[];
 }
 
 export interface CritiquePlanInput {
@@ -91,7 +97,7 @@ function buildPrompt(input: CritiquePlanInput): string {
   const rows = input.slots
     .map(
       (s) =>
-        `Day ${s.dayIndex} ${s.mealType}: "${s.title}"${s.isComposed ? " (composed)" : ""} -- ${Math.round(s.caloriesKcal)} cal / ${Math.round(s.proteinG)}g protein / ${Math.round(s.carbsG)}g carbs / ${Math.round(s.fatG)}g fat`,
+        `Day ${s.dayIndex} ${s.mealType}: "${s.title}"${s.isComposed ? " (composed)" : ""} -- ${Math.round(s.caloriesKcal)} cal / ${Math.round(s.proteinG)}g protein / ${Math.round(s.carbsG)}g carbs / ${Math.round(s.fatG)}g fat -- ingredients: [${s.ingredients.join(", ")}]`,
     )
     .join("\n");
 
@@ -106,7 +112,7 @@ ${rows}
 
 Flag only slots genuinely worth regenerating -- a dish appearing twice in a week of 35 meals isn't automatically a problem, but 4+ times likely is. Don't flag composed snacks for repetition; the fixed ingredient pool means some repetition there is expected and already accounted for elsewhere. Focus repetition flags on real recipes (breakfast/lunch/dinner).
 
-Also check every meal against the dietary style, allergies, and dislikes listed above. Flag any meal that violates one of them as diet_violation -- for example, a hidden animal product, a non-obvious allergen, or a foreign-language ingredient name that a simple keyword scan could plausibly miss (e.g. "nam pla," "dashi," "suet"). Be specific in the note about which ingredient and which restriction it violates. Don't flag a meal you're not reasonably confident about -- false alarms cost a swap, but so does silence, so when genuinely uncertain about a real animal product or allergen, flag it.`;
+Also check every meal's actual ingredient list (shown above, not just its title) against the dietary style, allergies, and dislikes listed above -- titles are sometimes misleading (a recipe can be titled after an ingredient it doesn't actually contain), so base your judgment on the ingredients, not the name. Flag any meal whose real ingredients violate one of them as diet_violation -- for example, a hidden animal product, a non-obvious allergen, or a foreign-language ingredient name that a simple keyword scan could plausibly miss (e.g. "nam pla," "dashi," "suet"). Be specific in the note about which ingredient and which restriction it violates. Don't flag a meal you're not reasonably confident about -- false alarms cost a swap, but so does silence, so when genuinely uncertain about a real animal product or allergen, flag it.`;
 }
 
 export async function critiquePlan(input: CritiquePlanInput): Promise<PlanCritique | null> {

@@ -1224,6 +1224,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           carbsG: c.candidate.carbsG + (addon?.carbsG ?? 0),
           fatG: c.candidate.fatG + (addon?.fatG ?? 0),
           isComposed: c.candidate.id < 0,
+          ingredients: addon
+            ? [...c.candidate.ingredients.map((i) => i.name), addon.ingredientName]
+            : c.candidate.ingredients.map((i) => i.name),
         };
       });
 
