@@ -91,7 +91,20 @@ const MIN_INGREDIENT_AMOUNT_G = 10;
 const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   protein: { min: 20, max: 280 },
   carb: { min: 15, max: 250 },
-  fat: { min: 3, max: 40 },
+  // max was 40 -- too tight for a less-concentrated fat source like
+  // avocado (~15g fat/100g). Flagged as a speculative, unconfirmed
+  // concern in the 2026-07-21 audit ("leave alone until actually
+  // observed"); live-confirmed 2026-07-22 (stacked-safety
+  // re-verification): avocado sized to 70g to close a modest ~10.5g fat
+  // gap, rejected by the old 40g cap. Raised to 150g -- reuses the
+  // `fixed` role's own already-established generous ceiling just below
+  // (roughly "a whole avocado and then some," not an oil-bottle amount)
+  // rather than inventing a new number. Barely matters for a concentrated
+  // fat source (oil, butter): a realistic fat gap sized against ~100g
+  // fat/100g density lands nowhere near this cap regardless, so widening
+  // it only changes what's realistic for a source like avocado, not what
+  // a genuinely oversized amount of oil would still catch.
+  fat: { min: 3, max: 150 },
   // min was 5 -- too strict for the "a spice" case explicitly named in
   // this role's own prompt description ("a vegetable side, a garnish, a
   // spice"). Live-confirmed 2026-07-21: Claude proposed "smoked paprika"

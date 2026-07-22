@@ -14,6 +14,9 @@ const oil: GroundedIngredientData = { id: 4053, name: "olive oil", caloriesPer10
 const spinach: GroundedIngredientData = { id: 11457, name: "spinach", caloriesPer100g: 23, proteinGPer100g: 2.86, carbsGPer100g: 3.63, fatGPer100g: 0.39, estimatedCostCentsPer100g: null };
 const chicken: GroundedIngredientData = { id: 1, name: "grilled chicken breast", caloriesPer100g: 165, proteinGPer100g: 31, carbsGPer100g: 0, fatGPer100g: 3.6, estimatedCostCentsPer100g: null };
 const paprika: GroundedIngredientData = { id: 1032040, name: "smoked paprika", caloriesPer100g: 282, proteinGPer100g: 14.1, carbsGPer100g: 54, fatGPer100g: 12.9, estimatedCostCentsPer100g: null };
+// Real USDA per-100g values (not live-fetched this session) -- used for
+// the fat-role realism-bound regression test below.
+const avocado: GroundedIngredientData = { id: 9038, name: "avocado", caloriesPer100g: 160, proteinGPer100g: 2.0, carbsGPer100g: 8.5, fatGPer100g: 14.7, estimatedCostCentsPer100g: null };
 
 // Real target from the July 15 2026 nut-allergy live test's blocked breakfast slot.
 const BREAKFAST_TARGET = { calories: 354.8, proteinG: 30.8, carbsG: 35.8, fatG: 9.8 };
@@ -78,6 +81,49 @@ describe("composeMealFromProposal", () => {
     };
     const fetcher = lookupFrom({ "firm tofu": tofu, "whole wheat bread": bread, "olive oil": oil });
     const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).toBeNull();
+  });
+
+  // Audit item #4, live-confirmed 2026-07-22 (stacked-safety
+  // re-verification): avocado's real ~14.7g fat/100g density needed 70g to
+  // close even a modest ~10g fat gap -- the old 40g cap rejected the WHOLE
+  // dish for this, even though 70g avocado is an entirely ordinary amount
+  // (well under a single whole avocado's typical edible weight). Raised
+  // to 150g.
+  it("allows a less-concentrated fat source (avocado) to size past the old 40g cap, within the new 150g one", async () => {
+    const zeroFatProtein: GroundedIngredientData = { id: 2, name: "zero fat protein", caloriesPer100g: 120, proteinGPer100g: 30, carbsGPer100g: 0, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const zeroFatCarb: GroundedIngredientData = { id: 3, name: "zero fat carb", caloriesPer100g: 90, proteinGPer100g: 0, carbsGPer100g: 25, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const target = { calories: 400, proteinG: 25, carbsG: 40, fatG: 10.3 };
+    const proposal: MealProposal = {
+      dishName: "Avocado Toast Bowl",
+      ingredients: [
+        { name: "zero fat protein", role: "protein" },
+        { name: "zero fat carb", role: "carb" },
+        { name: "avocado", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "zero fat protein": zeroFatProtein, "zero fat carb": zeroFatCarb, avocado });
+    const meal = await composeMealFromProposal(proposal, target, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    const avocadoItem = meal!.ingredients.find((i) => i.ingredientName === "avocado")!;
+    expect(avocadoItem.amountG).toBeGreaterThan(40);
+    expect(avocadoItem.amountG).toBeLessThanOrEqual(150);
+  });
+
+  it("still rejects a genuinely oversized amount of a concentrated fat source, even at the widened 150g cap", async () => {
+    const zeroFatProtein: GroundedIngredientData = { id: 2, name: "zero fat protein", caloriesPer100g: 120, proteinGPer100g: 30, carbsGPer100g: 0, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const zeroFatCarb: GroundedIngredientData = { id: 3, name: "zero fat carb", caloriesPer100g: 90, proteinGPer100g: 0, carbsGPer100g: 25, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const target = { calories: 2200, proteinG: 25, carbsG: 40, fatG: 200 };
+    const proposal: MealProposal = {
+      dishName: "Absurd Oil Bowl",
+      ingredients: [
+        { name: "zero fat protein", role: "protein" },
+        { name: "zero fat carb", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "zero fat protein": zeroFatProtein, "zero fat carb": zeroFatCarb, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, target, NONE, fetcher);
     expect(meal).toBeNull();
   });
 
