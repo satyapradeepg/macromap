@@ -138,6 +138,29 @@ describe("buildPrompt", () => {
       const examples = safeProteinExamples({ dietaryStyles: ["vegan"], allergies: ["nuts", "shellfish", "soy", "dairy"] });
       expect(examples.map((e) => e.toLowerCase())).toContain("pea protein powder");
     });
+
+    // Stacked-safety investigation, 2026-07-22: the fix above (adding pea
+    // protein powder) never actually removed lentils from the list, so
+    // Claude kept picking lentils over the denser option anyway for a
+    // demanding target -- live-confirmed 3/3 lunch attempts (32-38g
+    // protein). Lentils' real measured density (9.02g/100g, confirmed
+    // live) caps out at ~25g protein within the realistic 280g portion
+    // bound, so it's now excluded once the target is demanding enough to
+    // structurally rule it out.
+    it("excludes lentils once the target protein is demanding enough that lentils structurally cannot reach it", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 38).map((e) => e.toLowerCase());
+      expect(examples).not.toContain("lentils");
+    });
+
+    it("still includes lentils for a light target where it's a perfectly fine option", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 15).map((e) => e.toLowerCase());
+      expect(examples).toContain("lentils");
+    });
+
+    it("still includes lentils when no target is given, unchanged from before this fix", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }).map((e) => e.toLowerCase());
+      expect(examples).toContain("lentils");
+    });
   });
 
   it("includes the filtered protein examples in the built prompt", () => {
@@ -152,6 +175,23 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("Options that fit the constraints above for this meal:");
     const suggestionLine = prompt.split("\n").find((l) => l.includes("Options that fit the constraints above"))!;
     expect(suggestionLine.toLowerCase()).not.toContain("tempeh");
+  });
+
+  it("excludes lentils from the suggested options for a demanding protein target, and states the density ceiling", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 800, proteinG: 38, carbsG: 100, fatG: 28 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    // Extract just the actual suggested-options list, not the whole
+    // requirement-3 paragraph -- that paragraph now ALSO mentions "lentils"
+    // by name descriptively, as part of explaining why it's excluded.
+    const optionsList = prompt.match(/Options that fit the constraints above for this meal: (.+?)\. These are only starting points/)![1];
+    expect(optionsList.toLowerCase()).not.toContain("lentils");
+    expect(prompt.toLowerCase()).toContain("8-10g protein per 100g");
   });
 
   it("omits the pantry line entirely when there are no pantry items", () => {
@@ -267,6 +307,30 @@ describe("buildBatchPrompt", () => {
     });
     const suggestionLine = prompt.split("\n").find((l) => l.includes("Options that fit the constraints above"))!;
     expect(suggestionLine.toLowerCase()).not.toContain("tempeh");
+  });
+
+  // Stacked-safety investigation, 2026-07-22: gates against the MOST
+  // demanding slot in the batch, not any single slot's own even share --
+  // the prompt explicitly tells Claude it can concentrate a slot's
+  // protein well above that share, so any slot could plausibly end up
+  // needing close to the batch's most demanding target.
+  it("excludes lentils from the suggested options when ANY slot in the batch has a demanding protein target", () => {
+    const prompt = buildBatchPrompt({
+      slots: [
+        { mealType: "breakfast", target: { calories: 400, proteinG: 15, carbsG: 48, fatG: 13 } },
+        { mealType: "lunch", target: { calories: 800, proteinG: 38, carbsG: 100, fatG: 28 } },
+      ],
+      aggregateTarget: { calories: 1200, proteinG: 53, carbsG: 148, fatG: 41 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    // Same reasoning as buildPrompt's equivalent test -- extract just the
+    // suggested-options list, not the whole requirement-4 paragraph (which
+    // now also mentions "lentils" descriptively).
+    const optionsList = prompt.match(/Options that fit the constraints above: (.+?)\. These are only starting points/)![1];
+    expect(optionsList.toLowerCase()).not.toContain("lentils");
   });
 
   // Same carb-budget mechanism as buildPrompt's own test above, per-dish

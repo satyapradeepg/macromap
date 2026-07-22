@@ -63,7 +63,21 @@ const PROPOSE_MEAL_TOOL = {
 // gate (isOpenEndedIngredientUnsafeFor, still the only thing this
 // function's caller trusts), it just stops wasting attempts on
 // suggestions that gate was always going to reject.
-const PROTEIN_EXAMPLES: Array<{ name: string; conflictsWith: (ctx: { dietaryStyles: string[]; allergies: string[] }) => boolean }> = [
+// Real density confirmed live 3x (2026-07-22, stacked-safety
+// investigation): cooked lentils measured 9.02g protein/100g every time.
+// Within the realistic 280g portion cap (aiMealComposition.ts's
+// PORTION_BOUNDS_G.protein.max), that's a hard ceiling of ~25g protein --
+// structurally incapable of a lunch-scale target (32-38g observed live)
+// no matter how it's sized. A margin below that exact ceiling, not the
+// ceiling itself: composeMealFromProposal sizes against whatever protein
+// is still needed after fixed items are counted, so the raw target here
+// is a slight overestimate of the true remaining gap, not an exact match.
+const LENTILS_REALISTIC_PROTEIN_CEILING_G = 22;
+
+const PROTEIN_EXAMPLES: Array<{
+  name: string;
+  conflictsWith: (ctx: { dietaryStyles: string[]; allergies: string[] }, targetProteinG?: number) => boolean;
+}> = [
   { name: "seitan", conflictsWith: (ctx) => ctx.dietaryStyles.includes("gluten_free") || ctx.allergies.some((a) => /wheat|gluten/i.test(a)) },
   { name: "tempeh", conflictsWith: (ctx) => ctx.allergies.some((a) => /soy|soya/i.test(a)) },
   // Added July 16 2026, same live test as the tempeh fix above: once
@@ -77,7 +91,18 @@ const PROTEIN_EXAMPLES: Array<{ name: string; conflictsWith: (ctx: { dietaryStyl
   // staticIngredientMacros.ts) is dense enough to actually work for the
   // exact combination that has nothing else left.
   { name: "pea protein powder", conflictsWith: () => false },
-  { name: "lentils", conflictsWith: () => false },
+  // Widened 2026-07-22: this fix ALREADY diagnosed lentils' weakness
+  // above (that's why pea protein powder got added) but never actually
+  // removed lentils from the list once a denser option existed --
+  // live-confirmed the predictable result: Claude kept picking lentils
+  // over pea protein powder anyway for a demanding target, the same
+  // "follows the concrete example over the abstract density warning"
+  // pattern already documented at this file's carb-budget hint. Now
+  // conditionally excluded once the target is demanding enough that
+  // lentils are structurally incapable of it -- still unconditionally
+  // offered for a genuinely light target (a snack, a small dinner share)
+  // where it's a perfectly fine option.
+  { name: "lentils", conflictsWith: (_ctx, targetProteinG) => targetProteinG !== undefined && targetProteinG > LENTILS_REALISTIC_PROTEIN_CEILING_G },
   { name: "a dense cheese", conflictsWith: (ctx) => ctx.dietaryStyles.includes("vegan") || ctx.dietaryStyles.includes("dairy_free") || ctx.allergies.some((a) => /dairy|milk|lactose|whey|casein|cheese/i.test(a)) },
   { name: "a lean meat if the diet allows it", conflictsWith: (ctx) => ctx.dietaryStyles.includes("vegan") || ctx.dietaryStyles.includes("vegetarian") },
 ];
@@ -87,8 +112,13 @@ const PROTEIN_EXAMPLES: Array<{ name: string; conflictsWith: (ctx: { dietaryStyl
 // purely so tests can assert on the filtered list directly, rather than
 // substring-matching the full prompt (which also uses "seitan cutlets"
 // elsewhere as an unrelated naming-format example).
-export function safeProteinExamples(ctx: { dietaryStyles: string[]; allergies: string[] }): string[] {
-  const examples = PROTEIN_EXAMPLES.filter((e) => !e.conflictsWith(ctx)).map((e) => e.name);
+//
+// targetProteinG (added 2026-07-22, stacked-safety investigation):
+// optional so existing direct callers (tests, or a caller with no
+// meaningful per-call target) keep today's behavior unchanged -- when
+// omitted, lentils is never gated out regardless of density.
+export function safeProteinExamples(ctx: { dietaryStyles: string[]; allergies: string[] }, targetProteinG?: number): string[] {
+  const examples = PROTEIN_EXAMPLES.filter((e) => !e.conflictsWith(ctx, targetProteinG)).map((e) => e.name);
   return examples.length > 0 ? examples : ["lentils", "chickpeas"];
 }
 
@@ -110,7 +140,7 @@ ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuin
 Requirements for your proposal:
 1. Name a REAL, coherent, recognizable dish for ${mealType} -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
 2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
-3. The "protein" ingredient MUST be dense enough to plausibly hit the protein target within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it -- pick something that's actually protein-dense enough for how much protein is actually needed here. Options that fit the constraints above for this meal: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
+3. The "protein" ingredient MUST be dense enough to plausibly hit the protein target within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it -- pick something that's actually protein-dense enough for how much protein is actually needed here. Concretely: most beans/legumes/lentils are only ~8-10g protein per 100g, capping out around 25g protein even at a generous 250-280g portion -- if the protein target above is meaningfully higher than that, a bean/legume/lentil source alone cannot get there no matter how it's portioned; reach for a denser option instead. Options that fit the constraints above for this meal: ${safeProteinExamples({ dietaryStyles, allergies }, target.proteinG).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
 4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 5. Watch the carb budget, not just protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit the protein target on its own can easily blow the carb budget before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If the carb target is not generously larger than the protein target, prefer whichever option from the list in requirement 3 is protein-dense with the LEAST carbs of its own, so the carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve the carb budget well.`;
 }
@@ -216,6 +246,15 @@ export function buildBatchPrompt(input: ProposeMealsBatchInput): string {
     )
     .join("\n");
 
+  // Gates the shared protein-example list against the MOST demanding
+  // slot in this batch, not any single slot's own share -- the prompt
+  // above explicitly tells Claude it can concentrate a slot's protein
+  // well above its even share, so any slot here could plausibly end up
+  // needing close to this batch's most demanding target. Conservative
+  // by construction: might exclude lentils for a slot that would've been
+  // fine with it, never the reverse.
+  const maxSlotProteinG = Math.max(...slots.map((s) => s.target.proteinG));
+
   return `Propose ${slots.length} realistic meals to fill these slots, in this exact order:
 ${slotLines}
 
@@ -238,7 +277,7 @@ Requirements for EACH proposal:
 1. Name a REAL, coherent, recognizable dish for its meal type -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
 2. Set this dish's OWN targetCalories/targetProteinG/targetCarbsG/targetFatG deliberately (see the concentration guidance above) -- this is your real allocation for this specific dish, not a copy of the slot's even share.
 3. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
-4. Each "protein" ingredient MUST be dense enough to plausibly hit THIS DISH'S OWN targetProteinG (the number you set above, not the slot's even share) within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
+4. Each "protein" ingredient MUST be dense enough to plausibly hit THIS DISH'S OWN targetProteinG (the number you set above, not the slot's even share) within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Concretely: most beans/legumes/lentils are only ~8-10g protein per 100g, capping out around 25g protein even at a generous 250-280g portion -- if a dish's own targetProteinG is meaningfully higher than that, a bean/legume/lentil source alone cannot get there no matter how it's portioned; reach for a denser option instead for that dish. Options that fit the constraints above: ${safeProteinExamples({ dietaryStyles, allergies }, maxSlotProteinG).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
 5. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 6. Watch each dish's own carb budget, not just its protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit a dish's targetProteinG on its own can easily blow that dish's targetCarbsG before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If a dish's carb allocation is not generously larger than its protein allocation, prefer whichever option from the list in requirement 4 is protein-dense with the LEAST carbs of its own for THAT dish, so its carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve a dish's carb budget well.
 7. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
