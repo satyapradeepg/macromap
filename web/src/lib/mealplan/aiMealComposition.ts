@@ -252,11 +252,23 @@ export async function composeMealFromProposal(
   const carbLookup = await fetchIngredientMacros(carbProposed.name);
   if (!carbLookup) return null;
   const carbSized = sizeForGap(carbLookup.carbsGPer100g, remainingCarbs);
-  if (!carbSized) return null;
-  if (!isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) return null;
-  const carbItem = toComposedIngredient(carbLookup, carbSized.amountG);
-  composed.push(carbItem);
-  remainingFat -= carbItem.fatG;
+  // Live-confirmed (2026-07-21, stacked-safety investigation): a carb-heavy
+  // protein source (lentils, chickpeas, black beans -- common go-tos once
+  // dairy/soy/nuts/eggs are all excluded) can already cover the carb
+  // target on its own, leaving remainingCarbs <=0 by the time this role is
+  // reached -- sizeForGap correctly returns null for a non-positive gap,
+  // but this used to hard-reject the WHOLE dish for it, even though
+  // "nothing left to add" is a perfectly fine outcome, not a failure. Now
+  // treated the same as the fat role's existing "allowed to contribute
+  // NOTHING" exception just below -- only an out-of-bounds amount rejects
+  // the dish; an absent one (for any reason sizeForGap returns null)
+  // doesn't.
+  if (carbSized) {
+    if (!isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) return null;
+    const carbItem = toComposedIngredient(carbLookup, carbSized.amountG);
+    composed.push(carbItem);
+    remainingFat -= carbItem.fatG;
+  }
 
   const fatLookup = await fetchIngredientMacros(fatProposed.name);
   if (!fatLookup) return null;

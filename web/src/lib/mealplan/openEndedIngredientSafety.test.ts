@@ -217,6 +217,24 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("whole wheat bread", ctx)).not.toBeNull();
     });
 
+    it("does not flag an ingredient explicitly labeled gluten-free (audit fix, 2026-07-21 stacked-safety investigation)", () => {
+      // Live-confirmed: "gluten-free rolled oats" and "rolled oats
+      // (gluten-free)" both got flagged unsafe -- the bare word-boundary
+      // match for "gluten" fired on the literal word inside the
+      // ingredient's OWN "gluten-free" qualifier, punishing exactly the
+      // case where the ingredient correctly calls out that an otherwise-
+      // risky food (oats are commonly cross-contaminated) has been
+      // screened.
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free rolled oats", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("rolled oats (gluten-free)", ctx)).toBeNull();
+    });
+
+    it("still flags an actually-contradictory 'gluten-free seitan' label -- the exemption only covers the word 'gluten' itself", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free seitan", ctx)).not.toBeNull();
+    });
+
     it("does not apply the gluten_free check for an unrelated style like vegetarian", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).toBeNull();

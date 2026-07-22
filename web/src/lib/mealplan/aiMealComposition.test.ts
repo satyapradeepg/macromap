@@ -254,4 +254,26 @@ describe("composeMealFromProposal", () => {
     expect(meal).not.toBeNull();
     expect(meal!.ingredients.find((i) => i.ingredientName === "olive oil")).toBeUndefined();
   });
+
+  it("allows the carb role to contribute nothing without rejecting, when an earlier role already covers the carb target", async () => {
+    // Live-confirmed 2026-07-21 (stacked-safety investigation): a
+    // carb-heavy protein source (lentils/beans/chickpeas, common once
+    // dairy/soy/nuts/eggs are all excluded) can already cover the carb
+    // target on its own -- this used to hard-reject the WHOLE dish
+    // instead of just omitting the now-redundant carb ingredient, the
+    // same class of bug already fixed for the fat role above.
+    const carbHeavyProtein: GroundedIngredientData = { id: 3, name: "carb-heavy protein", caloriesPer100g: 300, proteinGPer100g: 25, carbsGPer100g: 40, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const proposal: MealProposal = {
+      dishName: "Lentil Bowl",
+      ingredients: [
+        { name: "carb-heavy protein", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "carb-heavy protein": carbHeavyProtein, "whole wheat bread": bread, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    expect(meal!.ingredients.find((i) => i.ingredientName === "whole wheat bread")).toBeUndefined();
+  });
 });

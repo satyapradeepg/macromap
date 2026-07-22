@@ -163,8 +163,30 @@ function hasSafePlantCompound(haystack: string, word: string): boolean {
   return reordered !== null && PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(reordered, `${mod} ${word}`));
 }
 
+// Live-confirmed (2026-07-21, stacked-safety investigation): "gluten-free
+// rolled oats" and "rolled oats (gluten-free)" both got flagged unsafe for
+// a gluten_free profile -- the bare word-boundary match for "gluten"
+// fires on the literal word inside the ingredient's OWN "gluten-free"
+// qualifier, punishing exactly the case where Claude correctly called out
+// that an otherwise-risky ingredient (oats are commonly cross-
+// contaminated) has been screened. Narrowly scoped to the literal word
+// "gluten" immediately negated by "-free"/" free" in the SAME name --
+// does NOT exempt any other GLUTEN_SYNONYMS word (wheat/bread/seitan/
+// etc.), so an actually-contradictory label like "gluten-free seitan"
+// still correctly flags (seitan is inherently wheat gluten regardless of
+// how it's labeled). Same over-block-only reasoning as
+// hasSafePlantCompound above: a false negative here can only make a
+// genuinely gluten-free ingredient look unsafe, never the reverse.
+function hasGlutenFreeQualifier(haystack: string, word: string): boolean {
+  return word === "gluten" && /\bgluten[-\s]free\b/.test(haystack);
+}
+
 function containsAny(haystack: string, needles: string[]): string | null {
-  return needles.find((n) => wordBoundaryIncludes(haystack, n) && !hasSafePlantCompound(haystack, n)) ?? null;
+  return (
+    needles.find(
+      (n) => wordBoundaryIncludes(haystack, n) && !hasSafePlantCompound(haystack, n) && !hasGlutenFreeQualifier(haystack, n),
+    ) ?? null
+  );
 }
 
 // Returns a human-readable reason the ingredient is unsafe/should be
