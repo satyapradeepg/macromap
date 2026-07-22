@@ -20,7 +20,7 @@ import {
   type MacroTargets,
   type MealType,
 } from "./targets";
-import { resolveDiet, resolveIntolerances } from "./dietaryMapping";
+import { resolveDiet, resolveIntolerances, unsupportedDietaryStyles } from "./dietaryMapping";
 import { classifyTier, TOLERANCE_PCT, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
@@ -1227,10 +1227,28 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         };
       });
 
+      // Excludes halal/kosher (unsupportedDietaryStyles) before the critic
+      // ever sees them -- confirmed live (2026-07-22 comprehensive test)
+      // that asking Claude to check these produces an inconsistent safety
+      // signal: it sometimes catches a real violation (e.g. a pork dish),
+      // but the deterministic repair swap below has no kosher/halal
+      // awareness at all (dietaryMapping.ts maps both to {}, so neither
+      // Spoonacular's diet/intolerance filters nor swapSlotCandidate's
+      // query reflect them), and diet_violation flags always accept
+      // whatever real alternative comes back regardless of fit. That
+      // swap can land on an equally non-compliant dish, which looks like
+      // a worse failure than never having flagged it -- partial
+      // enforcement that then fails to enforce is more misleading than
+      // the honest "disclosure only, not filtered" stance the rest of
+      // the app already takes for these two styles.
+      const enforceableDietaryStyles = input.dietaryStyles.filter(
+        (style) => !unsupportedDietaryStyles([style]).length,
+      );
+
       const critique = await critiquePlan({
         slots: planSummary,
         weeklyTarget: weekly,
-        dietaryStyles: input.dietaryStyles,
+        dietaryStyles: enforceableDietaryStyles,
         allergies: input.allergies,
         dislikes: input.dislikes,
       });
