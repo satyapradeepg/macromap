@@ -161,6 +161,12 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("almond butter", ctx)).toBeNull();
     });
 
+    it("does not flag a comma-reordered plant-milk/plant-butter name (audit item #2, 2026-07-21)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("milk, coconut", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("butter, almond", ctx)).toBeNull();
+    });
+
     it("still flags real dairy milk/butter/cream for vegan, not just the plant-based compounds", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("whole milk", ctx)).not.toBeNull();

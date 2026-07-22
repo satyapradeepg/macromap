@@ -25,6 +25,7 @@
 // exists to prevent, so every ambiguous case below resolves to "unsafe."
 
 import { resolveIntolerances } from "./dietaryMapping";
+import { commaSwapFallback } from "../spoonacular";
 
 export interface DietaryContext {
   dietaryStyles: string[];
@@ -146,9 +147,20 @@ const PLANT_MODIFIERS = [
 ];
 const COMPOUND_SAFE_WORDS = ["milk", "butter", "cream"];
 
+// Audit item #2 (2026-07-21 spec): only checked the natural "coconut
+// milk" word order -- a USDA-style comma-reordered name like "milk,
+// coconut" (same phrasing pattern as commaSwapFallback in spoonacular.ts
+// exists to fix) fell through this check entirely and got wrongly
+// flagged as containing dairy. Reuses commaSwapFallback rather than
+// re-deriving a second reorder implementation, so the two stay in sync
+// by construction. This is an over-block fix, not a safety one: a false
+// negative here can only make a genuinely-safe plant ingredient look
+// unsafe, never the reverse.
 function hasSafePlantCompound(haystack: string, word: string): boolean {
   if (!COMPOUND_SAFE_WORDS.includes(word)) return false;
-  return PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(haystack, `${mod} ${word}`));
+  if (PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(haystack, `${mod} ${word}`))) return true;
+  const reordered = commaSwapFallback(haystack);
+  return reordered !== null && PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(reordered, `${mod} ${word}`));
 }
 
 function containsAny(haystack: string, needles: string[]): string | null {

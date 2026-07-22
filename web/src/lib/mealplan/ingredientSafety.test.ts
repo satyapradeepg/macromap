@@ -202,6 +202,11 @@ describe("widened dairy/soy synonym coverage (comprehensive engine test, July 16
     const coconutMilkCtx: DietaryContext = { ...NONE, allergies: ["coconut milk"] };
     expect(isKnownIngredientUnsafeFor("greek yogurt", coconutMilkCtx)).toBeNull();
   });
+
+  it("does not let a comma-reordered 'milk, coconut' allergy activate the dairy category (audit item #2, 2026-07-21)", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["milk, coconut"] };
+    expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).toBeNull();
+  });
 });
 
 // Dimension-5 dislike stress test, July 20 2026: userWords used to combine

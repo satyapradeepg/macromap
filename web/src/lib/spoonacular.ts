@@ -203,6 +203,32 @@ export function commaSwapFallback(query: string): string | null {
   return `${after} ${before}`;
 }
 
+// Audit item #1 (2026-07-21 spec): the comma-swap fallback above only
+// covers a "name, modifier" phrasing -- it does nothing for the same
+// prep-word appearing as a plain leading prefix with no comma at all,
+// e.g. "steamed broccoli florets" or "steamed baby carrots" (both
+// live-confirmed zero-result Spoonacular searches this same session, in
+// Finding 2, before that was worked around by dropping the item entirely
+// rather than fixing the lookup). Only strips a LEADING prep-word, never
+// touches the rest of the name -- same conservative reasoning as
+// commaSwapFallback: this is a reorder/strip of a prep descriptor, not a
+// guess at a different ingredient.
+const PREP_PREFIXES = [
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried",
+];
+
+export function prefixStripFallback(query: string): string | null {
+  const trimmed = query.trim();
+  for (const prefix of PREP_PREFIXES) {
+    const match = new RegExp(`^${prefix}\\s+`, "i").exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest || null;
+    }
+  }
+  return null;
+}
+
 interface IngredientSearchMatch {
   id: number;
 }
@@ -237,8 +263,12 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
 
   let match = await searchIngredient(query, apiKey);
   if (!match) {
-    const fallbackQuery = commaSwapFallback(query);
-    if (fallbackQuery) match = await searchIngredient(fallbackQuery, apiKey);
+    const commaSwapped = commaSwapFallback(query);
+    if (commaSwapped) match = await searchIngredient(commaSwapped, apiKey);
+  }
+  if (!match) {
+    const prefixStripped = prefixStripFallback(query);
+    if (prefixStripped) match = await searchIngredient(prefixStripped, apiKey);
   }
   if (!match) return null;
 
