@@ -229,6 +229,37 @@ export function prefixStripFallback(query: string): string | null {
   return null;
 }
 
+// Sibling gap to audit item #1 above, live-confirmed 2026-07-22
+// (stacked-safety re-verification): "gluten-free rolled oats" and "rolled
+// oats (gluten-free)" both returned zero results from Spoonacular's
+// search, even after the openEndedIngredientSafety.ts fix that stopped
+// wrongly flagging this exact phrasing as unsafe -- the search itself
+// doesn't recognize a "gluten-free" qualifier as a food-name modifier,
+// in either the leading ("gluten-free X") or trailing parenthetical
+// ("X (gluten-free)") form Claude actually produced live.
+//
+// Deliberately scoped to "gluten-free" ONLY, not generalized to other
+// allergen-free qualifiers (dairy-free, nut-free, etc.) the way
+// PREP_PREFIXES generalizes across several prep words at once -- most
+// "X-free" labels name a genuinely DIFFERENT reformulated product
+// (dairy-free "cheese" is a plant-based substitute with different real
+// macros), where dropping the qualifier would risk silently matching the
+// wrong food, the same class of risk commaSwapFallback's own docs warn
+// about. "Gluten-free" is the one case that's safe to generalize: gluten-
+// free oats/rice/etc. are nutritionally the same food as their regular
+// counterpart -- the label is a cross-contamination/certification claim,
+// not a reformulation. If another qualifier is confirmed live to need
+// the same treatment, reconsider this scoping then rather than
+// speculatively widening it now.
+export function glutenFreeQualifierStripFallback(query: string): string | null {
+  const trimmed = query.trim();
+  const leading = /^gluten[-\s]free\s+(.+)$/i.exec(trimmed);
+  if (leading) return leading[1].trim() || null;
+  const trailing = /^(.+?)\s*\(\s*gluten[-\s]free\s*\)$/i.exec(trimmed);
+  if (trailing) return trailing[1].trim() || null;
+  return null;
+}
+
 interface IngredientSearchMatch {
   id: number;
 }
@@ -269,6 +300,10 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   if (!match) {
     const prefixStripped = prefixStripFallback(query);
     if (prefixStripped) match = await searchIngredient(prefixStripped, apiKey);
+  }
+  if (!match) {
+    const glutenFreeStripped = glutenFreeQualifierStripFallback(query);
+    if (glutenFreeStripped) match = await searchIngredient(glutenFreeStripped, apiKey);
   }
   if (!match) return null;
 

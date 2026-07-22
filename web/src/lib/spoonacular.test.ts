@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { commaSwapFallback, prefixStripFallback } from "./spoonacular";
+import { commaSwapFallback, prefixStripFallback, glutenFreeQualifierStripFallback } from "./spoonacular";
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): Spoonacular's
 // ingredient search returned zero results for "jasmine rice, cooked" even
@@ -62,5 +62,39 @@ describe("prefixStripFallback", () => {
 
   it("only strips a leading occurrence, not one appearing mid-name", () => {
     expect(prefixStripFallback("baby carrots, steamed")).toBeNull();
+  });
+});
+
+// Sibling gap to audit item #1, live-confirmed 2026-07-22 (stacked-safety
+// re-verification): "gluten-free rolled oats" and "rolled oats
+// (gluten-free)" both returned zero results from Spoonacular's search.
+describe("glutenFreeQualifierStripFallback", () => {
+  it("strips a leading 'gluten-free' qualifier", () => {
+    expect(glutenFreeQualifierStripFallback("gluten-free rolled oats")).toBe("rolled oats");
+    expect(glutenFreeQualifierStripFallback("gluten free rolled oats")).toBe("rolled oats");
+  });
+
+  it("strips a trailing '(gluten-free)' parenthetical qualifier", () => {
+    expect(glutenFreeQualifierStripFallback("rolled oats (gluten-free)")).toBe("rolled oats");
+    expect(glutenFreeQualifierStripFallback("rolled oats (gluten free)")).toBe("rolled oats");
+  });
+
+  it("matches case-insensitively", () => {
+    expect(glutenFreeQualifierStripFallback("GLUTEN-FREE rolled oats")).toBe("rolled oats");
+    expect(glutenFreeQualifierStripFallback("rolled oats (GLUTEN-FREE)")).toBe("rolled oats");
+  });
+
+  it("returns null when no gluten-free qualifier is present", () => {
+    expect(glutenFreeQualifierStripFallback("rolled oats")).toBeNull();
+  });
+
+  it("returns null when stripping the leading qualifier would leave nothing", () => {
+    expect(glutenFreeQualifierStripFallback("gluten-free")).toBeNull();
+    expect(glutenFreeQualifierStripFallback("gluten-free ")).toBeNull();
+  });
+
+  it("does not touch an unrelated allergen-free qualifier -- deliberately scoped to gluten-free only", () => {
+    expect(glutenFreeQualifierStripFallback("dairy-free yogurt")).toBeNull();
+    expect(glutenFreeQualifierStripFallback("yogurt (dairy-free)")).toBeNull();
   });
 });
