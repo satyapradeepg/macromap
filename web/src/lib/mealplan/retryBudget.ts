@@ -59,6 +59,23 @@ export function createAiComposeBudget(): RetryBudget {
   return { remaining: AI_COMPOSE_ACTION_COST * 10 };
 }
 
+// Bad-fit-but-claimed swap pass (2026-07-21 spec, widened AI-compose
+// trigger) -- a SEPARATE budget from createAiComposeBudget above, not
+// carved out of it. Found live: sharing one budget with the genuinely-
+// blocked pass meant a profile with many blocked slots (stacked-safety
+// hit 14) could consume the whole thing before this pass ever got a
+// chance to run at all -- observed 3 times in a row, same 2 slots starved
+// every time, even though detection itself (free, no API cost) found
+// them reliably. Sized to 2 attempts: the offline cached-pool survey that
+// motivated this whole feature found ~11.5% of pools are "thin" (1-4
+// candidates), so a typical constrained plan has 1-3 such slots, not
+// more. Additive to the existing blocked-slot budget, not a reallocation
+// of it -- doesn't reduce coverage for the already-shipped, already-tuned
+// blocked-slot path.
+export function createBadFitSwapBudget(): RetryBudget {
+  return { remaining: AI_COMPOSE_ACTION_COST * 2 };
+}
+
 // Post-generation plan critique + repair (planCritic.ts/planRepair.ts,
 // July 15 2026) — one Claude call to critique the whole week (a
 // non-Spoonacular cost, not modeled here), then a real swap attempt

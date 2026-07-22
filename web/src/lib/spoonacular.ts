@@ -185,6 +185,45 @@ function nutrientAmountFrom(nutrients: Array<{ name: string; amount: number }>, 
   return nutrient?.amount ?? 0;
 }
 
+// Spoonacular's ingredient search wants a bare/canonical name and doesn't
+// reliably match a USDA-style comma-separated phrasing Claude sometimes
+// produces (e.g. "jasmine rice, cooked") -- live-confirmed 2026-07-21:
+// this exact query returned zero results even though "cooked jasmine
+// rice" is a completely ordinary, searchable ingredient. Only handles a
+// single comma, and only REORDERS the two clauses rather than dropping
+// either one -- deliberately conservative, since dropping a modifier
+// like "cooked" could silently match the wrong real ingredient (raw vs.
+// cooked rice have very different macros per 100g; reordering the exact
+// same words carries no such risk).
+export function commaSwapFallback(query: string): string | null {
+  const parts = query.split(",");
+  if (parts.length !== 2) return null;
+  const [before, after] = parts.map((p) => p.trim());
+  if (!before || !after) return null;
+  return `${after} ${before}`;
+}
+
+interface IngredientSearchMatch {
+  id: number;
+}
+
+// Factored out so lookupIngredientMacros can try a reformatted query as a
+// fallback without duplicating the request/error-handling logic. Throws
+// SpoonacularQuotaError on 402/429 (a retry would fail identically, no
+// point spending a second call), returns null for "no match" or any other
+// non-ok response.
+async function searchIngredient(query: string, apiKey: string): Promise<IngredientSearchMatch | null> {
+  const searchParams = new URLSearchParams({ apiKey, query, number: "1" });
+  const searchRes = await fetch(`https://api.spoonacular.com/food/ingredients/search?${searchParams.toString()}`);
+  if (searchRes.status === 402 || searchRes.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${searchRes.status})`);
+  }
+  if (!searchRes.ok) return null;
+
+  const searchBody = (await searchRes.json()) as SpoonacularIngredientSearchResponse;
+  return searchBody.results[0] ?? null;
+}
+
 // Combines search + information into the one lookup the add-on mechanism
 // actually needs — returns null (not a thrown error) on quota/request
 // failure or a zero-result search, since a missing add-on ingredient is an
@@ -196,15 +235,11 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
     throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
   }
 
-  const searchParams = new URLSearchParams({ apiKey, query, number: "1" });
-  const searchRes = await fetch(`https://api.spoonacular.com/food/ingredients/search?${searchParams.toString()}`);
-  if (searchRes.status === 402 || searchRes.status === 429) {
-    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${searchRes.status})`);
+  let match = await searchIngredient(query, apiKey);
+  if (!match) {
+    const fallbackQuery = commaSwapFallback(query);
+    if (fallbackQuery) match = await searchIngredient(fallbackQuery, apiKey);
   }
-  if (!searchRes.ok) return null;
-
-  const searchBody = (await searchRes.json()) as SpoonacularIngredientSearchResponse;
-  const match = searchBody.results[0];
   if (!match) return null;
 
   const infoParams = new URLSearchParams({ apiKey, amount: "100", unit: "grams" });

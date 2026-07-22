@@ -92,7 +92,17 @@ const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   protein: { min: 20, max: 280 },
   carb: { min: 15, max: 250 },
   fat: { min: 3, max: 40 },
-  fixed: { min: 5, max: 150 },
+  // min was 5 -- too strict for the "a spice" case explicitly named in
+  // this role's own prompt description ("a vegetable side, a garnish, a
+  // spice"). Live-confirmed 2026-07-21: Claude proposed "smoked paprika"
+  // at a genuinely realistic fixedAmountG=2 (a normal seasoning amount),
+  // which rejected the WHOLE composition for being "too small" -- the
+  // opposite of the realism problem this bound exists to catch. A
+  // vegetable-side-scale garnish (40g+) and a spice-scale one (1-3g) are
+  // both legitimately "fixed," so the floor needs to accommodate the
+  // smaller end of that range, not just the larger one. max unchanged --
+  // still catches a genuinely oversized garnish.
+  fixed: { min: 1, max: 150 },
 };
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): fixedAmountG

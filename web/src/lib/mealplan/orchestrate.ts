@@ -30,6 +30,7 @@ import {
   RECIPE_ACTION_COST,
   ADDON_ATTEMPT_COST,
   createAiComposeBudget,
+  createBadFitSwapBudget,
   AI_COMPOSE_ACTION_COST,
   createPlanRepairBudget,
   createSelectionAddonBudget,
@@ -1023,9 +1024,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // AI-compose demonstrably improves on it" in the result-handling below.
   const aiComposeBudget = createAiComposeBudget();
   const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number }> = [];
-  // Genuinely blocked slots first, so they keep budget priority over the
-  // bad-fit-but-claimed pass below -- a slot contributing nothing today
-  // matters more to fix than one contributing something, however bad.
+  // Genuinely blocked slots draw from their own existing, already-tuned
+  // budget, unchanged from before this pass existed.
   for (const [key] of [...blockedHints.entries()]) {
     const slotId = allSlots.find((s) => slotKey(s) === key);
     // Snack slots are composed separately above and never end up in
@@ -1047,10 +1047,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // claim, and only if AI-compose demonstrably scores better (see the
   // never-regress check in both result branches below) -- this can only
   // improve a slot's accuracy, never make an already-claimed slot worse.
+  //
+  // Draws from its OWN separate budget (createBadFitSwapBudget), not the
+  // blocked-slot budget above. Found live 2026-07-21: sharing one budget
+  // meant a profile with many blocked slots (stacked-safety hit 14) could
+  // exhaust it entirely before this pass ever ran -- the identical 2
+  // bad-fit-claimed slots got starved 3 live runs in a row, even though
+  // detection itself (this loop, no API cost) found them every time. A
+  // separate, smaller, additive budget guarantees this pass always gets a
+  // real chance, regardless of how many slots are blocked that week.
+  const badFitSwapBudget = createBadFitSwapBudget();
   for (const [claimedIndex, c] of claimResult.claimed.entries()) {
     if (slotMechanism(c.slotId.mealType) !== "recipe") continue;
     if (c.candidate.actualTier !== null) continue;
-    if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
+    if (!trySpend(badFitSwapBudget, AI_COMPOSE_ACTION_COST)) break;
     eligible.push({ key: slotKey(c.slotId), slotId: c.slotId, target: mealTypeTargets[c.slotId.mealType], claimedIndex });
   }
 

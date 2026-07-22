@@ -13,6 +13,7 @@ const bread: GroundedIngredientData = { id: 18075, name: "whole wheat bread", ca
 const oil: GroundedIngredientData = { id: 4053, name: "olive oil", caloriesPer100g: 884, proteinGPer100g: 0, carbsGPer100g: 0, fatGPer100g: 100, estimatedCostCentsPer100g: null };
 const spinach: GroundedIngredientData = { id: 11457, name: "spinach", caloriesPer100g: 23, proteinGPer100g: 2.86, carbsGPer100g: 3.63, fatGPer100g: 0.39, estimatedCostCentsPer100g: null };
 const chicken: GroundedIngredientData = { id: 1, name: "grilled chicken breast", caloriesPer100g: 165, proteinGPer100g: 31, carbsGPer100g: 0, fatGPer100g: 3.6, estimatedCostCentsPer100g: null };
+const paprika: GroundedIngredientData = { id: 1032040, name: "smoked paprika", caloriesPer100g: 282, proteinGPer100g: 14.1, carbsGPer100g: 54, fatGPer100g: 12.9, estimatedCostCentsPer100g: null };
 
 // Real target from the July 15 2026 nut-allergy live test's blocked breakfast slot.
 const BREAKFAST_TARGET = { calories: 354.8, proteinG: 30.8, carbsG: 35.8, fatG: 9.8 };
@@ -192,6 +193,30 @@ describe("composeMealFromProposal", () => {
     const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
     expect(meal).not.toBeNull();
     expect(meal!.ingredients.find((i) => i.ingredientName === "steamed broccoli florets")).toBeUndefined();
+  });
+
+  // Found live 2026-07-21, same investigation: this role's own prompt
+  // description explicitly allows "a spice" alongside "a vegetable side, a
+  // garnish" -- but the 5g floor rejected a genuinely realistic spice
+  // amount (2g of smoked paprika, a normal seasoning quantity), sinking an
+  // otherwise-good composition for being too small, not too large. Floor
+  // lowered to 1g; max (150g) is unchanged and still catches an
+  // oversized garnish.
+  it("still composes when a fixed-role item has a realistic spice-scale amount below the old 5g floor", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "smoked paprika", role: "fixed", fixedAmountG: 2 },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, "smoked paprika": paprika });
+    const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    const paprikaItem = meal!.ingredients.find((i) => i.ingredientName === "smoked paprika")!;
+    expect(paprikaItem.amountG).toBe(2);
   });
 
   // Protein/carb/fat lookup failures are unlike fixed-item ones -- these

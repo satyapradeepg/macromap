@@ -2,9 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   createRetryBudget,
   createSelectionAddonBudget,
+  createAiComposeBudget,
+  createBadFitSwapBudget,
   trySpend,
   RECIPE_ACTION_COST,
   ADDON_ATTEMPT_COST,
+  AI_COMPOSE_ACTION_COST,
 } from "./retryBudget";
 
 describe("retryBudget", () => {
@@ -54,5 +57,33 @@ describe("createSelectionAddonBudget", () => {
     let attempts = 0;
     while (trySpend(budget, ADDON_ATTEMPT_COST)) attempts++;
     expect(attempts).toBe(21);
+  });
+});
+
+// Found live 2026-07-21: sharing createAiComposeBudget between the
+// genuinely-blocked pass and the newer bad-fit-but-claimed pass let a
+// profile with many blocked slots exhaust the whole thing before the
+// bad-fit pass ever got a chance -- observed 3 live runs in a row, same 2
+// slots starved every time. This is a separate, additive budget so that
+// pass always gets a real chance regardless of how many slots are
+// blocked that week.
+describe("createBadFitSwapBudget", () => {
+  it("is a separate budget from createAiComposeBudget, not shared or carved out of it", () => {
+    const aiComposeBudget = createAiComposeBudget();
+    const badFitBudget = createBadFitSwapBudget();
+    // Draining the blocked-slot budget entirely must not affect the
+    // bad-fit budget at all -- they're independent objects.
+    while (trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) {
+      /* drain */
+    }
+    expect(aiComposeBudget.remaining).toBe(0);
+    expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * 2);
+  });
+
+  it("guarantees at least 2 attempts, matching the typical 1-3 thin-pool slots per plan found in the offline cached-pool survey", () => {
+    const budget = createBadFitSwapBudget();
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(2);
   });
 });
