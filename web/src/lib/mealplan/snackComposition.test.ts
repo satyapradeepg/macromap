@@ -64,6 +64,47 @@ describe("composeSnack", () => {
     expect(snack.ingredients).toHaveLength(0);
   });
 
+  // Audit item #3 (2026-07-21 spec): a low-density ingredient sizing to
+  // close a large gap used to have no ceiling at all -- orange (11.8g
+  // carb/100g) is the exact example named in the spec.
+  describe("realistic upper bound per ingredient (audit item #3, 2026-07-21)", () => {
+    it("skips a low-density ingredient rather than sizing it past a realistic serving", () => {
+      const orangeOnlyPool = { orange: pool.orange };
+      const target = { calories: 0, proteinG: 0, carbsG: 35, fatG: 0 };
+      const snack = composeSnack(target, orangeOnlyPool, 0);
+      // 35g carbs / 11.8g per 100g would round to 295g -- over the 250g cap.
+      expect(snack.ingredients).toHaveLength(0);
+    });
+
+    it("still sizes the same low-density ingredient normally when the gap is realistic", () => {
+      const orangeOnlyPool = { orange: pool.orange };
+      const target = { calories: 0, proteinG: 0, carbsG: 20, fatG: 0 };
+      const snack = composeSnack(target, orangeOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["orange"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(250);
+    });
+
+    it("caps a dense ingredient (protein powder) far below a low-density one's cap", () => {
+      const proteinPowderOnlyPool = { "protein powder": pool["protein powder"] };
+      // 55g protein / 80g per 100g would round to 65g -- over the 60g cap,
+      // even though 65g is far below orange's 250g cap for the same role
+      // shape (this is the whole reason the bound is per-ingredient, not
+      // per-role: 65g of protein powder is ~52g protein, an unrealistic
+      // single-snack amount, unlike 65g of a low-density food).
+      const target = { calories: 0, proteinG: 55, carbsG: 0, fatG: 0 };
+      const snack = composeSnack(target, proteinPowderOnlyPool, 0);
+      expect(snack.ingredients).toHaveLength(0);
+    });
+
+    it("still sizes protein powder normally within its own tighter cap", () => {
+      const proteinPowderOnlyPool = { "protein powder": pool["protein powder"] };
+      const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 0 };
+      const snack = composeSnack(target, proteinPowderOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["protein powder"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
+    });
+  });
+
   it("skips a role entirely when the pool has no lookup for it", () => {
     const partialPool = { "greek yogurt": pool["greek yogurt"], banana: pool.banana };
     const target = { calories: 337, proteinG: 29, carbsG: 34, fatG: 9 };
