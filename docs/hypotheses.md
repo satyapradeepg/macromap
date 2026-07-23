@@ -93,6 +93,8 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Failure action:** If repeat rate >30%, expand query diversity by rotating between Spoonacular's cuisine types, adding a "no-repeat" hard constraint (`excludeIds`), or triggering earlier upgrade to a broader Spoonacular tier.
 
+**Early positive signal (July 15 2026 live engine audit):** real Spoonacular recipes landed 21/21 distinct across a single week, zero repeats, in every profile tested that filled its recipe slots — not yet the 4-week window this hypothesis is scoped to, but a good sign within the window measured. **A related but distinct gap found in the same audit, not covered by this hypothesis:** composed snacks (a separate mechanism from Spoonacular recipe search, see F3/F6) are structurally capped at ~3-4 combos/week by a fixed 9-ingredient pool, and narrower still when allergies or a tight budget restrict the safe/preferred options further — one live test found a tight-budget profile getting the identical snack 14/14 times; fixed the same day (see PRD F3), it now alternates between 2 combos. Both symptoms are held back by the same small pool, not by Spoonacular's corpus. See `engine-audit-2026-07-15.md`.
+
 ---
 
 ## H5 — Price accuracy: Tavily estimates are close enough that users don't feel misled
@@ -141,6 +143,8 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 **Hypothesis:** When Spoonacular has no macro/pantry match and Claude composes or edits a recipe (or adds a snack/side to close a macro gap), users rate these AI-touched meals as realistic and cookable at roughly the same rate as pure Spoonacular recipes — this doesn't become a trust-eroding "the AI made something weird" moment.
 
 **Source:** New mechanism introduced alongside pantry-first generation and the conversational assistant (see PRD F3, ai-agents.md Agent 2) — not yet validated with users. Elevates the risk already flagged in H1 / PRD Assumption A1.
+
+**Status (July 15 2026):** the composition fallback is now real, tested code (`aiMealComposition.ts`/`mealProposer.ts`), not just a design — including a portion-realism guardrail added after a live test found naive sizing could ask for an unrealistic 346g of tofu to hit a protein target. Still not live-tested with users, or even with a real Anthropic API key yet (deferred by explicit decision) — this hypothesis remains untested, just less speculative about what the mechanism will actually produce when it does run.
 
 **Test method:**
 - Tag every meal server-side as `spoonacular` / `ai-composed` / `ai-edited` / `snack-addon` at generation time
