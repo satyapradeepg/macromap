@@ -237,7 +237,13 @@ export function OnboardingWizard() {
 
   return (
     <main className="mx-auto max-w-lg px-6 py-16">
-      <h1 className="text-2xl font-bold">
+      <div className="flex gap-1.5">
+        <div className={`h-1 flex-1 rounded-full ${step >= 1 ? "bg-accent" : "bg-border"}`} />
+        <div className={`h-1 flex-1 rounded-full ${step >= 2 ? "bg-accent" : "bg-border"}`} />
+      </div>
+      <p className="mt-1.5 text-xs font-semibold tracking-wide text-muted uppercase">Step {step} of 2</p>
+
+      <h1 className="mt-2 text-2xl font-bold">
         {step === 1
           ? "Let's calculate your targets"
           : "Your suggested daily targets"}
@@ -364,7 +370,7 @@ export function OnboardingWizard() {
                   onClick={() => setBiologicalSex(s)}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${
                     biologicalSex === s
-                      ? "border-accent bg-accent/10 text-accent-2"
+                      ? "border-accent bg-accent text-white"
                       : "border-border text-muted"
                   }`}
                 >
@@ -408,7 +414,7 @@ export function OnboardingWizard() {
                   onClick={() => setGoal(o.value)}
                   className={`rounded-lg border px-2 py-2 text-center text-sm font-semibold ${
                     goal === o.value
-                      ? "border-accent bg-accent/10 text-accent-2"
+                      ? "border-accent bg-accent text-white"
                       : "border-border text-muted"
                   }`}
                 >
@@ -617,9 +623,7 @@ function Chip({
       type="button"
       onClick={onClick}
       className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${
-        active
-          ? "border-accent bg-accent/10 text-accent-2"
-          : "border-border text-muted"
+        active ? "border-accent bg-accent text-white" : "border-border text-muted"
       }`}
     >
       {label}
