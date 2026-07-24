@@ -284,9 +284,53 @@ export interface SwapMealInput {
 
 export interface SwapMealResult {
   slot: PlanSlotView | null;
+  weeklyActual: MacroTargets | null;
   blocked: boolean;
   blockingHint: string | null;
   error: string | null;
+}
+
+// A swap changes one slot's macros without regenerating the whole plan, so
+// the plan-level weekly total (persisted at generation time, see
+// generatePlan below) goes stale unless recomputed here from the current
+// slots + add-ons — same sum orchestrate.ts's sumWithAddons does at
+// generation time, just re-run against what's in the DB now.
+export async function recomputeWeeklyActual(supabase: SupabaseClient, mealPlanId: string): Promise<MacroTargets> {
+  const { data: slots } = await supabase
+    .from("meal_plan_slots")
+    .select("id, calories, protein_g, carbs_g, fat_g")
+    .eq("meal_plan_id", mealPlanId);
+
+  const slotIds = (slots ?? []).map((s) => s.id);
+  const { data: addons } =
+    slotIds.length > 0
+      ? await supabase
+          .from("meal_plan_slot_addons")
+          .select("calories, protein_g, carbs_g, fat_g")
+          .in("meal_plan_slot_id", slotIds)
+      : { data: [] };
+
+  const weeklyActual = [...(slots ?? []), ...(addons ?? [])].reduce(
+    (total, row) => ({
+      calories: total.calories + row.calories,
+      proteinG: total.proteinG + row.protein_g,
+      carbsG: total.carbsG + row.carbs_g,
+      fatG: total.fatG + row.fat_g,
+    }),
+    { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+  );
+
+  await supabase
+    .from("meal_plans")
+    .update({
+      weekly_actual_calories: weeklyActual.calories,
+      weekly_actual_protein_g: weeklyActual.proteinG,
+      weekly_actual_carbs_g: weeklyActual.carbsG,
+      weekly_actual_fat_g: weeklyActual.fatG,
+    })
+    .eq("id", mealPlanId);
+
+  return weeklyActual;
 }
 
 export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
@@ -298,6 +342,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   if (!user) {
     return {
       slot: null,
+      weeklyActual: null,
       blocked: false,
       blockingHint: null,
       error: "No active session — refresh the page and try again.",
@@ -306,7 +351,13 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
 
   const profile = await loadProfile(supabase, user.id);
   if (!profile) {
-    return { slot: null, blocked: false, blockingHint: null, error: "Complete onboarding first." };
+    return {
+      slot: null,
+      weeklyActual: null,
+      blocked: false,
+      blockingHint: null,
+      error: "Complete onboarding first.",
+    };
   }
 
   const { data: existingSlots } = await supabase
@@ -342,6 +393,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
       console.error("Meal swap failed:", err);
       return {
         slot: null,
+        weeklyActual: null,
         blocked: false,
         blockingHint: null,
         error: "Unable to find a replacement right now — try again shortly.",
@@ -351,7 +403,13 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   }
 
   if (swapResult.blocked || !swapResult.candidate) {
-    return { slot: null, blocked: true, blockingHint: swapResult.blockingHint, error: null };
+    return {
+      slot: null,
+      weeklyActual: null,
+      blocked: true,
+      blockingHint: swapResult.blockingHint,
+      error: null,
+    };
   }
 
   // Composed snacks (snack1/snack2) use a synthetic negative id — see
@@ -388,7 +446,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     .single();
 
   if (updateError) {
-    return { slot: null, blocked: false, blockingHint: null, error: updateError.message };
+    return { slot: null, weeklyActual: null, blocked: false, blockingHint: null, error: updateError.message };
   }
 
   // A swapped recipe invalidates any F3 snack/add-on that was sized/chosen
@@ -397,6 +455,8 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   if (updatedSlot) {
     await supabase.from("meal_plan_slot_addons").delete().eq("meal_plan_slot_id", updatedSlot.id);
   }
+
+  const weeklyActual = await recomputeWeeklyActual(supabase, input.mealPlanId);
 
   const slot: PlanSlotView = {
     dayIndex: input.dayIndex,
@@ -421,5 +481,5 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     addon: null,
   };
 
-  return { slot, blocked: false, blockingHint: null, error: null };
+  return { slot, weeklyActual, blocked: false, blockingHint: null, error: null };
 }
