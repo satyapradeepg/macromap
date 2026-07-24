@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getMostRecentPlan } from "./data";
 import { getPantryItems } from "./pantryData";
+import { getGroceryList } from "./groceryData";
 import { PlanBoard } from "./PlanView";
 
 // 21 concurrent Spoonacular calls + up to 3 sequential tolerance widenings
@@ -22,7 +23,7 @@ export default async function PlanPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, allergies, dislikes, dietary_styles, daily_calories")
+    .select("id, allergies, dislikes, dietary_styles, daily_calories, tier")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -30,8 +31,10 @@ export default async function PlanPage() {
     redirect("/onboarding");
   }
 
+  const tier: "free" | "pro" = profile.tier ?? "free";
   const initialPlan = await getMostRecentPlan(supabase, user.id);
   const initialPantryItems = await getPantryItems(supabase, user.id);
+  const initialGroceryList = initialPlan ? await getGroceryList(supabase, initialPlan.id, user.id, tier) : [];
 
   return (
     <PlanBoard
@@ -39,6 +42,8 @@ export default async function PlanPage() {
       dietaryStyles={profile.dietary_styles ?? []}
       dailyCalories={profile.daily_calories}
       initialPantryItems={initialPantryItems}
+      initialGroceryList={initialGroceryList}
+      tier={tier}
     />
   );
 }

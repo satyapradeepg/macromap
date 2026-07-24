@@ -15,6 +15,9 @@ import { generatePlan, swapMeal } from "./actions";
 import type { BlockedSlotView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
 import type { PantryItemView } from "./pantryData";
+import { GroceryList } from "./GroceryList";
+import type { GroceryLineView } from "./groceryData";
+import { fetchGroceryList } from "./groceryActions";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -73,11 +76,15 @@ export function PlanBoard({
   dietaryStyles,
   dailyCalories,
   initialPantryItems,
+  initialGroceryList,
+  tier,
 }: {
   initialPlan: PlanView | null;
   dietaryStyles: string[];
   dailyCalories: number;
   initialPantryItems: PantryItemView[];
+  initialGroceryList: GroceryLineView[];
+  tier: "free" | "pro";
 }) {
   const [plan, setPlan] = useState<PlanView | null>(initialPlan);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlotView[]>(initialPlan?.blockedSlots ?? []);
@@ -86,6 +93,7 @@ export function PlanBoard({
   const [error, setError] = useState<string | null>(null);
   const [swappingKey, setSwappingKey] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState(0);
+  const [groceryList, setGroceryList] = useState<GroceryLineView[]>(initialGroceryList);
 
   const unsupportedStyles = unsupportedDietaryStyles(dietaryStyles);
   // Audit round 2 (July 15 2026), finding 3's remaining half: our own
@@ -112,6 +120,15 @@ export function PlanBoard({
     setBlockedSlots(result.plan?.blockedSlots ?? []);
     setUsingCachedFallback(result.usingCachedFallback);
     setSelectedDay(0);
+
+    // A fresh generation replaces every slot's ingredients, so the grocery
+    // list must be recomputed against the new plan rather than reused.
+    if (result.plan) {
+      const groceryResult = await fetchGroceryList(result.plan.id);
+      setGroceryList(groceryResult.lines);
+    } else {
+      setGroceryList([]);
+    }
   }
 
   async function handleSwap(dayIndex: number, mealType: MealType) {
@@ -144,6 +161,11 @@ export function PlanBoard({
           : prev,
       );
       setBlockedSlots((prev) => prev.filter((b) => slotMapKey(b.dayIndex, b.mealType) !== key));
+
+      // The swapped slot's ingredients changed, so the grocery list must be
+      // recomputed against the same plan rather than reused.
+      const groceryResult = await fetchGroceryList(plan.id);
+      setGroceryList(groceryResult.lines);
     }
   }
 
@@ -264,6 +286,18 @@ export function PlanBoard({
         </summary>
         <div className="border-t border-border p-4 pt-3">
           <PantryPanel initialItems={initialPantryItems} />
+        </div>
+      </details>
+
+      <details className="mt-4 rounded-lg border border-border bg-surface">
+        <summary className="cursor-pointer list-none p-4 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center justify-between">
+            Grocery list
+            <span className="text-xs font-normal text-muted">{groceryList.length} items</span>
+          </span>
+        </summary>
+        <div className="border-t border-border p-4 pt-3">
+          <GroceryList lines={groceryList} tier={tier} />
         </div>
       </details>
     </main>
