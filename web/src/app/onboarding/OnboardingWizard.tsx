@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   ACTIVITY_MULTIPLIERS,
   AGE_RANGE,
@@ -224,6 +225,12 @@ export function OnboardingWizard() {
           {calories} kcal · {protein}g protein · {carbs}g carbs · {fat}g fat,
           daily.
         </p>
+        <Link
+          href="/plan"
+          className="mt-6 inline-block rounded-lg bg-accent px-4 py-2 font-semibold text-white"
+        >
+          Continue to your meal plan
+        </Link>
       </main>
     );
   }
