@@ -11,7 +11,6 @@ import {
 } from "@/lib/mealplan/targets";
 import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
-import { recipeVideoSearchUrl } from "@/lib/youtube";
 import { generatePlan, swapMeal } from "./actions";
 import type { BlockedSlotView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
@@ -30,6 +29,14 @@ const MEAL_TYPE_LABELS: Record<MealType, string> = {
   snack1: "snack 1",
   snack2: "snack 2",
 };
+
+// Spoonacular's serving multiplier is a real (not integer) scale factor —
+// displaying its raw float (e.g. "2.0767144517628826") reads as broken.
+// Rounded to 1 decimal for display only; the underlying macro/price fields
+// already reflect the precise scaled amount, this is cosmetic.
+function formatServings(n: number): string {
+  return (Math.round(n * 10) / 10).toString();
+}
 
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
 // that same ±5% check purely for display, derived from data the plan
@@ -78,6 +85,7 @@ export function PlanBoard({
   const [usingCachedFallback, setUsingCachedFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swappingKey, setSwappingKey] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState(0);
 
   const unsupportedStyles = unsupportedDietaryStyles(dietaryStyles);
   // Audit round 2 (July 15 2026), finding 3's remaining half: our own
@@ -103,6 +111,7 @@ export function PlanBoard({
     setPlan(result.plan);
     setBlockedSlots(result.plan?.blockedSlots ?? []);
     setUsingCachedFallback(result.usingCachedFallback);
+    setSelectedDay(0);
   }
 
   async function handleSwap(dayIndex: number, mealType: MealType) {
@@ -130,6 +139,7 @@ export function PlanBoard({
           ? {
               ...prev,
               slots: [...prev.slots.filter((s) => slotMapKey(s.dayIndex, s.mealType) !== key), result.slot!],
+              weeklyActual: result.weeklyActual ?? prev.weeklyActual,
             }
           : prev,
       );
@@ -151,21 +161,9 @@ export function PlanBoard({
         </button>
       </div>
 
-      <div className="mt-6">
-        <PantryPanel initialItems={initialPantryItems} />
-      </div>
-
-      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-
-      {usingCachedFallback && (
-        <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
-          Using last week&apos;s plan — live generation is temporarily unavailable, try again shortly.
-        </p>
-      )}
-
       {plan && (
-        <div className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-          <p className="font-semibold text-foreground">
+        <div className="mt-6 rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm font-semibold text-foreground">
             {
               {
                 on_target: "This week is within your weekly targets",
@@ -174,13 +172,21 @@ export function PlanBoard({
               }[weeklyAccuracyTier(plan.weeklyActual, plan.weeklyTarget)]
             }
           </p>
-          <p className="mt-1 font-mono text-xs text-muted">
-            Calories: {Math.round(plan.weeklyActual.calories)} / {Math.round(plan.weeklyTarget.calories)} · Protein:{" "}
-            {Math.round(plan.weeklyActual.proteinG)}g / {Math.round(plan.weeklyTarget.proteinG)}g · Carbs:{" "}
-            {Math.round(plan.weeklyActual.carbsG)}g / {Math.round(plan.weeklyTarget.carbsG)}g · Fat:{" "}
-            {Math.round(plan.weeklyActual.fatG)}g / {Math.round(plan.weeklyTarget.fatG)}g
-          </p>
+          <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <MacroStat label="Calories" unit=" cal" actual={plan.weeklyActual.calories} target={plan.weeklyTarget.calories} />
+            <MacroStat label="Protein" unit="g" actual={plan.weeklyActual.proteinG} target={plan.weeklyTarget.proteinG} />
+            <MacroStat label="Carbs" unit="g" actual={plan.weeklyActual.carbsG} target={plan.weeklyTarget.carbsG} />
+            <MacroStat label="Fat" unit="g" actual={plan.weeklyActual.fatG} target={plan.weeklyTarget.fatG} />
+          </div>
         </div>
+      )}
+
+      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
+
+      {usingCachedFallback && (
+        <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
+          Using last week&apos;s plan — live generation is temporarily unavailable, try again shortly.
+        </p>
       )}
 
       {unsupportedStyles.length > 0 && (
@@ -204,43 +210,98 @@ export function PlanBoard({
       )}
 
       {plan && (
-        <div className="mt-8 flex flex-col gap-8">
-          {DAY_LABELS.map((label, dayIndex) => {
-            const status = dayStatus(plan, dayIndex);
-            return (
-            <div key={dayIndex}>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">{label}</h2>
-                {status === "within_band" && (
-                  <span className="text-xs font-semibold text-accent-2">On target</span>
-                )}
-                {status === "outside_band" && (
-                  <span className="text-xs font-semibold text-muted">Slightly off target</span>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                {MEAL_TYPES.map((mealType) => {
-                  const key = slotMapKey(dayIndex, mealType);
-                  const slot = plan.slots.find((s) => slotMapKey(s.dayIndex, s.mealType) === key);
-                  const blocked = blockedSlots.find((b) => slotMapKey(b.dayIndex, b.mealType) === key);
-                  return (
-                    <MealCard
-                      key={key}
-                      mealType={mealType}
-                      slot={slot}
-                      blockingHint={blocked?.blockingHint ?? null}
-                      swapping={swappingKey === key}
-                      onSwap={() => handleSwap(dayIndex, mealType)}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-            );
-          })}
+        <div className="mt-8">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {DAY_LABELS.map((label, dayIndex) => {
+              const status = dayStatus(plan, dayIndex);
+              const isSelected = dayIndex === selectedDay;
+              return (
+                <button
+                  key={dayIndex}
+                  type="button"
+                  onClick={() => setSelectedDay(dayIndex)}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                    isSelected
+                      ? "border-accent bg-accent text-white"
+                      : "border-border bg-surface text-muted"
+                  }`}
+                >
+                  {label}
+                  {status === "within_band" && (
+                    <span className={isSelected ? "text-white" : "text-accent-2"}>●</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {MEAL_TYPES.map((mealType) => {
+              const key = slotMapKey(selectedDay, mealType);
+              const slot = plan.slots.find((s) => slotMapKey(s.dayIndex, s.mealType) === key);
+              const blocked = blockedSlots.find((b) => slotMapKey(b.dayIndex, b.mealType) === key);
+              return (
+                <MealCard
+                  key={key}
+                  mealType={mealType}
+                  slot={slot}
+                  blockingHint={blocked?.blockingHint ?? null}
+                  swapping={swappingKey === key}
+                  onSwap={() => handleSwap(selectedDay, mealType)}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
+
+      <details className="mt-10 rounded-lg border border-border bg-surface">
+        <summary className="cursor-pointer list-none p-4 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center justify-between">
+            Pantry
+            <span className="text-xs font-normal text-muted">Optional</span>
+          </span>
+        </summary>
+        <div className="border-t border-border p-4 pt-3">
+          <PantryPanel initialItems={initialPantryItems} />
+        </div>
+      </details>
     </main>
+  );
+}
+
+function MacroStat({
+  label,
+  actual,
+  target,
+  unit,
+}: {
+  label: string;
+  actual: number;
+  target: number;
+  unit: string;
+}) {
+  const pct = target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : 0;
+  return (
+    <div>
+      <span className="text-xs font-semibold tracking-wide text-muted uppercase">{label}</span>
+      <div className="mt-0.5 font-mono text-xs text-muted">
+        {Math.round(actual)}
+        {unit} / {Math.round(target)}
+        {unit}
+      </div>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-border">
+        <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function MacroPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[11px] text-muted">
+      {children}
+    </span>
   );
 }
 
@@ -258,68 +319,71 @@ function MealCard({
   onSwap: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-3">
-      <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
-
-      {slot ? (
-        <>
-          <p className="mt-1 text-sm font-semibold text-foreground">{slot.recipeTitle}</p>
-          {slot.matchLabel && <p className="mt-1 text-xs text-muted">{slot.matchLabel}</p>}
-          <p className="mt-2 font-mono text-xs text-muted">
-            {Math.round(slot.calories)} cal · {Math.round(slot.proteinG)}g protein · {Math.round(slot.carbsG)}g
-            carbs · {Math.round(slot.fatG)}g fat
-          </p>
-          {slot.isComposed ? (
-            slot.composedIngredients && (
-              <p className="mt-1 text-xs text-muted">
-                {slot.composedIngredients.map((i) => `${Math.round(i.amountG)}g ${i.name}`).join(" + ")}
-              </p>
-            )
-          ) : (
-            <p className="mt-1 text-xs text-muted">
-              {slot.servings > 1
-                ? `Macros shown are for 1 serving — this recipe makes ${slot.servings}, so cook a fraction of it or plan for leftovers.`
-                : "Makes 1 serving."}
-            </p>
-          )}
-          {slot.aiComposed && (
-            <p className="mt-1 text-xs text-muted">
-              AI-composed — no Spoonacular recipe matched this meal, so this dish was assembled from real,
-              grounded ingredient data instead.
-            </p>
-          )}
-          {slot.addon && (
-            <p className="mt-1 text-xs text-accent-2">
-              + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} added to help hit this week&apos;s
-              targets ({Math.round(slot.addon.caloriesKcal)} cal)
-            </p>
-          )}
-          <div className="mt-3 flex items-center justify-between">
-            {slot.isComposed && !slot.aiComposed ? (
-              <span className="text-xs text-muted">No recipe to cook — just combine and eat</span>
-            ) : (
-              <a
-                href={recipeVideoSearchUrl(slot.recipeTitle)}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-semibold text-accent-2"
-              >
-                Watch how to cook this
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={onSwap}
-              disabled={swapping}
-              className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted disabled:opacity-60"
-            >
-              {swapping ? "Swapping…" : "Swap"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
+    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface">
+      {slot?.imageUrl && (
+        <div className="aspect-4/3 w-full shrink-0 bg-background">
+          {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, not worth a next.config remotePatterns entry for a thumbnail */}
+          <img src={slot.imageUrl} alt={slot.recipeTitle} loading="lazy" className="h-full w-full object-cover" />
+        </div>
       )}
+      <div className="flex flex-1 flex-col p-3">
+        <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
+
+        {slot ? (
+          <>
+            <p className="mt-1 text-sm font-semibold text-foreground">{slot.recipeTitle}</p>
+            {slot.matchLabel && <p className="mt-0.5 text-xs text-muted">{slot.matchLabel}</p>}
+
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <MacroPill>{Math.round(slot.calories)} cal</MacroPill>
+              <MacroPill>{Math.round(slot.proteinG)}g protein</MacroPill>
+              <MacroPill>{Math.round(slot.carbsG)}g carbs</MacroPill>
+              <MacroPill>{Math.round(slot.fatG)}g fat</MacroPill>
+            </div>
+
+            {slot.isComposed ? (
+              slot.composedIngredients && (
+                <p className="mt-2 text-xs text-muted">
+                  {slot.composedIngredients.map((i) => `${Math.round(i.amountG)}g ${i.name}`).join(" + ")}
+                </p>
+              )
+            ) : (
+              slot.servings > 1 && (
+                <p className="mt-2 text-xs text-muted">
+                  Makes {formatServings(slot.servings)} servings — cook a fraction or plan for leftovers.
+                </p>
+              )
+            )}
+            {slot.aiComposed && (
+              <p className="mt-1 text-xs text-muted">
+                AI-composed — no recipe matched, assembled from real ingredient data.
+              </p>
+            )}
+            {slot.addon && (
+              <p className="mt-1 text-xs text-accent-2">
+                + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} to help hit this week&apos;s
+                targets ({Math.round(slot.addon.caloriesKcal)} cal)
+              </p>
+            )}
+
+            <div className="mt-auto flex items-center justify-between pt-3">
+              <span className="text-xs text-muted">
+                {slot.isComposed && !slot.aiComposed ? "Combine and eat — no cooking" : ""}
+              </span>
+              <button
+                type="button"
+                onClick={onSwap}
+                disabled={swapping}
+                className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted disabled:opacity-60"
+              >
+                {swapping ? "Swapping…" : "Swap"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
+        )}
+      </div>
     </div>
   );
 }
