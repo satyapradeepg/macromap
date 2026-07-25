@@ -33,7 +33,9 @@ cp .env.local.example .env.local   # fill in your Supabase project's URL + anon 
 pnpm dev
 ```
 
-You'll also need to run `web/supabase/migrations/0001_profiles.sql` once in your Supabase project's SQL editor, and enable **Authentication → Sign In / Providers → Anonymous** — MacroMap lets guests complete onboarding through the grocery list with no account (see PRD Section 7.1), which relies on Supabase anonymous auth.
+You'll also need to run every file in `web/supabase/migrations/` (currently `0001` through `0020`, in order) once in your Supabase project's SQL editor, and enable **Authentication → Sign In / Providers → Anonymous** — MacroMap lets guests complete onboarding through the grocery list with no account (see PRD Section 7.1), which relies on Supabase anonymous auth.
+
+Run `pnpm test` to run the Vitest suite (unit tests for ranking, grocery aggregation, pantry matching, and unit conversion).
 
 ## The core workflow
 
@@ -54,7 +56,7 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Track
 |---|---|---|
 | Recipe + nutrition | Spoonacular API ($29/mo) | One call returns recipe + per-serving nutrition; 5,000+ recipes |
 | Price estimates | Tavily Search API (free tier) | No credit card required; estimates only, manual override supported |
-| Pantry & constraints | Custom MCP | Allergies, dislikes, budget, ratings; pantry contents now read at generation time from MVP, not just used to filter the grocery list afterward |
+| Pantry & constraints | Custom MCP | Allergies, dislikes, budget, ratings; pantry contents read at generation time (quantity-aware, not just present/absent) and again at grocery-list time — matching handles cross-category unit conversion (e.g. ml pantry stock against a gram-denominated recipe line) and an LLM identity classifier for name-matching (not id-matching, since the same ingredient often resolves to several different Spoonacular ids) |
 | Conversational agent layer | Same orchestrator (Claude, Sonnet tier), held as a persistent chat session | Edit pantry, swap a meal, or change a constraint in plain language — no separate infrastructure |
 | Barcode scanning (V2) | Open Food Facts + ZXing-js | Free, no API key; manual pantry entry itself is now MVP, this just adds a lower-friction entry method |
 | Recipe videos | YouTube deep-link | Zero API cost for MVP |
