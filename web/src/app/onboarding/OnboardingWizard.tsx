@@ -219,7 +219,7 @@ export function OnboardingWizard() {
 
   if (saved) {
     return (
-      <main className="mx-auto max-w-md px-6 py-24 text-center">
+      <main className="mx-auto w-full min-w-0 max-w-md px-6 py-24 text-center">
         <h1 className="text-2xl font-bold">Profile saved</h1>
         <p className="mt-2 text-muted">
           {calories} kcal · {protein}g protein · {carbs}g carbs · {fat}g fat,
@@ -236,7 +236,7 @@ export function OnboardingWizard() {
   }
 
   return (
-    <main className="mx-auto max-w-lg px-6 py-16">
+    <main className="mx-auto w-full min-w-0 max-w-lg px-6 py-16">
       <div className="flex gap-1.5">
         <div className={`h-1 flex-1 rounded-full ${step >= 1 ? "bg-accent" : "bg-border"}`} />
         <div className={`h-1 flex-1 rounded-full ${step >= 2 ? "bg-accent" : "bg-border"}`} />

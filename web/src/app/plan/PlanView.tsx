@@ -182,7 +182,24 @@ export function PlanBoard({
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16">
+    // w-full is the real fix for a real mobile-width bug found live
+    // 2026-07-25 -- this <main> is a flex item of layout.tsx's root
+    // wrapper (flex flex-col), and `mx-auto` (auto left/right margins)
+    // disables flexbox's default cross-axis stretch for a flex item, a
+    // documented CSS behavior. Without an explicit width, that meant this
+    // <main> sized itself to its WIDEST descendant's content (the day
+    // selector row below, up to ~455px) instead of the actual viewport
+    // (375px on a phone), pushing the whole page into real horizontal
+    // overflow -- confirmed live: "Swap"/"Recipe" buttons and grocery
+    // prices were silently clipped off-screen on a narrow viewport, not
+    // just cosmetically tight. `min-w-0` alone (the more commonly-cited
+    // flexbox overflow fix, for the OTHER classic cause -- a flex item's
+    // default min-width:auto refusing to shrink) did NOT fix this; only
+    // adding an explicit `w-full` did, confirmed by direct computed-style
+    // inspection (align-items resolved to "normal"/stretch, but the auto
+    // margins from mx-auto override it regardless). Kept min-w-0 anyway
+    // as cheap insurance against the OTHER cause resurfacing separately.
+    <main className="mx-auto w-full min-w-0 max-w-3xl px-6 py-16">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Your meal plan</h1>
         <button

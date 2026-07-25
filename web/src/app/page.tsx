@@ -23,7 +23,12 @@ export default async function Home() {
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6">
+    <main className="mx-auto flex w-full min-w-0 max-w-2xl flex-1 flex-col px-6">
+      {/* w-full is the real fix, not min-w-0 -- mx-auto's auto margins
+          disable flexbox's default cross-axis stretch on a flex item, so
+          without an explicit width this would size to its widest
+          descendant's content instead of the viewport (live-confirmed
+          2026-07-25, see PlanView.tsx's <main> for the full story). */}
       <div className="pt-8">
         <span className="text-sm font-extrabold tracking-tight">
           Macro<span className="text-accent">Map</span>
