@@ -175,6 +175,7 @@ interface SpoonacularIngredientInformationResponse {
   id: number;
   name: string;
   estimatedCost?: { value: number; unit: string };
+  aisle?: string;
   nutrition?: {
     nutrients: Array<{ name: string; amount: number }>;
   };
@@ -396,6 +397,61 @@ export async function lookupIngredientCost(
   const value = info.estimatedCost?.value;
   if (!value || value <= 0) return null;
   return { costCents: Math.round(value) };
+}
+
+// Grocery-list categorization (grouping by aisle, e.g. "Produce", "Baking")
+// — reuses the SAME ingredient information endpoint as lookupIngredientCost
+// above (confirmed live 2026-07-25: the exact response Spoonacular already
+// returns for cost lookups also carries a real `aisle` string, e.g.
+// "Baking" for brown sugar, "Produce" for tomato), just without amount/unit
+// params since aisle doesn't depend on quantity. A separate function (not
+// folded into lookupIngredientCost) rather than complicating that already-
+// tested tier-conditional pricing path -- aisle categorization applies
+// regardless of tier, cost lookups don't.
+export async function lookupIngredientAisle(ingredientId: number): Promise<string | null> {
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey) {
+    throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.spoonacular.com/food/ingredients/${ingredientId}/information?${new URLSearchParams({ apiKey }).toString()}`,
+    );
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular request failed: ${(err as Error).message}`);
+  }
+
+  if (response.status === 402 || response.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${response.status})`);
+  }
+  if (!response.ok) return null;
+
+  let info: SpoonacularIngredientInformationResponse;
+  try {
+    info = await response.json();
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular response was not valid JSON: ${(err as Error).message}`);
+  }
+
+  return parsePrimaryAisle(info.aisle);
+}
+
+// Spoonacular sometimes returns SEVERAL aisles for one ingredient, joined
+// by ";" -- live-confirmed 2026-07-25: "BAKERY/BREAD;PASTA AND
+// RICE;ETHNIC FOODS" for corn tortillas. Grouping by the raw string
+// verbatim would put that one ingredient in its own garbled section
+// instead of alongside every other bread/bakery item -- takes just the
+// first (primary) aisle instead. A "/" within one segment (e.g.
+// "BAKERY/BREAD") is left alone -- that reads as one compound label, the
+// same way Spoonacular's own "Milk, Eggs, Other Dairy" uses a comma
+// within a single aisle name, not a list to split further.
+export function parsePrimaryAisle(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const [first] = raw.split(";");
+  const trimmed = first?.trim();
+  return trimmed || null;
 }
 
 function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {

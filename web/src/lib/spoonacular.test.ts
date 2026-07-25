@@ -4,6 +4,7 @@ import {
   prefixStripFallback,
   glutenFreeQualifierStripFallback,
   parseRecipeInformation,
+  parsePrimaryAisle,
 } from "./spoonacular";
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): Spoonacular's
@@ -140,5 +141,30 @@ describe("parseRecipeInformation", () => {
     expect(parseRecipeInformation(null).steps).toEqual([]);
     expect(parseRecipeInformation("garbage").steps).toEqual([]);
     expect(parseRecipeInformation({ analyzedInstructions: "not an array" }).steps).toEqual([]);
+  });
+});
+
+describe("parsePrimaryAisle", () => {
+  it("returns a plain single-aisle string unchanged", () => {
+    expect(parsePrimaryAisle("Baking")).toBe("Baking");
+  });
+
+  it("takes only the first aisle from a semicolon-joined list", () => {
+    // Live-confirmed 2026-07-25: corn tortillas returned exactly this.
+    expect(parsePrimaryAisle("BAKERY/BREAD;PASTA AND RICE;ETHNIC FOODS")).toBe("BAKERY/BREAD");
+  });
+
+  it("leaves a '/' within one segment alone -- a compound label, not a list", () => {
+    expect(parsePrimaryAisle("Milk, Eggs, Other Dairy")).toBe("Milk, Eggs, Other Dairy");
+  });
+
+  it("trims whitespace around the first segment", () => {
+    expect(parsePrimaryAisle("  Produce  ; Other")).toBe("Produce");
+  });
+
+  it("returns null for undefined or empty input", () => {
+    expect(parsePrimaryAisle(undefined)).toBeNull();
+    expect(parsePrimaryAisle("")).toBeNull();
+    expect(parsePrimaryAisle(";;;")).toBeNull();
   });
 });

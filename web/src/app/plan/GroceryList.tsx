@@ -7,6 +7,7 @@
 import { useState } from "react";
 import type { GroceryLineView } from "./groceryData";
 import { overrideGroceryPrice } from "./groceryActions";
+import { UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
 
 function formatAmount(amount: number, unit: string): string {
   const rounded = Math.round(amount * 10) / 10;
@@ -110,6 +111,25 @@ function lineKey(line: Pick<GroceryLineView, "ingredientId" | "unit">): string {
   return `${line.ingredientId}-${line.unit}`;
 }
 
+// Grouped for a real shopping trip (produce, dairy, meat, ...) rather than
+// one flat alphabetical-by-name list. UNCATEGORIZED_AISLE always sorts
+// last regardless of where "O" falls alphabetically among real aisle
+// names, so unresolved items sit at the end instead of interrupting the
+// produce/dairy/meat run.
+function groupByAisle(lines: GroceryLineView[]): Array<[string, GroceryLineView[]]> {
+  const groups = new Map<string, GroceryLineView[]>();
+  for (const line of lines) {
+    const existing = groups.get(line.aisle);
+    if (existing) existing.push(line);
+    else groups.set(line.aisle, [line]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => {
+    if (a === UNCATEGORIZED_AISLE) return 1;
+    if (b === UNCATEGORIZED_AISLE) return -1;
+    return a.localeCompare(b);
+  });
+}
+
 export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "free" | "pro" }) {
   const [copied, setCopied] = useState(false);
   const [priceOverrides, setPriceOverrides] = useState<Record<string, number>>({});
@@ -127,6 +147,7 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
 
   // Contributes $0 until overridden (PRD 7.3 F4) — never fabricated.
   const weeklyTotalCents = resolvedLines.reduce((sum, line) => sum + (line.priceCents ?? 0), 0);
+  const groupedLines = groupByAisle(resolvedLines);
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
@@ -147,31 +168,38 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
         <p className="mt-3 text-xs text-muted">Nothing to shop for yet — generate a plan first.</p>
       ) : (
         <>
-          <ul className="mt-3 flex flex-col gap-1.5">
-            {resolvedLines.map((line) => (
-              <li key={lineKey(line)} className="flex items-center justify-between gap-3 text-sm text-foreground">
-                <span>
-                  {formatAmount(line.totalAmount, line.unit)} {line.name}
-                  {line.needsManualCombine && (
-                    <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
-                  )}
-                  {!line.needsManualCombine && line.viaAiEstimate && (
-                    <span className="ml-1.5 text-xs text-muted">
-                      — combined via AI density estimate, double-check the total
-                    </span>
-                  )}
-                </span>
-                {tier === "pro" && (
-                  <PriceCell
-                    line={line}
-                    onOverride={(priceCents) =>
-                      setPriceOverrides((prev) => ({ ...prev, [lineKey(line)]: priceCents }))
-                    }
-                  />
-                )}
-              </li>
+          <div className="mt-3 flex flex-col gap-4">
+            {groupedLines.map(([aisle, aisleLines]) => (
+              <div key={aisle}>
+                <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{aisle}</h3>
+                <ul className="mt-1.5 flex flex-col gap-1.5">
+                  {aisleLines.map((line) => (
+                    <li key={lineKey(line)} className="flex items-center justify-between gap-3 text-sm text-foreground">
+                      <span>
+                        {formatAmount(line.totalAmount, line.unit)} {line.name}
+                        {line.needsManualCombine && (
+                          <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
+                        )}
+                        {!line.needsManualCombine && line.viaAiEstimate && (
+                          <span className="ml-1.5 text-xs text-muted">
+                            — combined via AI density estimate, double-check the total
+                          </span>
+                        )}
+                      </span>
+                      {tier === "pro" && (
+                        <PriceCell
+                          line={line}
+                          onOverride={(priceCents) =>
+                            setPriceOverrides((prev) => ({ ...prev, [lineKey(line)]: priceCents }))
+                          }
+                        />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
 
           {tier === "pro" && (
             <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-sm font-semibold text-foreground">

@@ -23,6 +23,7 @@ import {
 } from "@/lib/grocery/aggregate";
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
 import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
+import { aisleCacheKey, resolveIngredientAisle, UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
 import { lookupIngredientCost } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
@@ -32,6 +33,9 @@ export interface GroceryLineView {
   name: string;
   totalAmount: number;
   unit: string;
+  // Grocery-store aisle/section (e.g. "Produce", "Baking") for grouping the
+  // list — see lib/grocery/ingredientAisle.ts. "Other" when unresolvable.
+  aisle: string;
   needsManualCombine: boolean;
   // See aggregate.ts's GroceryLine.viaAiEstimate — set when this line's
   // amount was combined across units using an AI density estimate rather
@@ -364,12 +368,30 @@ export async function getGroceryList(
     unitConversionRates: unitConversionRatesByRow[i],
   }));
 
-  const lines = applyPantryItems(rawLines, pantryItems)
+  const excludedLines = applyPantryItems(rawLines, pantryItems);
+
+  // Deduped by the SAME cache-key convention resolveIngredientAisle itself
+  // uses (id when resolved, else normalized name) -- a real plan can have
+  // far fewer distinct ingredients than lines (aggregate.ts splits a same-
+  // id group whenever units disagree), same dedup reasoning as
+  // resolvePricedLines above.
+  const aisleByKey = new Map<string, string>();
+  await Promise.all(
+    [...new Map(excludedLines.map((l) => [aisleCacheKey(l.ingredientId, l.name), l])).values()].map(
+      async (line) => {
+        const resolved = await resolveIngredientAisle(line.ingredientId, line.name);
+        aisleByKey.set(aisleCacheKey(line.ingredientId, line.name), resolved?.aisle ?? UNCATEGORIZED_AISLE);
+      },
+    ),
+  );
+
+  const lines = excludedLines
     .map((line) => ({
       ingredientId: line.ingredientId,
       name: line.name,
       totalAmount: line.totalAmount,
       unit: line.unit,
+      aisle: aisleByKey.get(aisleCacheKey(line.ingredientId, line.name)) ?? UNCATEGORIZED_AISLE,
       needsManualCombine: line.needsManualCombine,
       viaAiEstimate: line.viaAiEstimate,
     }))
