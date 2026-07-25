@@ -10,7 +10,7 @@
 // here explicitly or the grocery list silently under-counts every plan
 // that used the F3 gap-closer mechanism.
 
-import { classifyUnit, toBaseAmount } from "./units";
+import { classifyUnit, toBaseAmount, type UnitCategory } from "./units";
 
 export interface SlotIngredientEntry {
   id: number;
@@ -94,59 +94,93 @@ function normalizeOtherUnit(unit: string): string {
   return unit.toLowerCase().trim().replace(/s$/, "");
 }
 
-// Returns how much of a grocery line's need one pantry item covers,
-// expressed in the LINE's own unit -- or null when the two genuinely can't
-// be compared (no structured quantity on the pantry item, different unit
-// categories, or same "other" category but a different descriptor, e.g.
-// pantry "1 bag" flour vs. a line in "cups"). Never guesses across an
-// unconvertible pair: the caller falls back to a hard exclude in that
-// case, exactly as if no quantity had been given at all.
-function pantryContributionInLineUnit(item: PantryExclusionItem, line: GroceryLine): number | null {
-  if (item.amount === null || item.unit === null) return null;
-
-  const pantryCategory = classifyUnit(item.unit);
-  const lineCategory = classifyUnit(line.unit);
-  if (pantryCategory !== lineCategory) return null;
-
-  if (pantryCategory === "other") {
-    if (normalizeOtherUnit(item.unit) !== normalizeOtherUnit(line.unit)) return null;
-    return item.amount; // same descriptor -- counts are directly comparable
-  }
-
-  const pantryBase = toBaseAmount(item.amount, item.unit);
-  const oneLineUnitInBase = toBaseAmount(1, line.unit);
-  if (!pantryBase || !oneLineUnitInBase || oneLineUnitInBase.baseAmount === 0) return null;
-  return pantryBase.baseAmount / oneLineUnitInBase.baseAmount;
+// A pantry item's on-hand quantity as a single shared pool that depletes
+// as it's applied across grocery lines. Fixes a real bug found live
+// 2026-07-25: previously each matching line drew the item's FULL declared
+// amount independently (no state shared across lines), so one real pantry
+// entry (e.g. "2 cloves garlic") could double- or triple-count against
+// every garlic-named line this app is already known to split one
+// ingredient into, instead of being spent once across their combined
+// need. `category`/`otherDescriptor` are precomputed once since they
+// don't change as the pool depletes; `remainingBase` is grams, ml, or a
+// raw "other" count, matching whichever `category` implies.
+interface PantryPool {
+  item: PantryExclusionItem;
+  category: UnitCategory | null; // null when the item has no usable structured quantity at all
+  otherDescriptor: string | null; // set only when category === "other"
+  remainingBase: number;
 }
 
-// F6: reduces a grocery line by pantry quantities already on hand when
-// they're genuinely comparable to the line's unit; falls back to
-// excluding the line ENTIRELY (the original all-or-nothing behavior, kept
-// for every case a structured quantity can't settle) when any matching
-// pantry item lacks a structured amount/unit or its unit can't be
-// compared. Distinct from F3's soft pantry-bias preference in ranking.ts's
+function buildPantryPools(pantryItems: PantryExclusionItem[]): PantryPool[] {
+  return pantryItems.map((item) => {
+    if (item.amount === null || item.unit === null) {
+      return { item, category: null, otherDescriptor: null, remainingBase: 0 };
+    }
+    const category = classifyUnit(item.unit);
+    if (category === "other") {
+      return { item, category, otherDescriptor: normalizeOtherUnit(item.unit), remainingBase: item.amount };
+    }
+    const base = toBaseAmount(item.amount, item.unit);
+    return { item, category, otherDescriptor: null, remainingBase: base ? base.baseAmount : 0 };
+  });
+}
+
+// F6: reduces a grocery line by pantry quantities already on hand,
+// drawing down each matching pantry item's SHARED pool (see PantryPool)
+// rather than reapplying its full amount per line. Falls back to
+// excluding the line ENTIRELY (the original all-or-nothing behavior) only
+// when EVERY matching pantry item is structurally unusable against this
+// line (no structured quantity, or an incompatible unit/descriptor) --
+// fixes a second bug found live 2026-07-25 where a single unquantified
+// match discarded a different, perfectly usable match's contribution for
+// the same line. A pool that's merely exhausted (already spent on an
+// earlier line) is left out of the sum but does NOT trigger the
+// hard-exclude fallback -- it simply has nothing left to give this line.
+// Distinct from F3's soft pantry-bias preference in ranking.ts's
 // pantryOverlapDeduction (which only nudges recipe selection, never drops
 // a slot or an ingredient).
-function applyPantryToLine(line: GroceryLine, pantryItems: PantryExclusionItem[]): GroceryLine | null {
-  const matches = pantryItems.filter((item) => matchesPantryItem(line, item));
+function applyPantryToLine(line: GroceryLine, pools: PantryPool[]): GroceryLine | null {
+  const lineCategory = classifyUnit(line.unit);
+  const matches = pools.filter((pool) => matchesPantryItem(line, pool.item));
   if (matches.length === 0) return line;
 
-  let totalContribution = 0;
-  for (const item of matches) {
-    const contribution = pantryContributionInLineUnit(item, line);
-    if (contribution === null) return null; // hard exclude -- unconvertible or unquantified match
-    totalContribution += contribution;
+  const usable = matches.filter(
+    (pool) =>
+      pool.category !== null &&
+      pool.category === lineCategory &&
+      (pool.category !== "other" || pool.otherDescriptor === normalizeOtherUnit(line.unit)),
+  );
+  if (usable.length === 0) return null; // every match is unquantified or unit-incompatible -- safe hard-exclude fallback
+
+  let remainingNeedBase: number;
+  let oneLineUnitBase = 1;
+  if (lineCategory === "other") {
+    remainingNeedBase = line.totalAmount;
+  } else {
+    const need = toBaseAmount(line.totalAmount, line.unit);
+    const oneUnit = toBaseAmount(1, line.unit);
+    if (!need || !oneUnit) return line; // classifyUnit already guarantees this line's unit converts
+    remainingNeedBase = need.baseAmount;
+    oneLineUnitBase = oneUnit.baseAmount;
   }
 
-  const remaining = line.totalAmount - totalContribution;
-  return remaining > 0 ? { ...line, totalAmount: remaining } : null;
+  for (const pool of usable) {
+    if (pool.remainingBase <= 0 || remainingNeedBase <= 0) continue;
+    const consumed = Math.min(pool.remainingBase, remainingNeedBase);
+    pool.remainingBase -= consumed;
+    remainingNeedBase -= consumed;
+  }
+
+  const remainingInLineUnit = remainingNeedBase / oneLineUnitBase;
+  return remainingInLineUnit > 0 ? { ...line, totalAmount: remainingInLineUnit } : null;
 }
 
 function applyPantryItems(lines: GroceryLine[], pantryItems: PantryExclusionItem[]): GroceryLine[] {
   if (pantryItems.length === 0) return lines;
+  const pools = buildPantryPools(pantryItems);
   const result: GroceryLine[] = [];
   for (const line of lines) {
-    const adjusted = applyPantryToLine(line, pantryItems);
+    const adjusted = applyPantryToLine(line, pools);
     if (adjusted) result.push(adjusted);
   }
   return result;

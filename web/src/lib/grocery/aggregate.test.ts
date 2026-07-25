@@ -162,5 +162,54 @@ describe("aggregateGroceryList", () => {
       expect(lines).toHaveLength(1);
       expect(lines[0].totalAmount).toBe(200);
     });
+
+    it("pools one pantry item's quantity across multiple matching lines instead of reapplying it to each (bug fix 2026-07-25)", () => {
+      const pantry = [pantryItem({ name: "garlic", amount: 2, unit: "cloves" })];
+      const lines = aggregateGroceryList(
+        [
+          [
+            slotIngredient({ id: 5, name: "Garlic", metricAmount: 1.4, metricUnit: "clove" }),
+            slotIngredient({ id: 6, name: "Garlic Cloves", metricAmount: 2.6, metricUnit: "cloves" }),
+          ],
+        ],
+        [],
+        pantry,
+      );
+
+      // The first 1.4 of the pantry's 2 cloves fully covers line 5, which
+      // drops out; only the remaining 0.6 is left for line 6, which should
+      // land at 2.6 - 0.6 = 2.0 -- NOT 2.6 - 2 = 0.6, which is what
+      // reapplying the item's full amount to each line independently
+      // (the pre-fix bug) would have produced.
+      expect(lines).toHaveLength(1);
+      expect(lines[0].ingredientId).toBe(6);
+      expect(lines[0].totalAmount).toBeCloseTo(2.0);
+    });
+
+    it("still subtracts a usable match's contribution when another matching pantry item on the same line has no structured quantity (bug fix 2026-07-25)", () => {
+      const pantry = [
+        pantryItem({ name: "parmesan cheese", amount: 50, unit: "g" }),
+        pantryItem({ name: "parmesan cheese" }), // no structured quantity -- previously discarded the line entirely
+      ];
+      const lines = aggregateGroceryList(
+        [[slotIngredient({ id: 1, name: "Parmesan Cheese", metricAmount: 105.1, metricUnit: "g" })]],
+        [],
+        pantry,
+      );
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0].totalAmount).toBeCloseTo(55.1);
+    });
+
+    it("still hard-excludes when every matching pantry item is unusable, even with more than one match", () => {
+      const pantry = [pantryItem({ name: "parmesan cheese" }), pantryItem({ name: "parmesan cheese" })];
+      const lines = aggregateGroceryList(
+        [[slotIngredient({ id: 1, name: "Parmesan Cheese", metricAmount: 105.1, metricUnit: "g" })]],
+        [],
+        pantry,
+      );
+
+      expect(lines).toHaveLength(0);
+    });
   });
 });
