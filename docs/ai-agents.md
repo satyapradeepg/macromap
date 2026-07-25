@@ -14,6 +14,8 @@ MacroMap is built as an **AI agent system** — a central orchestrator (Claude) 
 
 **Fourth change, added July 15 2026: post-generation plan critique.** After a plan is fully generated, one more Claude call reviews the whole week at once and flags slots worth reconsidering — repetitive recipes, or a meal that's a notably worse macro fit than the rest of the week. Every flagged slot's actual fate is still decided deterministically (a real alternative, scored and compared, never just trusted). See Agent 1's new bullet and Agent 2's repair note below. Both this and (3) above are currently gated behind `ANTHROPIC_API_KEY`, which is not yet configured in the working environment — deferred by explicit decision this session, not an oversight; the deterministic logic around both has been built, tested, and in the critique's case verified against a real generated plan by manually standing in for the LLM call.
 
+**Fifth change, built + live-tested July 2026: grocery list quantities and pricing, both corrected against real data.** Two deterministic fixes, no LLM involved in either: (a) each grocery ingredient's quantity now correctly reflects *only* the portion actually planned for that meal — scaled by the same per-slot macro-fit factor Agent 2 already computes, divided by the recipe's native serving count (Spoonacular's ingredient amounts are for the whole recipe batch, not one serving) — live-tested to cut one real plan's grocery total from an implausible $1,085 to a plausible $140.78; (b) Agent 3 (Price Agent) switched from Tavily-first to Spoonacular-first for the reason described in its own section below. Pantry exclusion (Agent 4) also gained an optional quantitative mode alongside its original all-or-nothing behavior. See F4/F6 in the PRD and Agent 3/Agent 4 below.
+
 ```
 User Goal Input
       │
@@ -25,8 +27,8 @@ User Goal Input
 └──────┬────────────┬──────────────┬──────────────────┘
        │            │              │
        ▼            ▼              ▼
- Recipe Agent   Price Agent   Pantry Agent
- (Spoonacular)   (Tavily)    (Custom MCP)
+ Recipe Agent      Price Agent        Pantry Agent
+ (Spoonacular)  (Spoonacular + Tavily)  (Custom MCP)
 ```
 
 ---
@@ -44,9 +46,9 @@ User Goal Input
 - **AI composition/edit fallback:** for a slot where cascade fallback is exhausted (±30% with nothing acceptable) or pantry ingredients are being ignored, proposes a recipe — new or edited from a returned candidate — built around pantry ingredients and the macro target. This is judgment work Claude is well-suited to; the resulting macro numbers are not. Every ingredient in the proposal is resolved through the Recipe Agent's ingredient-level lookup and summed deterministically — the Orchestrator never accepts an LLM-estimated macro number for the dashboard. See Agent 2.
 - **Snack/add-on selection:** when a meal or the weekly total is short of its macro target, can attach one small single-ingredient add-on (fruit, nuts, yogurt, protein powder) to a meal rather than distorting a full recipe's proportions — capped at ≤15–20% of that meal's calories and one add-on per slot. Tried before further cascade widening or a slack-meal requery.
 - Runs a weekly reconciliation pass after all 21 meals are selected: sums actual macros, compares against a ±5% weekly band (tighter than the per-meal ±10-30% cascade); prefers closing the gap with a snack/add-on first, and only re-queries up to 3 slack meals if the gap is too large for that — capped at 3 extra queries per plan to protect API quota
-- Deduplicates and aggregates ingredients across 21 meals into a single grocery list — keyed on Spoonacular's canonical ingredient `id` (not raw ingredient text) and unit-reconciled via the `measures.metric` data already returned by the Recipe Agent, so quantities are summed locally with no extra API call
-- Instructs the Price Agent to look up costs for each ingredient
-- Excludes pantry items from the grocery list
+- Deduplicates and aggregates ingredients across all 35 meal/snack slots (7 days × breakfast/lunch/dinner/snack1/snack2) into a single grocery list — keyed on Spoonacular's canonical ingredient `id` (not raw ingredient text) and unit-reconciled via the `measures.metric` data already returned by the Recipe Agent, so quantities are summed locally with no extra API call. **Each slot's ingredient amounts are scaled to reflect only the portion actually planned for that one meal** (the same per-slot macro-fit factor applied to macros, divided by the recipe's native serving count) — fixed July 2026 after live data showed ingredients weren't being scaled at all, which was the dominant cause of an inflated grocery total.
+- Instructs the Price Agent to look up costs for each ingredient (see Agent 3 — Spoonacular primary, Tavily fallback)
+- Excludes pantry items from the grocery list entirely, or — when a pantry entry has a comparable structured quantity (amount + unit) — reduces the needed amount by what's already on hand instead (see Agent 4)
 - Generates the daily and weekly nutrition summary
 - Runs as a persistent conversational session (F11): handles free-text requests to edit pantry, swap a meal, or change a constraint by calling the same underlying actions listed above — chat is a second interface onto these actions, not a separate mutation path
 - **New (built July 15 2026): post-generation plan critique.** After reconciliation and the AI composition fallback both finish, makes one more Claude call — this time reviewing the entire generated week at once, not one meal at a time. Every other step above resolves one slot (or a handful of slack slots) in isolation; this is the only point in the flow where anything actually looks at all 35 slots together, which is what makes it possible to notice a recipe repeating 4 times or one meal being a much worse fit than the rest of the week even though it individually passed. The critique itself is judgment only — a list of flagged slots and why — never a replacement or a "this is better" verdict. See Agent 2's note below for what happens to a flagged slot.
@@ -87,26 +89,28 @@ User Goal Input
 
 ---
 
-## Agent 3 — Price Agent (Tavily MCP)
+## Agent 3 — Price Agent (Spoonacular primary, Tavily fallback)
 
-**Role:** Estimates the current US retail price for each grocery ingredient by location.
+**Role:** Estimates the current grocery price for each ingredient on the weekly grocery list (F4).
+
+**Architecture change (built + live-tested July 2026, replacing the original Tavily-first design below):** Tavily's `include_answer` (an LLM-synthesized sentence, regex-parsed for a dollar figure) turned out unreliable as a primary source — live testing found it can grab the wrong price out of a multi-price answer (e.g. a whole-item headline price instead of the per-unit figure actually asked for), which was traced back as the dominant cause of a wildly inflated real grocery total. Spoonacular's own `/food/ingredients/{id}/information` endpoint returns a **structured** `estimatedCost` field — a real number, not text to parse — and was live-validated as accurate across weight, volume, and count-based ingredients (including messy real units like "large head," "clove," "servings," even a garbled "2-inch"). Tavily is now a fallback only, used when Spoonacular genuinely has no cost data for an ingredient.
 
 **What it does:**
-- Receives from Orchestrator: ingredient name + quantity + user's US region (derived from zip code collected in F2 onboarding — PRD)
-- Before querying Tavily: checks for a stored user price correction for this ingredient + region (reused if under 30 days old) — skips the Tavily call entirely if a fresh correction exists
-- Queries Tavily Search API with a structured query: `"<ingredient> price per <unit> <region> grocery store 2026"`
-- Parses the returned web results to extract a price estimate via a dedicated lightweight model call (Haiku-tier — a narrow extraction task, not the orchestrating Sonnet model). One call per un-cached grocery item per plan generation; this cost/latency is separate from Spoonacular's point quota and isn't yet budgeted — fold into OQ6's capacity/cost measurement
-- Returns: estimated price per unit, confidence level (high / approximate)
-- If no result found: returns `null` — Orchestrator displays "$—" with "add manually" prompt
-- Any manual correction the user makes in F4 is written back here, keyed by ingredient + region, for reuse in future weeks
+- Receives from Orchestrator: the ingredient's Spoonacular `id` (already known — every grocery line traces back to the recipe/composition data that produced it, so no separate search call is needed) and the exact quantity/unit needed
+- **Primary:** calls Spoonacular's ingredient information endpoint with that exact amount/unit and reads `estimatedCost` directly — no region parameter (Spoonacular's cost data isn't region-specific)
+- **Fallback only:** if Spoonacular has no cost data, queries Tavily Search API (`include_answer: true`, phrased to ask for a price per the same reference quantity, using the user's US region from zip code) and extracts a dollar figure via regex from Tavily's own synthesized answer — no separate Haiku-tier extraction call
+- Before either lookup: checks a stored 30-day rate cache, keyed by (user, ingredient, region, unit-basis: per-100g / per-100ml / per-unit-count) — reused if fresh, re-queried only if stale or absent. The cache stores a *rate*, not a flat total, so it correctly reapplies even when the ingredient's needed quantity differs the following week
+- Returns: estimated price for the exact quantity requested
+- If neither source has data: returns `null` — Orchestrator displays "$—" with "add manually" prompt
+- Any manual correction the user makes in F4 is written back into the same 30-day rate cache, keyed the same way, for reuse in future weeks
 
-**Data returned to Orchestrator:** Price estimate (USD), confidence flag
+**Data returned to Orchestrator:** Price estimate (USD) for the requested quantity
 
-**API:** Tavily Search API (1,000 free credits/month)
+**API:** Spoonacular (already the core paid dependency — no new vendor, though a new per-ingredient cost load not yet measured against the existing capacity ceiling, see PRD OQ9), Tavily Search API (1,000 free credits/month) as fallback only
 
-**Limitation:** Returns web-scraped estimates, not real-time retail data. Manual override always available.
+**Limitation:** Both sources return estimates, not guaranteed real-time local retail data. Manual override always available. **Known gap (PRD OQ9):** this price is never reconciled against the recipe-level budget check the Orchestrator performs during generation (Agent 1/Agent 2's `pricePerServingCents`) — the two are independently-sourced numbers describing the same ingredients and can diverge; not yet tested across multiple real budgeted profiles.
 
-**Scale-up path:** Kroger Developer API for real-time shelf prices once Tavily estimate accuracy drops below threshold
+**Scale-up path:** Kroger Developer API for real-time shelf prices once the combined Spoonacular/Tavily estimate accuracy drops below threshold
 
 ---
 
@@ -117,8 +121,9 @@ User Goal Input
 **MVP scope note (updated):** dietary constraints, allergen flags, dislikes, weekly budget, and pantry inventory are all active from day one (F2, F6) — the Orchestrator reads pantry contents *before* querying the Recipe Agent, not just to exclude items from the grocery list afterward. Only two pieces remain V2: barcode-scanned pantry entry (F8 — manual entry ships in MVP) and meal ratings (F7); see PRD F3/F6.
 
 **What it does:**
-- Stores and retrieves: pantry items (name, quantity, expiry date), dietary restrictions, allergy flags, disliked ingredients, weekly grocery budget, meal rating history (thumbs up/down by recipe ID)
-- Provides Orchestrator with: current pantry contents (used to bias Recipe Agent queries *and* to exclude from grocery list), low-rated recipe IDs (to add to `excludeIds`, V2), user's allergen list, budget ceiling
+- Stores and retrieves: pantry items (name, expiry date, a free-text rough-quantity note, and — **built July 2026** — an optional structured quantity: a numeric amount + unit, e.g. "2, lb"), dietary restrictions, allergy flags, disliked ingredients, weekly grocery budget, meal rating history (thumbs up/down by recipe ID)
+- Provides Orchestrator with: current pantry contents (used to bias Recipe Agent queries *and* to exclude/reduce the grocery list), low-rated recipe IDs (to add to `excludeIds`, V2), user's allergen list, budget ceiling
+- **When a pantry item's structured amount/unit is comparable to a grocery line's** (same weight/volume unit category, or the same "other" count descriptor, e.g. "clove" vs. "cloves") — the needed amount is reduced by what's on hand, converting units deterministically (no LLM — the same reasoning that kept Agent 3's price math off an LLM applies here: arithmetic, not judgment). **Falls back to the original all-or-nothing exclusion** whenever a match has no structured quantity or an incompatible unit — never a regression for pantry entries that only ever used the free-text note.
 - Accepts chat-driven edits from the Orchestrator's conversational session (F11) — same storage, no separate write path
 - Updates after each shop: marks pantry items as added from grocery list
 - Expires pantry items after 7 days unless refreshed (V2 — manual pantry entry itself is MVP, this automation is not)
@@ -224,12 +229,19 @@ User Goal Input
 
 4. Orchestrator aggregates grocery list
    └── Scales ingredient quantities: (amount ÷ servings) × frequency
-   └── Deduplicates across all 21 meals
-   └── Removes any items already in Pantry Agent inventory — now MVP, not V2-gated
-         (see PRD F3/F6)
+         — live-confirmed correctly implemented July 2026 (previously ingredients
+           weren't scaled at all, inflating a real weekly total 7-8x)
+   └── Deduplicates across all 35 meal/snack slots (7 days × 5 slot types)
+   └── Removes, or quantitatively reduces, any items already in Pantry Agent
+         inventory depending on whether a comparable structured quantity was
+         given — now MVP, not V2-gated (see PRD F3/F6)
    └── Calls Price Agent for each grocery item
-       ├── Checks for a stored user price correction first (reused across weeks)
-       └── If none stored → Price Agent queries Tavily → returns estimate or null
+       ├── Checks the 30-day rate cache first (reused across weeks, keyed by
+       │     ingredient + region + unit-basis, not a flat per-line price)
+       ├── If none stored → Price Agent queries Spoonacular's ingredient cost
+       │     endpoint first (structured, primary)
+       └── Only if Spoonacular has no data → falls back to Tavily → returns
+             estimate or null
 
 5. Orchestrator renders outputs
    ├── Meal plan (F3): 7-day view with per-meal macros
@@ -277,7 +289,7 @@ User Goal Input
 | Candidate ranking within a tolerance tier | Yes (logic) | Weighted-deviation score, deterministic sort — no AI judgment |
 | Weekly reconciliation after all 21 meals selected | Yes (logic) | Sum vs. target, re-query slack meals — deterministic, not AI |
 | Ingredient deduplication | Yes (logic) | Keyed on Spoonacular's ingredient `id` + `measures.metric` unit conversion — deterministic aggregation once the right key is used, not raw name-string matching, no AI needed |
-| Price parsing from Tavily results | No | Unstructured web text requires NLP to extract a price reliably |
+| Price lookup per ingredient | Yes (mostly) | **Updated July 2026:** Spoonacular's `estimatedCost` is a structured field — a deterministic lookup, no AI at all, and now the primary path. Only the rare Tavily fallback involves any text extraction, and even that leans on Tavily's *own* internal answer-synthesis (not a Claude call we make) — the extraction on our side is still a plain deterministic regex, not NLP we perform |
 | Serving-size scaling | Yes (formula) | `(amount ÷ servings) × frequency` — deterministic |
 | Grocery list generation | Yes (aggregation) | Deterministic once recipes are selected |
 | AI composition/edit fallback (when cascade fails or pantry is ignored) | Partial | Deciding what recipe/edit to propose given pantry + macro constraints is a judgment call AI is good at; the resulting macros are never AI-estimated — every ingredient resolves to Spoonacular's ingredient endpoint and is summed deterministically, same as the dedup row above |

@@ -97,16 +97,19 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 ---
 
-## H5 — Price accuracy: Tavily estimates are close enough that users don't feel misled
+## H5 — Price accuracy: grocery price estimates are close enough that users don't feel misled
 
-**Hypothesis:** Web search price estimates from Tavily are accurate enough (within 20% of actual checkout price) that users don't feel misled when they shop.
+**Hypothesis:** F4's price estimates (Spoonacular's ingredient cost data, primary source as of July 2026 — see PRD F4/ai-agents.md Agent 3; Tavily Search API only as a fallback when Spoonacular has no cost data) are accurate enough (within 20% of actual checkout price) that users don't feel misled when they shop.
 
 **Source:** PRD Assumption A3 — *"budget users will notice"*
 
+**Architecture note (updated July 2026):** originally scoped as purely a Tavily-accuracy question. Switched to Spoonacular-primary after live testing found Tavily's LLM-synthesized price answer could extract the wrong figure from a multi-price search result — Spoonacular's structured `estimatedCost` field doesn't have that failure mode and was live-validated as plausible across weight/volume/count-based ingredients. This hypothesis is now about the *combined* system's real-world accuracy, not Tavily specifically. Separately, **OQ9 (new, PRD)** flags that this price estimate is never reconciled against F2/F3's budget-aware filtering (a different, recipe-level estimate) — worth testing alongside this hypothesis, not instead of it.
+
 **Test method:**
-- Track manual price correction rate in F4: what % of Tavily estimates get overridden?
+- Track manual price correction rate in F4: what % of estimates get overridden (from either source)?
 - Post-shop prompt (week 2): "How close was your estimated total to your actual receipt?" (Much lower / About right / Much higher)
 - Monitor correlation between price correction rate and Pro churn
+- Separately (OQ9): for profiles that set a weekly budget, measure how far F4's real total lands from that stated budget across several cases (tight/loose/no budget) — not the same question as receipt accuracy, but related and worth tracking together
 
 **Success threshold:**
 - Manual override rate < 25% of items
