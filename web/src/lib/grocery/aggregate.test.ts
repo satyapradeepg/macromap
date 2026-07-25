@@ -39,6 +39,51 @@ describe("aggregateGroceryList", () => {
     expect(lines.find((l) => l.ingredientId === 9)).toMatchObject({ totalAmount: 100, unit: "g" });
   });
 
+  // Fixes a real bug found live 2026-07-25: Spoonacular's own
+  // extendedIngredients[].id is a non-unique placeholder (confirmed live:
+  // -1 for "mayonaisse", a misspelling it couldn't resolve) whenever it
+  // can't identify an ingredient at all -- grouping purely by id used to
+  // silently merge two DIFFERENT unresolved ingredients that happened to
+  // share the same placeholder id into one garbled line.
+  it("does not merge two different unresolved ingredients that share the same placeholder id", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: -1, name: "mayonaisse", metricAmount: 30, metricUnit: "g" })],
+        [slotIngredient({ id: -1, name: "garnish", metricAmount: 5, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.name === "mayonaisse")).toMatchObject({ totalAmount: 30 });
+    expect(lines.find((l) => l.name === "garnish")).toMatchObject({ totalAmount: 5 });
+  });
+
+  it("still merges repeat occurrences of the SAME unresolved ingredient sharing a placeholder id", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: -1, name: "mayonaisse", metricAmount: 30, metricUnit: "g" })],
+        [slotIngredient({ id: -1, name: "mayonaisse", metricAmount: 20, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ name: "mayonaisse", totalAmount: 50, ingredientId: -1 });
+  });
+
+  it("treats a placeholder id (e.g. 0) as untrustworthy for grouping just like a negative one", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 0, name: "or", metricAmount: 1, metricUnit: "g" })],
+        [slotIngredient({ id: 0, name: "garnish", metricAmount: 1, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+  });
+
   it("does not merge same-id entries with mismatched units, and flags both for manual combine", () => {
     const lines = aggregateGroceryList(
       [

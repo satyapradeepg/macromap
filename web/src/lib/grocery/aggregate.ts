@@ -211,6 +211,31 @@ function normalizeUnit(unit: string): string {
   return unit.toLowerCase().trim();
 }
 
+// Spoonacular's own extendedIngredients[].id is passed through unfiltered
+// by spoonacular.ts's mapToCandidate -- and it returns a non-positive
+// placeholder (confirmed live 2026-07-25: id -1 for "mayonaisse", a
+// misspelling it couldn't resolve to a real ingredient) whenever it can't
+// identify the ingredient at all. That placeholder is NOT unique per
+// unresolved ingredient -- two DIFFERENT unrecognized ingredients in the
+// same plan (e.g. a stray "or"/"garnish" fragment alongside a misspelled
+// one) would both carry the same id, and grouping purely by id below would
+// silently merge their amounts into one garbled, wrongly-named line.
+function isValidIngredientId(id: number): boolean {
+  return Number.isInteger(id) && id > 0;
+}
+
+// The grouping key for an entry with a valid id is the id itself (unit
+// changes, minor name variants like "onion" vs. "an onion" for the same
+// real ingredient still correctly collapse together). For a placeholder
+// id, the only remaining trustworthy signal is the ingredient's own name
+// -- grouping by normalized name instead keeps repeat occurrences of the
+// SAME unresolved ingredient (e.g. "mayonaisse" x2) correctly merged,
+// while keeping DIFFERENT unresolved ingredients that happen to share the
+// same placeholder id from merging into each other.
+function groupingKey(entry: FlatEntry): string {
+  return isValidIngredientId(entry.id) ? `id:${entry.id}` : `name:${entry.name.toLowerCase().trim()}`;
+}
+
 export function buildGroceryLines(
   slotIngredientLists: SlotIngredientEntry[][],
   addonEntries: AddonEntry[],
@@ -225,15 +250,17 @@ export function buildGroceryLines(
     flat.push({ id: addon.ingredientId, name: addon.ingredientName, amount: addon.amountG, unit: "g" });
   }
 
-  const groups = new Map<number, FlatEntry[]>();
+  const groups = new Map<string, FlatEntry[]>();
   for (const entry of flat) {
-    const existing = groups.get(entry.id);
+    const key = groupingKey(entry);
+    const existing = groups.get(key);
     if (existing) existing.push(entry);
-    else groups.set(entry.id, [entry]);
+    else groups.set(key, [entry]);
   }
 
   const lines: GroceryLine[] = [];
-  for (const [id, entries] of groups) {
+  for (const entries of groups.values()) {
+    const id = entries[0].id;
     const name = entries[0].name;
     const distinctUnits = new Set(entries.map((e) => normalizeUnit(e.unit)));
 
