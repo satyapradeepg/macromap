@@ -103,6 +103,36 @@ describe("aggregateGroceryList", () => {
     expect(aggregateGroceryList([], [])).toEqual([]);
   });
 
+  // identityMatch.ts's LLM/cache resolution overrides the loose word-
+  // boundary namesOverlap fallback when present -- fixes a real bug found
+  // live 2026-07-25: pantry "green onions" wrongly matched a bare "onion"
+  // line via namesOverlap (both share the word "onion"), even though
+  // they're genuinely different produce. matchedLineNames lets a caller
+  // say "no, only THIS specific line is actually the same item."
+  it("uses matchedLineNames instead of namesOverlap when present, even if namesOverlap would also match", () => {
+    const pantry = [pantryItem({ name: "green onions", matchedLineNames: new Set(["green onions"]) })];
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 1, name: "onion" })],
+        [slotIngredient({ id: 2, name: "green onions" })],
+      ],
+      [],
+      pantry,
+    );
+
+    // namesOverlap alone would have matched BOTH lines (both contain the
+    // word "onion"/"onions") -- matchedLineNames restricts it to only the
+    // genuinely-same-item line.
+    expect(lines).toHaveLength(1);
+    expect(lines[0].name).toBe("onion");
+  });
+
+  it("falls back to namesOverlap when matchedLineNames is null (resolution unavailable)", () => {
+    const pantry = [pantryItem({ name: "egg", matchedLineNames: null })];
+    const lines = aggregateGroceryList([[slotIngredient({ id: 1, name: "eggs" })]], [], pantry);
+    expect(lines).toHaveLength(0);
+  });
+
   describe("pantry quantity subtraction", () => {
     it("hard-excludes the line when a matching pantry item has no structured quantity", () => {
       const pantry = [pantryItem({ spoonacularIngredientId: 1 })];

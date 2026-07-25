@@ -11,11 +11,13 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  aggregateGroceryList,
+  applyPantryItems,
+  buildGroceryLines,
   type AddonEntry,
   type PantryExclusionItem,
   type SlotIngredientEntry,
 } from "@/lib/grocery/aggregate";
+import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
 import { lookupIngredientCost } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
@@ -267,14 +269,34 @@ export async function getGroceryList(
     amountG: row.amount,
   }));
 
-  const pantryItems: PantryExclusionItem[] = (pantryRows ?? []).map((row) => ({
+  const rawLines = buildGroceryLines(slotIngredientLists, addonEntries);
+
+  // Identity-match resolution only matters for pantry items that don't
+  // already have a resolved id -- an id match in aggregate.ts's
+  // matchesPantryItem short-circuits before ever consulting
+  // matchedLineNames. Resolved in parallel across pantry items (typically
+  // few) against this plan's actual distinct line names -- most calls hit
+  // the global cache (identityMatch.ts) once the common ingredient
+  // vocabulary has been seen once, so this stays fast after warm-up.
+  const distinctLineNames = [...new Set(rawLines.map((l) => l.name))];
+  const rawPantryRows = pantryRows ?? [];
+  const matchedLineNamesByRow = await Promise.all(
+    rawPantryRows.map((row) =>
+      row.spoonacular_ingredient_id === null
+        ? resolveIdentityMatches(row.name, distinctLineNames)
+        : Promise.resolve(null),
+    ),
+  );
+
+  const pantryItems: PantryExclusionItem[] = rawPantryRows.map((row, i) => ({
     name: row.name,
     spoonacularIngredientId: row.spoonacular_ingredient_id,
     amount: row.amount,
     unit: row.unit,
+    matchedLineNames: matchedLineNamesByRow[i],
   }));
 
-  const lines = aggregateGroceryList(slotIngredientLists, addonEntries, pantryItems)
+  const lines = applyPantryItems(rawLines, pantryItems)
     .map((line) => ({
       ingredientId: line.ingredientId,
       name: line.name,

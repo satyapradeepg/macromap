@@ -41,6 +41,18 @@ export interface PantryExclusionItem {
   spoonacularIngredientId: number | null;
   amount: number | null;
   unit: string | null;
+  // Precomputed via lib/grocery/identityMatch.ts's resolveIdentityMatches
+  // (LLM + global cache), lowercased/trimmed grocery-line names this
+  // pantry item genuinely identity-matches. Used INSTEAD of the raw
+  // word-boundary namesOverlap fallback below when present: namesOverlap
+  // can't distinguish genuinely different products that happen to share a
+  // word (pantry "green onions" wrongly matching a bare "onion" line,
+  // live-confirmed 2026-07-25) -- that needs real-world grocery knowledge,
+  // not a smarter string rule. undefined/null (resolution not attempted,
+  // or a transient API error) falls back to namesOverlap rather than
+  // matching nothing, same "never silently do less than before"
+  // precedent as the rest of this file's pantry logic.
+  matchedLineNames?: Set<string> | null;
 }
 
 export interface GroceryLine {
@@ -81,6 +93,9 @@ function namesOverlap(a: string, b: string): boolean {
 function matchesPantryItem(line: GroceryLine, item: PantryExclusionItem): boolean {
   if (item.spoonacularIngredientId !== null) {
     return line.ingredientId === item.spoonacularIngredientId;
+  }
+  if (item.matchedLineNames) {
+    return item.matchedLineNames.has(line.name.toLowerCase().trim());
   }
   return namesOverlap(line.name.toLowerCase(), item.name.toLowerCase());
 }
@@ -175,7 +190,13 @@ function applyPantryToLine(line: GroceryLine, pools: PantryPool[]): GroceryLine 
   return remainingInLineUnit > 0 ? { ...line, totalAmount: remainingInLineUnit } : null;
 }
 
-function applyPantryItems(lines: GroceryLine[], pantryItems: PantryExclusionItem[]): GroceryLine[] {
+// Exported so callers needing the identity-match pass (see
+// PantryExclusionItem.matchedLineNames above) can get the raw, unexcluded
+// lines first -- e.g. to list their distinct names as candidates for
+// lib/grocery/identityMatch.ts's LLM/cache resolution -- and apply pantry
+// exclusion in a second step once that resolution is ready. aggregateGroceryList
+// below still composes both in one call for callers that don't need that split.
+export function applyPantryItems(lines: GroceryLine[], pantryItems: PantryExclusionItem[]): GroceryLine[] {
   if (pantryItems.length === 0) return lines;
   const pools = buildPantryPools(pantryItems);
   const result: GroceryLine[] = [];
@@ -190,10 +211,9 @@ function normalizeUnit(unit: string): string {
   return unit.toLowerCase().trim();
 }
 
-export function aggregateGroceryList(
+export function buildGroceryLines(
   slotIngredientLists: SlotIngredientEntry[][],
   addonEntries: AddonEntry[],
-  pantryItems: PantryExclusionItem[] = [],
 ): GroceryLine[] {
   const flat: FlatEntry[] = [];
   for (const ingredients of slotIngredientLists) {
@@ -251,5 +271,13 @@ export function aggregateGroceryList(
     }
   }
 
-  return applyPantryItems(lines, pantryItems);
+  return lines;
+}
+
+export function aggregateGroceryList(
+  slotIngredientLists: SlotIngredientEntry[][],
+  addonEntries: AddonEntry[],
+  pantryItems: PantryExclusionItem[] = [],
+): GroceryLine[] {
+  return applyPantryItems(buildGroceryLines(slotIngredientLists, addonEntries), pantryItems);
 }
