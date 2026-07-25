@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { aggregateGroceryList, type SlotIngredientEntry, type AddonEntry, type PantryExclusionItem } from "./aggregate";
+import {
+  aggregateGroceryList,
+  buildGroceryLines,
+  conversionKey,
+  mergeConvertibleLines,
+  pendingCrossCategoryConversions,
+  type AddonEntry,
+  type GroceryLine,
+  type PantryExclusionItem,
+  type ResolvedLineConversion,
+  type SlotIngredientEntry,
+} from "./aggregate";
 
 function slotIngredient(overrides: Partial<SlotIngredientEntry> = {}): SlotIngredientEntry {
   return { id: 1, name: "Chicken Breast", metricAmount: 200, metricUnit: "g", ...overrides };
@@ -178,6 +189,121 @@ describe("aggregateGroceryList", () => {
     expect(lines).toHaveLength(0);
   });
 
+  describe("mergeConvertibleLines", () => {
+    it("merges same-category unit mismatches (g vs kg) via plain arithmetic, no rate needed", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, metricAmount: 300, metricUnit: "g" })],
+          [slotIngredient({ id: 1, metricAmount: 0.3, metricUnit: "kg" })],
+        ],
+        [],
+      );
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 600, unit: "g", needsManualCombine: false });
+    });
+
+    it("reports the exact cross-category rate a mismatch needs", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 249.9, metricUnit: "g" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 127.5, metricUnit: "ml" })],
+        ],
+        [],
+      );
+      expect(pendingCrossCategoryConversions(lines)).toEqual([
+        { ingredientId: 1, name: "Vegetable Stock", sourceUnit: "ml", targetUnit: "g" },
+      ]);
+    });
+
+    it("merges a cross-category mismatch using a resolved density rate, tagging the source", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 249.9, metricUnit: "g" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 127.5, metricUnit: "ml" })],
+        ],
+        [],
+      );
+      const rates = new Map<string, ResolvedLineConversion>([
+        [conversionKey(1, "ml", "g"), { rate: 1, source: "spoonacular" }],
+      ]);
+
+      const merged = mergeConvertibleLines(lines, rates);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 249.9 + 127.5, unit: "g", needsManualCombine: false });
+      expect(merged[0].viaAiEstimate).toBeUndefined();
+    });
+
+    it("flags viaAiEstimate when the resolved rate came from the AI fallback", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 50, metricUnit: "g" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 100, metricUnit: "ml" })],
+        ],
+        [],
+      );
+      const rates = new Map<string, ResolvedLineConversion>([
+        [conversionKey(1, "ml", "g"), { rate: 1, source: "ai_estimate" }],
+      ]);
+
+      const merged = mergeConvertibleLines(lines, rates);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].viaAiEstimate).toBe(true);
+    });
+
+    it("still flags needsManualCombine when no rate was resolved for a cross-category pair", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 100, metricUnit: "ml" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 50, metricUnit: "g" })],
+        ],
+        [],
+      );
+
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
+    it("does not attempt to convert between two different 'other' descriptors (e.g. clove vs slice)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "Garlic", totalAmount: 2, unit: "clove", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "Garlic", totalAmount: 3, unit: "slice", needsManualCombine: true, sourceCount: 1 },
+      ];
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
+    it("passes single-unit lines through unchanged", () => {
+      const lines = buildGroceryLines([[slotIngredient({ id: 1, metricAmount: 200 })]], []);
+      expect(mergeConvertibleLines(lines, new Map())).toEqual(lines);
+    });
+
+    it("merges what it can and leaves the rest when a group has more than two mismatched units", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 200, metricUnit: "g" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 0.1, metricUnit: "kg" })],
+          [slotIngredient({ id: 1, name: "Vegetable Stock", metricAmount: 50, metricUnit: "ml" })],
+        ],
+        [],
+      );
+      // g+kg merge for free; ml has no rate supplied, so it's left over.
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      const gLine = merged.find((l) => l.unit === "g")!;
+      expect(gLine.totalAmount).toBe(300);
+      expect(gLine.needsManualCombine).toBe(true); // ml sibling still unresolved
+      const mlLine = merged.find((l) => l.unit === "ml")!;
+      expect(mlLine.totalAmount).toBe(50);
+      expect(mlLine.needsManualCombine).toBe(true);
+    });
+  });
+
   describe("pantry quantity subtraction", () => {
     it("hard-excludes the line when a matching pantry item has no structured quantity", () => {
       const pantry = [pantryItem({ spoonacularIngredientId: 1 })];
@@ -295,7 +421,7 @@ describe("aggregateGroceryList", () => {
     // weight-based need for the same ingredient just because a pantry
     // entry happened to be logged in a different unit type. These tests
     // use a precomputed rate map (as lib/grocery/unitConversion.ts's
-    // resolveConversionRate would produce), matching this file's
+    // resolveConversionRateWithSource would produce), matching this file's
     // "aggregate.ts consumes already-resolved data, no network" contract.
     describe("cross-category conversion (unitConversionRates)", () => {
       it("credits a category-mismatched match using a precomputed conversion rate instead of hard-excluding it", () => {
@@ -308,7 +434,7 @@ describe("aggregateGroceryList", () => {
             amount: 500,
             unit: "ml",
             matchedLineNames: new Set(["greek yogurt"]),
-            unitConversionRates: new Map([["g", 1]]), // 1g per 1ml, i.e. rate = target(g) per 1 source(ml)
+            unitConversionRates: new Map([["g", { rate: 1, source: "spoonacular" }]]), // 1g per 1ml
           }),
         ];
         const lines = aggregateGroceryList(
@@ -319,6 +445,50 @@ describe("aggregateGroceryList", () => {
 
         expect(lines).toHaveLength(1);
         expect(lines[0].totalAmount).toBeCloseTo(325); // 825 - (500ml * 1g/ml)
+        expect(lines[0].viaAiEstimate).toBeUndefined();
+      });
+
+      it("flags viaAiEstimate when the pantry credit actually consumed an AI-estimated rate", () => {
+        const pantry = [
+          pantryItem({
+            name: "greek yogurt",
+            amount: 500,
+            unit: "ml",
+            matchedLineNames: new Set(["greek yogurt"]),
+            unitConversionRates: new Map([["g", { rate: 1, source: "ai_estimate" }]]),
+          }),
+        ];
+        const lines = aggregateGroceryList(
+          [[slotIngredient({ id: 1, name: "greek yogurt", metricAmount: 825, metricUnit: "g" })]],
+          [],
+          pantry,
+        );
+
+        expect(lines).toHaveLength(1);
+        expect(lines[0].viaAiEstimate).toBe(true);
+      });
+
+      it("does not flag viaAiEstimate when an AI-estimated pool was available but never actually consumed (already exhausted)", () => {
+        const pantry = [
+          // Same-category pool fully covers the line first -- the
+          // AI-estimated cross-category pool is usable but should never
+          // get drawn from, so it must not taint the flag.
+          pantryItem({ name: "greek yogurt", amount: 900, unit: "g", matchedLineNames: new Set(["greek yogurt"]) }),
+          pantryItem({
+            name: "greek yogurt",
+            amount: 500,
+            unit: "ml",
+            matchedLineNames: new Set(["greek yogurt"]),
+            unitConversionRates: new Map([["g", { rate: 1, source: "ai_estimate" }]]),
+          }),
+        ];
+        const lines = aggregateGroceryList(
+          [[slotIngredient({ id: 1, name: "greek yogurt", metricAmount: 825, metricUnit: "g" })]],
+          [],
+          pantry,
+        );
+
+        expect(lines).toHaveLength(0); // fully covered by the same-category pool alone
       });
 
       it("still hard-excludes a category-mismatched match when no conversion rate was resolved for that unit", () => {
@@ -350,7 +520,7 @@ describe("aggregateGroceryList", () => {
             amount: 500,
             unit: "ml",
             matchedLineNames: new Set(["greek yogurt"]),
-            unitConversionRates: new Map([["g", 1]]),
+            unitConversionRates: new Map([["g", { rate: 1, source: "spoonacular" }]]),
           }),
         ];
         const lines = aggregateGroceryList(

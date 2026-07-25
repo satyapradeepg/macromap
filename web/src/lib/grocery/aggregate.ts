@@ -66,7 +66,7 @@ export interface PantryExclusionItem {
   // unrelated weight-based need for the same ingredient. Absent/no entry
   // for a given unit falls back to the safe hard-exclude, same "never do
   // worse than before" precedent as matchedLineNames above.
-  unitConversionRates?: Map<string, number> | null;
+  unitConversionRates?: Map<string, ResolvedLineConversion> | null;
 }
 
 export interface GroceryLine {
@@ -77,9 +77,20 @@ export interface GroceryLine {
   // PRD 7.3 F4: if measures don't reconcile across matched entries for the
   // same ingredient id, don't force a merge — list separately with a
   // "combine manually" prompt, same fallback pattern as the
-  // price-unavailable case.
+  // price-unavailable case. mergeConvertibleLines (below) now resolves most
+  // of these before this flag is ever shown to the user — it survives to
+  // true only when no same-category arithmetic AND no cross-category
+  // conversion (Spoonacular density, or its AI-estimate fallback) could
+  // reconcile every sibling line for this ingredient id.
   needsManualCombine: boolean;
   sourceCount: number;
+  // Set when this line's amount includes at least one cross-category
+  // (weight<->volume, or other<->weight/volume) conversion that came from
+  // unitConversion.ts's AI density-estimate fallback rather than
+  // Spoonacular's real /recipes/convert data -- lets the UI flag it as
+  // worth a quick double-check, same "never let a guess look identical to
+  // verified data" precedent as PlanView.tsx's "AI-composed" slot label.
+  viaAiEstimate?: boolean;
 }
 
 interface FlatEntry {
@@ -189,39 +200,53 @@ function applyPantryToLine(line: GroceryLine, pools: PantryPool[]): GroceryLine 
   const matches = pools.filter((pool) => matchesPantryItem(line, pool.item));
   if (matches.length === 0) return line;
 
-  const usable: Array<{ pool: PantryPool; lineUnitsPerPoolBase: number }> = [];
+  const usable: Array<{ pool: PantryPool; lineUnitsPerPoolBase: number; viaAiEstimate: boolean }> = [];
   for (const pool of matches) {
     if (pool.category === null) continue;
 
     if (pool.category === lineCategory) {
       if (pool.category === "other") {
         if (pool.otherDescriptor === normalizeOtherUnit(line.unit)) {
-          usable.push({ pool, lineUnitsPerPoolBase: 1 });
+          usable.push({ pool, lineUnitsPerPoolBase: 1, viaAiEstimate: false });
         }
         continue;
       }
       const oneLineUnitBase = toBaseAmount(1, line.unit);
       if (oneLineUnitBase && oneLineUnitBase.baseAmount > 0) {
-        usable.push({ pool, lineUnitsPerPoolBase: 1 / oneLineUnitBase.baseAmount });
+        usable.push({ pool, lineUnitsPerPoolBase: 1 / oneLineUnitBase.baseAmount, viaAiEstimate: false });
       }
       continue;
     }
 
-    const rate = pool.item.unitConversionRates?.get(line.unit.toLowerCase().trim());
-    if (rate) usable.push({ pool, lineUnitsPerPoolBase: rate });
+    const resolved = pool.item.unitConversionRates?.get(line.unit.toLowerCase().trim());
+    if (resolved) {
+      usable.push({ pool, lineUnitsPerPoolBase: resolved.rate, viaAiEstimate: resolved.source === "ai_estimate" });
+    }
   }
   if (usable.length === 0) return null; // no usable or convertible match -- safe hard-exclude fallback
 
   let remainingNeed = line.totalAmount;
-  for (const { pool, lineUnitsPerPoolBase } of usable) {
+  // Same "never let an AI guess look identical to verified data" precedent
+  // as mergeConvertibleLines -- only set when a pool actually CONSUMED some
+  // of this line's need via an AI-estimated rate (a merely-available but
+  // unused pool, e.g. already exhausted by an earlier line, shouldn't taint
+  // the flag).
+  let usedAiEstimate = false;
+  for (const { pool, lineUnitsPerPoolBase, viaAiEstimate } of usable) {
     if (pool.remainingBase <= 0 || remainingNeed <= 0) continue;
     const maxConsumableInLineUnits = pool.remainingBase * lineUnitsPerPoolBase;
     const consumedInLineUnits = Math.min(maxConsumableInLineUnits, remainingNeed);
+    if (consumedInLineUnits > 0 && viaAiEstimate) usedAiEstimate = true;
     pool.remainingBase -= consumedInLineUnits / lineUnitsPerPoolBase;
     remainingNeed -= consumedInLineUnits;
   }
 
-  return remainingNeed > 0 ? { ...line, totalAmount: remainingNeed } : null;
+  if (remainingNeed <= 0) return null;
+  return {
+    ...line,
+    totalAmount: remainingNeed,
+    viaAiEstimate: usedAiEstimate || line.viaAiEstimate ? true : undefined,
+  };
 }
 
 // Exported so callers needing the identity-match pass (see
@@ -333,6 +358,147 @@ export function buildGroceryLines(
   }
 
   return lines;
+}
+
+// Keyed lookup format shared by pendingCrossCategoryConversions (which asks
+// for exactly the rates a merge will need) and mergeConvertibleLines (which
+// consumes them) — kept as one function so the two can never drift apart on
+// key shape.
+export function conversionKey(ingredientId: number, sourceUnit: string, targetUnit: string): string {
+  return `${ingredientId}:${normalizeUnit(sourceUnit)}:${normalizeUnit(targetUnit)}`;
+}
+
+interface UnitMergeGroup {
+  target: GroceryLine;
+  rest: GroceryLine[];
+}
+
+// Same-ingredient-id lines with disagreeing units always arrive as
+// consecutive entries from buildGroceryLines' byUnit split above — grouping
+// by id and picking the first as the merge target keeps a deterministic,
+// order-independent choice (which specific line ends up "target" doesn't
+// matter; every other line converts INTO it).
+function groupForMerge(lines: GroceryLine[]): UnitMergeGroup[] {
+  const groups = new Map<number, GroceryLine[]>();
+  const order: number[] = [];
+  for (const line of lines) {
+    if (!groups.has(line.ingredientId)) {
+      groups.set(line.ingredientId, []);
+      order.push(line.ingredientId);
+    }
+    groups.get(line.ingredientId)!.push(line);
+  }
+  return order
+    .map((id) => groups.get(id)!)
+    .filter((group) => group.length > 1)
+    .map(([target, ...rest]) => ({ target, rest }));
+}
+
+// Exported so groceryData.ts can resolve exactly (and only) the
+// cross-category conversion rates a merge will actually need — via
+// unitConversion.ts's resolveConversionRateWithSource (Spoonacular density,
+// falling back to an AI estimate) — before calling mergeConvertibleLines.
+// Same "resolve first (network/AI), merge second (pure)" split this file
+// already uses for pantry cross-category crediting. Same-category
+// mismatches (e.g. "g" vs "kg") aren't included here — mergeConvertibleLines
+// resolves those itself via plain unit arithmetic, no lookup needed.
+export function pendingCrossCategoryConversions(
+  lines: GroceryLine[],
+): Array<{ ingredientId: number; name: string; sourceUnit: string; targetUnit: string }> {
+  const pending: Array<{ ingredientId: number; name: string; sourceUnit: string; targetUnit: string }> = [];
+  for (const { target, rest } of groupForMerge(lines)) {
+    const targetCategory = classifyUnit(target.unit);
+    for (const line of rest) {
+      if (classifyUnit(line.unit) !== targetCategory) {
+        pending.push({ ingredientId: target.ingredientId, name: target.name, sourceUnit: line.unit, targetUnit: target.unit });
+      }
+    }
+  }
+  return pending;
+}
+
+export interface ResolvedLineConversion {
+  rate: number; // how many of the target line's unit equal one of the source line's unit, for this ingredient
+  source: "spoonacular" | "ai_estimate";
+}
+
+// Reconciles same-ingredient-id lines that buildGroceryLines split apart
+// over a unit mismatch. Same-category disagreements (both weight, e.g. "g"
+// vs "kg", or both volume, e.g. "tsp" vs "cup") always resolve via plain
+// unit arithmetic (toBaseAmount) — free, no lookup, always succeeds.
+// Cross-category disagreements (weight vs volume, or either vs an "other"
+// count like "clove") need an ingredient-specific rate, supplied by the
+// caller via `crossCategoryRates` (see pendingCrossCategoryConversions).
+// Whatever can't be resolved — an unconvertible pair (e.g. "clove" vs
+// "slice", both "other"), or a cross-category pair with no rate available —
+// is left as its own line, still flagged needsManualCombine, same "never do
+// worse than the pre-fix all-or-nothing split" precedent as this file's
+// pantry logic. The target line itself only drops needsManualCombine once
+// EVERY sibling line for that ingredient id has been folded in.
+export function mergeConvertibleLines(
+  lines: GroceryLine[],
+  crossCategoryRates: Map<string, ResolvedLineConversion>,
+): GroceryLine[] {
+  const groups = new Map<number, GroceryLine[]>();
+  const order: number[] = [];
+  for (const line of lines) {
+    if (!groups.has(line.ingredientId)) {
+      groups.set(line.ingredientId, []);
+      order.push(line.ingredientId);
+    }
+    groups.get(line.ingredientId)!.push(line);
+  }
+
+  const result: GroceryLine[] = [];
+  for (const id of order) {
+    const group = groups.get(id)!;
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+
+    const [target, ...rest] = group;
+    const targetCategory = classifyUnit(target.unit);
+    let mergedAmount = target.totalAmount;
+    let mergedSourceCount = target.sourceCount;
+    let usedAiEstimate = false;
+    const unresolved: GroceryLine[] = [];
+
+    for (const line of rest) {
+      const lineCategory = classifyUnit(line.unit);
+      let convertedAmount: number | null = null;
+
+      if (lineCategory === targetCategory && targetCategory !== "other") {
+        const targetUnitBase = toBaseAmount(1, target.unit)!;
+        const lineBase = toBaseAmount(line.totalAmount, line.unit)!;
+        convertedAmount = lineBase.baseAmount / targetUnitBase.baseAmount;
+      } else if (lineCategory !== targetCategory) {
+        const resolved = crossCategoryRates.get(conversionKey(id, line.unit, target.unit));
+        if (resolved) {
+          convertedAmount = line.totalAmount * resolved.rate;
+          if (resolved.source === "ai_estimate") usedAiEstimate = true;
+        }
+      }
+
+      if (convertedAmount !== null) {
+        mergedAmount += convertedAmount;
+        mergedSourceCount += line.sourceCount;
+      } else {
+        unresolved.push(line);
+      }
+    }
+
+    result.push({
+      ...target,
+      totalAmount: mergedAmount,
+      sourceCount: mergedSourceCount,
+      needsManualCombine: unresolved.length > 0,
+      viaAiEstimate: usedAiEstimate || undefined,
+    });
+    result.push(...unresolved);
+  }
+
+  return result;
 }
 
 export function aggregateGroceryList(

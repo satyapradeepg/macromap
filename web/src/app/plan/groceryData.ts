@@ -13,12 +13,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   applyPantryItems,
   buildGroceryLines,
+  conversionKey,
+  mergeConvertibleLines,
+  pendingCrossCategoryConversions,
   type AddonEntry,
   type PantryExclusionItem,
+  type ResolvedLineConversion,
   type SlotIngredientEntry,
 } from "@/lib/grocery/aggregate";
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
-import { resolveConversionRate } from "@/lib/grocery/unitConversion";
+import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
 import { lookupIngredientCost } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
@@ -29,6 +33,10 @@ export interface GroceryLineView {
   totalAmount: number;
   unit: string;
   needsManualCombine: boolean;
+  // See aggregate.ts's GroceryLine.viaAiEstimate — set when this line's
+  // amount was combined across units using an AI density estimate rather
+  // than Spoonacular's real conversion data.
+  viaAiEstimate?: boolean;
   // null on Free tier, and on Pro tier when no price could be resolved
   // (PRD 7.3 F4: "$— Price unavailable — add manually").
   priceCents: number | null;
@@ -270,7 +278,23 @@ export async function getGroceryList(
     amountG: row.amount,
   }));
 
-  const rawLines = buildGroceryLines(slotIngredientLists, addonEntries);
+  const splitLines = buildGroceryLines(slotIngredientLists, addonEntries);
+
+  // Reconcile same-ingredient lines buildGroceryLines split apart over a
+  // unit mismatch (e.g. "127.5ml vegetable stock" + "249.9g vegetable
+  // stock") before anything downstream (pantry matching, pricing) ever sees
+  // them as separate lines. Only the genuinely cross-category pairs need a
+  // resolved rate here — same-category ones (e.g. "g" vs "kg") are handled
+  // by mergeConvertibleLines itself via plain unit arithmetic.
+  const pending = pendingCrossCategoryConversions(splitLines);
+  const crossCategoryRates = new Map<string, ResolvedLineConversion>();
+  await Promise.all(
+    pending.map(async ({ ingredientId, name, sourceUnit, targetUnit }) => {
+      const resolved = await resolveConversionRateWithSource(name, sourceUnit, targetUnit);
+      if (resolved) crossCategoryRates.set(conversionKey(ingredientId, sourceUnit, targetUnit), resolved);
+    }),
+  );
+  const rawLines = mergeConvertibleLines(splitLines, crossCategoryRates);
 
   // Identity-match resolution only matters for pantry items that don't
   // already have a resolved id -- an id match in aggregate.ts's
@@ -320,11 +344,11 @@ export async function getGroceryList(
       );
       if (targetUnits.size === 0) return null;
 
-      const rates = new Map<string, number>();
+      const rates = new Map<string, ResolvedLineConversion>();
       await Promise.all(
         [...targetUnits].map(async (targetUnit) => {
-          const rate = await resolveConversionRate(row.name, sourceUnit, targetUnit);
-          if (rate) rates.set(targetUnit, rate);
+          const resolved = await resolveConversionRateWithSource(row.name, sourceUnit, targetUnit);
+          if (resolved) rates.set(targetUnit, resolved);
         }),
       );
       return rates.size > 0 ? rates : null;
@@ -347,6 +371,7 @@ export async function getGroceryList(
       totalAmount: line.totalAmount,
       unit: line.unit,
       needsManualCombine: line.needsManualCombine,
+      viaAiEstimate: line.viaAiEstimate,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 

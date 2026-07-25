@@ -155,6 +155,11 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
                   {line.needsManualCombine && (
                     <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
                   )}
+                  {!line.needsManualCombine && line.viaAiEstimate && (
+                    <span className="ml-1.5 text-xs text-muted">
+                      — combined via AI density estimate, double-check the total
+                    </span>
+                  )}
                 </span>
                 {tier === "pro" && (
                   <PriceCell
