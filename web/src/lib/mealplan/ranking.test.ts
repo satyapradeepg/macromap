@@ -6,6 +6,20 @@ import {
   type PantryItem,
   type RecipeCandidate,
 } from "./ranking";
+import { buildPantryRemainingTracker, type PantryRemainingTracker } from "./pantryRemaining";
+
+function pantryItem(overrides: Partial<PantryItem> = {}): PantryItem {
+  return { name: "irrelevant name", spoonacularIngredientId: null, amount: null, unit: null, ...overrides };
+}
+
+// No structured amount/unit on any of these items (matching this suite's
+// existing coverage, which only exercises id/name matching, not
+// quantity/depletion -- see pantryRemaining.test.ts for that) -- an
+// empty matchInfo map is correct since none of these items are
+// LLM/conversion-resolved.
+function pantryTracker(items: PantryItem[]): PantryRemainingTracker {
+  return buildPantryRemainingTracker(items, new Map());
+}
 
 function candidate(overrides: Partial<RecipeCandidate> = {}): RecipeCandidate {
   return {
@@ -356,11 +370,10 @@ describe("rankCandidates", () => {
     it("prefers a candidate using pantry ingredients over an equally-good macro match without them", () => {
       const withPantry = candidate({ id: 1, ingredients: [chicken] });
       const withoutPantry = candidate({ id: 2, ingredients: [] });
-      const pantryItems: PantryItem[] = [{ name: "chicken breast", spoonacularIngredientId: null }];
       const ranked = rankCandidates([withoutPantry, withPantry], target, {
         tier: "free",
         budgetPerMealUsd: null,
-        pantryItems,
+        pantryTracker: pantryTracker([pantryItem({ name: "chicken breast" })]),
       });
       expect(ranked.map((c) => c.id)).toEqual([1, 2]);
     });
@@ -368,11 +381,10 @@ describe("rankCandidates", () => {
     it("matches by resolved spoonacularIngredientId when available", () => {
       const withPantry = candidate({ id: 1, ingredients: [chicken] });
       const withoutPantry = candidate({ id: 2, ingredients: [] });
-      const pantryItems: PantryItem[] = [{ name: "some unrelated label", spoonacularIngredientId: 101 }];
       const ranked = rankCandidates([withoutPantry, withPantry], target, {
         tier: "free",
         budgetPerMealUsd: null,
-        pantryItems,
+        pantryTracker: pantryTracker([pantryItem({ name: "some unrelated label", spoonacularIngredientId: 101 })]),
       });
       expect(ranked.map((c) => c.id)).toEqual([1, 2]);
     });
@@ -382,11 +394,10 @@ describe("rankCandidates", () => {
         id: 1,
         ingredients: [{ ...chicken, name: "boneless skinless chicken breast" }],
       });
-      const pantryItems: PantryItem[] = [{ name: "Chicken Breast", spoonacularIngredientId: null }];
       const ranked = rankCandidates([withPantry], target, {
         tier: "free",
         budgetPerMealUsd: null,
-        pantryItems,
+        pantryTracker: pantryTracker([pantryItem({ name: "Chicken Breast" })]),
       });
       expect(ranked[0].score).toBeLessThan(macroDeviationScore(withPantry, target));
     });
@@ -399,25 +410,21 @@ describe("rankCandidates", () => {
         ingredients: [chicken, rice],
       });
       const betterMatchNoPantry = candidate({ id: 2, proteinG: 41, caloriesKcal: 505, ingredients: [] });
-      const pantryItems: PantryItem[] = [
-        { name: "chicken breast", spoonacularIngredientId: null },
-        { name: "white rice", spoonacularIngredientId: null },
-      ];
       const ranked = rankCandidates([worseMatchWithPantry, betterMatchNoPantry], target, {
         tier: "free",
         budgetPerMealUsd: null,
-        pantryItems,
+        pantryTracker: pantryTracker([pantryItem({ name: "chicken breast" }), pantryItem({ name: "white rice" })]),
       });
       expect(ranked.map((c) => c.id)).toEqual([2, 1]);
     });
 
-    it("is a no-op when pantryItems is omitted or empty", () => {
+    it("is a no-op when pantryTracker is omitted or empty", () => {
       const a = candidate({ id: 1, ingredients: [chicken] });
       const withoutOpt = rankCandidates([a], target, { tier: "free", budgetPerMealUsd: null });
       const withEmpty = rankCandidates([a], target, {
         tier: "free",
         budgetPerMealUsd: null,
-        pantryItems: [],
+        pantryTracker: pantryTracker([]),
       });
       expect(withoutOpt[0].score).toBe(macroDeviationScore(a, target));
       expect(withEmpty[0].score).toBe(macroDeviationScore(a, target));
@@ -431,11 +438,10 @@ describe("rankCandidates", () => {
           id: 1,
           ingredients: [{ ...chicken, name: "peanut oil" }],
         });
-        const pantryItems: PantryItem[] = [{ name: "pea", spoonacularIngredientId: null }];
         const ranked = rankCandidates([withPeanutOil], target, {
           tier: "free",
           budgetPerMealUsd: null,
-          pantryItems,
+          pantryTracker: pantryTracker([pantryItem({ name: "pea" })]),
         });
         expect(ranked[0].score).toBe(macroDeviationScore(withPeanutOil, target));
       });
@@ -449,14 +455,10 @@ describe("rankCandidates", () => {
             { ...chicken, id: 3, name: "butternut squash" },
           ],
         });
-        const pantryItems: PantryItem[] = [
-          { name: "egg", spoonacularIngredientId: null },
-          { name: "nut", spoonacularIngredientId: null },
-        ];
         const ranked = rankCandidates([withNonMatches], target, {
           tier: "free",
           budgetPerMealUsd: null,
-          pantryItems,
+          pantryTracker: pantryTracker([pantryItem({ name: "egg" }), pantryItem({ name: "nut" })]),
         });
         expect(ranked[0].score).toBe(macroDeviationScore(withNonMatches, target));
       });

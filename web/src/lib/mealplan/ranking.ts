@@ -3,6 +3,7 @@
 // cheapest-macro-match fallback when no candidate is budget-compliant.
 
 import { classifyTier, type ToleranceTier } from "./tolerance";
+import { pantryCoverage, type PantryRemainingTracker } from "./pantryRemaining";
 
 export interface CandidateIngredient {
   id: number;
@@ -30,9 +31,16 @@ export interface RecipeCandidate {
 // F6/F3 pantry-aware querying. spoonacularIngredientId is resolved lazily
 // (F6 is manual-entry-first) — null until resolved, in which case matching
 // falls back to a loose name comparison (see pantryOverlapDeduction below).
+// amount/unit (migration 0018) are an OPTIONAL structured quantity -- null
+// when a pantry entry only ever had free-text quantity_text (the common
+// case, F6 quantity entry is optional), in which case pantryRemaining.ts
+// treats this item as an unlimited pool (today's exact boolean behavior,
+// never depletes) rather than guessing at a quantity that was never given.
 export interface PantryItem {
   name: string;
   spoonacularIngredientId: number | null;
+  amount: number | null;
+  unit: string | null;
 }
 
 export interface RankedCandidate extends RecipeCandidate {
@@ -165,46 +173,31 @@ export function bestScaleAndScore(
 const PANTRY_OVERLAP_WEIGHT = 0.02;
 const MAX_PANTRY_OVERLAP_DEDUCTION = 0.06;
 
-// Word-boundary match, not a bare bidirectional substring check -- found
-// live July 15 2026 (audit round 3), the same bug class already fixed the
-// same day in openEndedIngredientSafety.ts. `item.name` is raw free-text
-// pantry input (only `.trim()`'d), so a bare `a.includes(b) || b.includes(a)`
-// let pantry "pea" match recipe ingredient "peanut oil", pantry "egg"
-// match "eggplant", and pantry "nut" match "coconut milk"/"butternut
-// squash" -- all real single-word pantry entries colliding with an
-// unrelated longer word. Allows an optional trailing "s" for the same
-// plural-tolerance reason as the sibling file (so pantry "chicken breast"
-// still matches a candidate's "boneless skinless chicken breast").
-function wordBoundaryIncludes(haystack: string, needle: string): boolean {
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
-}
-
-function namesOverlap(a: string, b: string): boolean {
-  return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a);
-}
-
+// Word-boundary matching (not a bare bidirectional substring check -- the
+// "pea"/"peanut oil", "egg"/"eggplant" false-positive class found live
+// July 15 2026) and quantity-aware coverage/depletion both now live in
+// pantryRemaining.ts, shared with this function via PantryRemainingTracker
+// -- kept out of this file so ranking.ts's own "No LLM, no network" scoring
+// path never needs to know about identity-match/unit-conversion resolution,
+// only about reading an already-resolved tracker.
 function pantryOverlapDeduction(
-  candidateIngredients: CandidateIngredient[],
-  pantryItems: PantryItem[],
+  scaledIngredients: CandidateIngredient[],
+  pantryTracker: PantryRemainingTracker,
 ): number {
-  if (pantryItems.length === 0 || candidateIngredients.length === 0) return 0;
-
-  let matched = 0;
-  for (const item of pantryItems) {
-    const isMatch =
-      item.spoonacularIngredientId !== null
-        ? (ing: CandidateIngredient) => ing.id === item.spoonacularIngredientId
-        : (ing: CandidateIngredient) => namesOverlap(ing.name.toLowerCase(), item.name.toLowerCase());
-    if (candidateIngredients.some(isMatch)) matched++;
-  }
+  if (pantryTracker.pools.length === 0 || scaledIngredients.length === 0) return 0;
+  const matched = pantryCoverage(pantryTracker, scaledIngredients).filter(Boolean).length;
   return Math.min(matched * PANTRY_OVERLAP_WEIGHT, MAX_PANTRY_OVERLAP_DEDUCTION);
 }
 
 export interface RankCandidatesOptions {
   tier: "free" | "pro";
   budgetPerMealUsd: number | null;
-  pantryItems?: PantryItem[];
+  // Quantity-aware, mutable pantry state (pantryRemaining.ts) -- depletes
+  // as slots get claimed elsewhere (orchestrate.ts), so later calls in the
+  // same generation pass see less availability than earlier ones. Omitted
+  // (or a tracker with zero pools) degrades to "no pantry bias," same as
+  // omitting pantryItems did before this existed.
+  pantryTracker?: PantryRemainingTracker;
 }
 
 // Budget-compliant candidates ranked first (Pro only, and only when a
@@ -227,7 +220,7 @@ export function rankCandidates(
 ): RankedCandidate[] {
   const budgetAware = opts.tier === "pro" && opts.budgetPerMealUsd !== null;
   const budgetLimitCents = budgetAware ? opts.budgetPerMealUsd! * 100 : null;
-  const pantryItems = opts.pantryItems ?? [];
+  const pantryTracker = opts.pantryTracker ?? { pools: [] };
 
   const scored = candidates.map((candidate) => {
     const { scale, score } = bestScaleAndScore(candidate, target);
@@ -271,7 +264,15 @@ export function rankCandidates(
     };
     return {
       ...scaledCandidate,
-      score: score - pantryOverlapDeduction(candidate.ingredients, pantryItems),
+      // scaledCandidate.ingredients, not candidate.ingredients -- the
+      // pantry check must compare against what this slot would actually
+      // use (already scaled a few lines above), not the recipe's raw
+      // native-batch amount. Previously always used the unscaled amount
+      // since the deduction was purely boolean and didn't care; now that
+      // coverage/depletion is quantity-aware, using the wrong amount here
+      // would misjudge whether a scarce pantry item actually covers this
+      // specific slot.
+      score: score - pantryOverlapDeduction(scaledCandidate.ingredients, pantryTracker),
       budgetCompliant:
         !budgetAware ||
         scaledCandidate.pricePerServingCents === null ||

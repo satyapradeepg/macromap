@@ -23,6 +23,13 @@ import {
 import { resolveDiet, resolveIntolerances, unsupportedDietaryStyles } from "./dietaryMapping";
 import { classifyTier, TOLERANCE_PCT, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
+import {
+  buildPantryRemainingTracker,
+  commitPantryConsumption,
+  releasePantryConsumption,
+  resolvePantryMatchInfo,
+  type PantryRemainingTracker,
+} from "./pantryRemaining";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
 import {
   createRetryBudget,
@@ -274,7 +281,24 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const intolerances = resolveIntolerances(input.dietaryStyles);
   const excludeIngredients = [...input.allergies, ...input.dislikes];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
-  const rankOpts = { tier: input.tier, budgetPerMealUsd, pantryItems: input.pantryItems };
+  // Quantity-aware pantry depletion (pantryRemaining.ts) starts as an
+  // UNRESOLVED tracker (no identity-match/unit-conversion data yet) --
+  // matchesPantryItem's namesOverlap fallback makes this behave exactly
+  // like today's boolean-only check for the initial 21-slot fan-out
+  // below, which necessarily ranks every slot from the same snapshot
+  // before any of them are claimed (see the real resolution swap-in right
+  // after cascadeSettled, and this feature's own plan doc for why the
+  // initial pass can only be "bookkeeping-correct," not genuinely
+  // depletion-aware in its own scoring). `rankOpts` is a single mutable
+  // object threaded by reference into every rankCandidates/
+  // runCascadeForSlot call in this function (including retries below) --
+  // replacing `rankOpts.pantryTracker` once real data is ready makes
+  // every call site after that point see it for free.
+  const rankOpts = {
+    tier: input.tier,
+    budgetPerMealUsd,
+    pantryTracker: buildPantryRemainingTracker(input.pantryItems, new Map()),
+  };
   const dietaryCtx: DietaryContext = {
     dietaryStyles: input.dietaryStyles,
     allergies: input.allergies,
@@ -336,7 +360,42 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     return { rankedCandidates: [], blocked: true, blockingHint: QUOTA_EXHAUSTED_HINT };
   });
 
+  // Now that real candidate data exists, resolve genuine identity-match/
+  // unit-conversion info for every pantry item against it and swap the
+  // UNRESOLVED tracker built above for a real one -- every rankCandidates
+  // call from this point on (exhaustion retries just below, and every
+  // later reconciliation/protein-floor/repair requery) reads
+  // `rankOpts.pantryTracker` fresh, so replacing the object here is
+  // enough to make all of them depletion-aware for free. Reuses the
+  // candidate pool already fetched above instead of a separate fetch --
+  // no additional Spoonacular cost. Any failure here (network/LLM outage)
+  // degrades to the same unresolved tracker already in place -- never
+  // blocks generation, same "never let an external outage kill
+  // generation" rule as the snack-pool fetch below.
+  if (input.pantryItems.length > 0) {
+    const candidateIngredientUniverse = cascades.flatMap((c) =>
+      c.rankedCandidates.flatMap((rc) => rc.ingredients.map((ing) => ({ name: ing.name, unit: ing.metricUnit }))),
+    );
+    try {
+      const matchInfo = await resolvePantryMatchInfo(input.pantryItems, candidateIngredientUniverse);
+      rankOpts.pantryTracker = buildPantryRemainingTracker(input.pantryItems, matchInfo);
+    } catch {
+      // Leave the unresolved tracker in place -- boolean-only fallback.
+    }
+  }
+
   const claimResult = resolveClaims(recipeSlotIds.map((slotId, i) => ({ slotId, cascade: cascades[i] })));
+  // Bookkeeping for the initial pass -- every one of these 21 (or fewer)
+  // slots was already scored/picked before any of them were committed
+  // (the initial fan-out above ranks all slots from one shared snapshot),
+  // so this can't change which candidate won a slot in THIS pass. It's
+  // still required: every later touch (exhaustion retry just below, day
+  // reconciliation, protein-floor, repair) reads `rankOpts.pantryTracker`
+  // live, and needs it to correctly reflect what these initial picks
+  // already used.
+  for (const claimed of claimResult.claimed) {
+    commitPantryConsumption(rankOpts.pantryTracker, claimed.candidate.ingredients);
+  }
   const blockedHints = new Map<string, string>();
   for (const slotId of claimResult.blockedSlots) {
     const cascade = cascades[recipeSlotIds.findIndex((s) => slotKey(s) === slotKey(slotId))];
@@ -374,6 +433,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     if (!cascade.blocked && cascade.rankedCandidates.length > 0) {
       const pick = cascade.rankedCandidates[0];
       claimResult.claimed.push({ slotId, candidate: pick, tier: pick.actualTier ?? "p30" });
+      // Genuinely depletion-aware -- this pick was scored against
+      // rankOpts.pantryTracker AFTER the initial 21 slots' commits above,
+      // so it already reflects what they used.
+      commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
     } else {
       blockedHints.set(
         slotKey(slotId),
@@ -734,7 +797,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // honestly reflects it, rather than carrying over a stale tier
             // that no longer matches the actual deviation.
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
+            releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
             claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
+            commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any -- from addon-at-selection or an
             // earlier phase this same day) was sized against the pre-swap
             // recipe's calories and is no longer relevant to the newly-
@@ -830,7 +895,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           if (pick) {
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
+            releasePantryConsumption(rankOpts.pantryTracker, existingNow.candidate.ingredients);
             claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
+            commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any) was sized against the pre-swap recipe's
             // calories and is no longer relevant to the newly-picked one.
             // Deliberately not re-attempting one here -- see phase 2's swap
@@ -997,13 +1064,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     if (entry.claimedIndex === undefined) {
       claimResult.claimed.push({ slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" });
       blockedHints.delete(entry.key);
+      // AI-composed candidates are never scored against pantry
+      // (aiMealComposition.ts has no pantry awareness of its own), but
+      // still committed here -- otherwise a later slot's scoring would
+      // see pantry stock as more available than it truly is if this
+      // AI-composed pick happens to use some of it too.
+      commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
       return;
     }
     const existing = claimResult.claimed[entry.claimedIndex];
     const existingScore = macroDeviationScore(existing.candidate, entry.target);
     const newScore = macroDeviationScore(candidate, entry.target);
     if (newScore < existingScore) {
+      releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
       claimResult.claimed[entry.claimedIndex] = { slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" };
+      commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
     }
   }
 
@@ -1327,6 +1402,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
               weeklyBudgetUsd: input.weeklyBudgetUsd,
               excludeRecipeIds,
               pantryItems: input.pantryItems,
+              pantryTracker: rankOpts.pantryTracker,
             });
           } catch (err) {
             if (!isRecoverableSpoonacularError(err)) throw err;
@@ -1348,7 +1424,13 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             if (flag.reason === "diet_violation") {
               const composed = await tryAiComposeRepair(existing.slotId, slotTarget);
               if (composed) {
+                releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
                 claimResult.claimed[idx] = { slotId: existing.slotId, candidate: composed, tier: composed.actualTier ?? "p30" };
+                // AI-composed -- not scored against pantry, still
+                // committed so a later slot doesn't see stock as more
+                // available than it truly is (same rationale as
+                // applyAiComposeResult above).
+                commitPantryConsumption(rankOpts.pantryTracker, composed.ingredients);
                 addons.delete(slotKey(existing.slotId));
                 console.log(
                   `[mealplan] repair accepted (diet_violation, AI-composed) for day ${flag.dayIndex} ${flag.mealType}: ` +
@@ -1377,7 +1459,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
           if (accept) {
             const actualTier = swapResult.tier ?? existing.tier;
+            releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
             claimResult.claimed[idx] = { slotId: existing.slotId, candidate: swapResult.candidate, tier: actualTier };
+            commitPantryConsumption(rankOpts.pantryTracker, swapResult.candidate.ingredients);
             // A swapped recipe invalidates any add-on sized for the meal
             // it's replacing — same rule as the user-facing swap action
             // (actions.ts's swapMeal).
@@ -1583,6 +1667,18 @@ export interface SwapSlotInput {
   weeklyBudgetUsd: number | null;
   excludeRecipeIds: number[];
   pantryItems: PantryItem[];
+  // Optional: a LIVE, already-depleted tracker from an in-progress
+  // orchestrateGeneration pass (critic-repair's own call site below is
+  // the only current caller that has one). Omitted for the standalone
+  // "swap this meal" user action (actions.ts's swapMeal) -- deliberately
+  // out of scope for v1 of quantity-aware pantry depletion (see this
+  // feature's plan doc: a cold-cache identity-match resolution would add
+  // real, user-visible latency to what's otherwise a fast, synchronous
+  // single-click action). Omitting this falls back to an UNRESOLVED
+  // tracker built fresh from `pantryItems` -- namesOverlap-fallback
+  // matching, no depletion -- i.e. exactly today's boolean-only behavior,
+  // never a regression for this caller.
+  pantryTracker?: PantryRemainingTracker;
 }
 
 export interface SwapSlotResult {
@@ -1641,10 +1737,11 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
       inFlight,
     );
 
+  const pantryTracker = input.pantryTracker ?? buildPantryRemainingTracker(input.pantryItems, new Map());
   const cascade = await runCascadeForSlot(perMeal, fetcher, {
     tier: input.tier,
     budgetPerMealUsd,
-    pantryItems: input.pantryItems,
+    pantryTracker,
   });
   if (cascade.blocked || cascade.rankedCandidates.length === 0) {
     return {

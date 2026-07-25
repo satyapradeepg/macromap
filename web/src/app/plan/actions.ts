@@ -47,12 +47,14 @@ async function loadPantryItems(
 ): Promise<PantryItem[]> {
   const { data } = await supabase
     .from("pantry_items")
-    .select("name, spoonacular_ingredient_id")
+    .select("name, spoonacular_ingredient_id, amount, unit")
     .eq("user_id", userId);
 
   return (data ?? []).map((row) => ({
     name: row.name,
     spoonacularIngredientId: row.spoonacular_ingredient_id,
+    amount: row.amount,
+    unit: row.unit,
   }));
 }
 
