@@ -4,7 +4,18 @@ import { useState, type FormEvent } from "react";
 import { addPantryItem, removePantryItem } from "./pantryActions";
 import type { PantryItemView } from "./pantryData";
 
-export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }) {
+export function PantryPanel({
+  initialItems,
+  onPantryChange,
+}: {
+  initialItems: PantryItemView[];
+  // Grocery-list subtraction reacts to pantry contents (aggregate.ts's
+  // applyPantryItems), but that list lives in a sibling component's state
+  // (PlanBoard) -- without this, adding/removing a pantry item left the
+  // grocery panel showing the stale, unreduced list until a full page
+  // reload (bug found live 2026-07-25).
+  onPantryChange?: () => void;
+}) {
   const [items, setItems] = useState<PantryItemView[]>(initialItems);
   const [name, setName] = useState("");
   const [quantityText, setQuantityText] = useState("");
@@ -37,6 +48,7 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
     setQuantityText("");
     setAmount("");
     setUnit("");
+    onPantryChange?.();
   }
 
   async function handleRemove(id: string) {
@@ -51,6 +63,7 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
       return;
     }
     setItems((prev) => prev.filter((item) => item.id !== id));
+    onPantryChange?.();
   }
 
   return (

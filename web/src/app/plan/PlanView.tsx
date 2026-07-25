@@ -131,6 +131,17 @@ export function PlanBoard({
     }
   }
 
+  // Adding/removing a pantry item changes what aggregate.ts's
+  // applyPantryItems subtracts from the grocery list, but that list lives
+  // in this component's own state, not the pantry's -- without an
+  // explicit refetch here, the grocery panel kept showing the stale,
+  // unreduced list until a full page reload (bug found live 2026-07-25).
+  async function handlePantryChange() {
+    if (!plan) return;
+    const groceryResult = await fetchGroceryList(plan.id);
+    setGroceryList(groceryResult.lines);
+  }
+
   async function handleSwap(dayIndex: number, mealType: MealType) {
     if (!plan) return;
     const key = slotMapKey(dayIndex, mealType);
@@ -285,7 +296,7 @@ export function PlanBoard({
           </span>
         </summary>
         <div className="border-t border-border p-4 pt-3">
-          <PantryPanel initialItems={initialPantryItems} />
+          <PantryPanel initialItems={initialPantryItems} onPantryChange={handlePantryChange} />
         </div>
       </details>
 
