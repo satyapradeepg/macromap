@@ -1,0 +1,67 @@
+# Student capstone deploy.
+#
+# Every push to main: builds the Docker image (from web/) IN Azure Container
+# Registry (no Docker needed in the runner, no registry password anywhere),
+# then points the Container App at the new image.
+#
+# Setup (once, done for you at onboarding): five repo VARIABLES (not secrets —
+# none of these values are secret):
+#   AZURE_CLIENT_ID        — your CI identity (id-gh-<you>)
+#   AZURE_TENANT_ID        — shared
+#   AZURE_SUBSCRIPTION_ID  — shared
+#   ACR_NAME               — the shared registry name
+#   STUDENT                — your roster name (also your app + hostname)
+name: deploy
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # OIDC token for azure/login — this is the whole auth story
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push image (in ACR)
+        run: |
+          az acr build --registry ${{ vars.ACR_NAME }} \
+            --image ${{ vars.STUDENT }}/web:${{ github.sha }} \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL }} \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }} \
+            ./web
+
+      - name: Sync app config
+        run: |
+          az containerapp secret set \
+            --resource-group rg-students-platform \
+            --name ca-${{ vars.STUDENT }} \
+            --secrets \
+              supabase-service-role-key="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+              anthropic-api-key="${{ secrets.ANTHROPIC_API_KEY }}" \
+              spoonacular-api-key="${{ secrets.SPOONACULAR_API_KEY }}" \
+              tavily-api-key="${{ secrets.TAVILY_API_KEY }}"
+          az containerapp update \
+            --resource-group rg-students-platform \
+            --name ca-${{ vars.STUDENT }} \
+            --set-env-vars \
+              SUPABASE_SERVICE_ROLE_KEY=secretref:supabase-service-role-key \
+              ANTHROPIC_API_KEY=secretref:anthropic-api-key \
+              SPOONACULAR_API_KEY=secretref:spoonacular-api-key \
+              TAVILY_API_KEY=secretref:tavily-api-key
+
+      - name: Deploy to Container App
+        run: |
+          az containerapp update \
+            --resource-group rg-students-platform \
+            --name ca-${{ vars.STUDENT }} \
+            --image ${{ vars.ACR_NAME }}.azurecr.io/${{ vars.STUDENT }}/web:${{ github.sha }}
