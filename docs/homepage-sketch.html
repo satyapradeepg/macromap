@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MacroMap — homepage sketch</title>
+<style>
+  /* Tokens copied directly from the real app's globals.css — same values,
+     same light/dark + data-theme override structure. Nothing invented here;
+     this sketch honors the product's own already-validated palette. */
+  :root {
+    --background: #f3f4f6;
+    --surface: #ffffff;
+    --border: #e5e7eb;
+    --accent: #e04a14;
+    --accent-2: #ff5a1f;
+    --foreground: #111827;
+    --muted: #4b5563;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #0e0e10;
+      --surface: #16161a;
+      --border: #2a2a32;
+      --accent: #ff5a1f;
+      --accent-2: #ff8a66;
+      --foreground: #f2f2f4;
+      --muted: #9a9aa5;
+    }
+  }
+  :root[data-theme="dark"] {
+    --background: #0e0e10;
+    --surface: #16161a;
+    --border: #2a2a32;
+    --accent: #ff5a1f;
+    --accent-2: #ff8a66;
+    --foreground: #f2f2f4;
+    --muted: #9a9aa5;
+  }
+  :root[data-theme="light"] {
+    --background: #f3f4f6;
+    --surface: #ffffff;
+    --border: #e5e7eb;
+    --accent: #e04a14;
+    --accent-2: #ff5a1f;
+    --foreground: #111827;
+    --muted: #4b5563;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--background);
+    color: var(--foreground);
+  }
+  body {
+    /* System stack tuned to sit close to Inter (the app's real font, loaded
+       via next/font in production) -- this standalone sketch has no build
+       step to pull the webfont from, so it leans on Inter where installed
+       and a tall-x-height system sans elsewhere. */
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  .shell {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  header.top {
+    padding: 28px 0 0;
+  }
+  .wordmark {
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+  .wordmark .dot { color: var(--accent); }
+
+  main.hero {
+    padding: 88px 0 56px;
+    opacity: 0;
+    animation: rise 0.5s ease-out 0.05s forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    main.hero { opacity: 1; animation: none; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .eyebrow::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  h1 {
+    margin: 18px 0 0;
+    font-size: 44px;
+    line-height: 1.12;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    max-width: 620px;
+    text-wrap: balance;
+  }
+  h1 .grad {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  p.lead {
+    margin: 18px 0 0;
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 480px;
+  }
+
+  .cta-row {
+    margin-top: 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 15px;
+    padding: 13px 22px;
+    border-radius: 10px;
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .btn-primary:hover { background: var(--accent-2); transform: translateY(-1px); }
+  .btn-primary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .cta-note {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .value-strip {
+    margin-top: 64px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 28px;
+  }
+  @media (max-width: 620px) {
+    .value-strip { grid-template-columns: 1fr; gap: 24px; }
+    h1 { font-size: 34px; }
+    main.hero { padding: 56px 0 40px; }
+  }
+  .value-item .label {
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .value-item p {
+    margin: 8px 0 0;
+    font-size: 14.5px;
+    line-height: 1.5;
+    color: var(--foreground);
+  }
+
+  footer.foot {
+    margin-top: 72px;
+    padding: 20px 0 40px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  /* Sketch-only toggle, not part of the copy/layout being reviewed --
+     lets you flip themes locally without touching OS settings. */
+  .theme-toggle {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <span class="wordmark">Macro<span class="dot">Map</span></span>
+    </header>
+
+    <main class="hero">
+      <span class="eyebrow">AI-powered meal planning</span>
+      <h1>From weekly goal to <span class="grad">grocery bag</span> — without the spreadsheets.</h1>
+      <p class="lead">
+        Tell MacroMap your macro target. It builds a week of matching meals
+        around what's already in your pantry, then hands you a ready-to-shop
+        grocery list.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn-primary" href="/onboarding">
+          Build my plan
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <span class="cta-note">No signup needed to try it — free to start.</span>
+      </div>
+
+      <div class="value-strip">
+        <div class="value-item">
+          <span class="label">01 · Targets</span>
+          <p>Every meal matched to your calorie, protein, carb, and fat targets — set once at onboarding.</p>
+        </div>
+        <div class="value-item">
+          <span class="label">02 · Pantry</span>
+          <p>Log what you've already got — it's used first, and subtracted from the grocery list.</p>
+        </div>
+        <div class="value-item">
+          <span class="label">03 · Recipes</span>
+          <p>Every meal opens into real ingredients and cooking steps — not just a calorie count.</p>
+        </div>
+      </div>
+    </main>
+
+    <footer class="foot">
+      MacroMap — built for people who eat by the numbers.
+    </footer>
+  </div>
+
+  <button class="theme-toggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')">
+    Toggle theme
+  </button>
+</body>
+</html>

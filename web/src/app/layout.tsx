@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "MacroMap",
   description:
-    "MacroMap turns a weekly macro and budget goal into a full meal plan, a deduped grocery list, and a nutrition dashboard.",
+    "MacroMap turns a weekly macro target into a full meal plan and a ready-to-shop grocery list, built around what's already in your pantry.",
 };
 
 export default function RootLayout({
