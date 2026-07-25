@@ -16,7 +16,9 @@ import {
   type PantryExclusionItem,
   type SlotIngredientEntry,
 } from "@/lib/grocery/aggregate";
-import { lookupIngredientPrice } from "@/lib/tavily";
+import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
+import { lookupIngredientCost } from "@/lib/spoonacular";
+import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
 
 export interface GroceryLineView {
   ingredientId: number;
@@ -31,11 +33,42 @@ export interface GroceryLineView {
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-// grocery_price_overrides (migration 0014) doubles as both the manual
-// override store AND the 30-day Tavily-result cache (PRD 7.3 F4: "reused
-// in future weeks... only re-queried if no stored correction exists or
-// it's older than 30 days") — one row per (user, ingredient, region)
-// regardless of whether its price came from Tavily or a manual edit.
+export type PriceBasis = "per_100g" | "per_100ml" | "flat";
+
+// A grocery line's price scales with its actual amount for weight/volume
+// units (basis = cents per 100g/100ml); everything else (can, clove,
+// serving, "large head", ...) is priced per unit-count instead (basis =
+// cents per one count, multiplied linearly by the line's amount). Fixes
+// the earlier flat-per-ingredient bug where "1.5 tsps chia seeds" was
+// priced the same as a whole bag (found live 2026-07-24, $998/week total).
+export function basisForUnit(unit: string): PriceBasis {
+  const category = classifyUnit(unit);
+  if (category === "weight") return "per_100g";
+  if (category === "volume") return "per_100ml";
+  return "flat";
+}
+
+function rateKey(ingredientId: number, basis: PriceBasis): string {
+  return `${ingredientId}:${basis}`;
+}
+
+function computeLinePrice(rateCents: number, basis: PriceBasis, line: { totalAmount: number; unit: string }): number {
+  if (basis === "flat") {
+    return Math.round(rateCents * line.totalAmount);
+  }
+  const base = toBaseAmount(line.totalAmount, line.unit);
+  // Defensive only — `basis` is derived from this exact line's unit, so
+  // `toBaseAmount` always resolves here in practice.
+  if (!base) return Math.round(rateCents * line.totalAmount);
+  return Math.round((rateCents * base.baseAmount) / 100);
+}
+
+// grocery_price_overrides (migration 0014, widened 0016/0017) doubles as
+// both the manual override store AND the 30-day Tavily-result cache (PRD
+// 7.3 F4: "reused in future weeks... only re-queried if no stored
+// correction exists or it's older than 30 days") — one row per (user,
+// ingredient, region, basis) regardless of whether its rate came from
+// Tavily or a manual edit.
 async function resolvePricedLines(
   supabase: SupabaseClient,
   userId: string,
@@ -44,71 +77,130 @@ async function resolvePricedLines(
   const { data: profile } = await supabase.from("profiles").select("zip_code").eq("id", userId).maybeSingle();
   const region = profile?.zip_code || "US";
 
-  // Keyed by DISTINCT ingredient id, not by line — a unit-mismatch split
-  // (aggregate.ts) can produce several grocery lines for the same real
-  // ingredient (e.g. "1 medium bell pepper" / "1 bell pepper" / "2
-  // servings bell pepper"), and firing one Tavily call per LINE would
-  // silently multiply real credit spend for the identical price. Found
-  // live (2026-07-24): a 206-line plan only had 165 distinct ingredient
-  // ids, so the naive per-line version was burning ~20% more Tavily
-  // credits than necessary for zero benefit.
-  const nameByIngredientId = new Map<number, string>();
+  // Keyed by (ingredient id, basis), not just ingredient id or line — the
+  // SAME ingredient can legitimately need two different rates at once,
+  // since aggregate.ts splits same-id lines whenever their units disagree
+  // (needsManualCombine) — confirmed live, e.g. "1.2l chicken broth" and
+  // "1.3 kgs chicken broth" both appearing for one real ingredient need a
+  // per_100ml rate and a per_100g rate respectively. Still deduped across
+  // lines sharing both id AND basis (e.g. several bell-pepper lines that
+  // are all "other"/flat) — found live 2026-07-24: a 206-line plan only
+  // had 165 distinct ingredient ids, so per-LINE calls would waste ~20%
+  // of Tavily credits on identical duplicate lookups.
+  const nameByKey = new Map<string, string>();
+  const basisByKey = new Map<string, PriceBasis>();
+  const idByKey = new Map<string, number>();
+  const unitByKey = new Map<string, string>();
   for (const line of lines) {
-    if (!nameByIngredientId.has(line.ingredientId)) {
-      nameByIngredientId.set(line.ingredientId, line.name);
+    const basis = basisForUnit(line.unit);
+    const key = rateKey(line.ingredientId, basis);
+    if (!nameByKey.has(key)) {
+      nameByKey.set(key, line.name);
+      basisByKey.set(key, basis);
+      idByKey.set(key, line.ingredientId);
+      unitByKey.set(key, line.unit);
     }
   }
-  const ingredientIds = [...nameByIngredientId.keys()];
+  const keys = [...nameByKey.keys()];
+  const ingredientIds = [...new Set(keys.map((key) => idByKey.get(key)!))];
 
   const { data: overrideRows } =
     ingredientIds.length > 0
       ? await supabase
           .from("grocery_price_overrides")
-          .select("spoonacular_ingredient_id, price_cents, updated_at")
+          .select("spoonacular_ingredient_id, basis, price_cents, updated_at")
           .eq("user_id", userId)
           .eq("region", region)
           .in("spoonacular_ingredient_id", ingredientIds)
       : { data: [] };
 
-  const priceByIngredientId = new Map<number, number>();
+  const rateByKey = new Map<string, number>();
   for (const row of overrideRows ?? []) {
     if (Date.now() - new Date(row.updated_at).getTime() < THIRTY_DAYS_MS) {
-      priceByIngredientId.set(row.spoonacular_ingredient_id, row.price_cents);
+      rateByKey.set(rateKey(row.spoonacular_ingredient_id, row.basis as PriceBasis), row.price_cents);
     }
   }
 
   await Promise.all(
-    ingredientIds
-      .filter((id) => !priceByIngredientId.has(id))
-      .map(async (id) => {
-        // A Tavily outage/quota error degrades this one ingredient to
-        // "price unavailable" rather than failing the whole grocery list
-        // — same graceful-degradation precedent as F3's
-        // Spoonacular-outage cached-plan fallback.
-        let priceCents: number | null = null;
-        try {
-          const lookup = await lookupIngredientPrice(nameByIngredientId.get(id)!, region);
-          priceCents = lookup?.priceCents ?? null;
-        } catch {
-          priceCents = null;
-        }
-        if (priceCents === null) return;
+    keys
+      .filter((key) => !rateByKey.has(key))
+      .map(async (key) => {
+        const basis = basisByKey.get(key)!;
+        const ingredientId = idByKey.get(key)!;
+        const name = nameByKey.get(key)!;
+        const unit = unitByKey.get(key)!.trim();
 
-        priceByIngredientId.set(id, priceCents);
+        // Spoonacular's ingredient information endpoint is the PRIMARY
+        // price source (2026-07-24 switch) — a structured `estimatedCost`
+        // number, not a sentence to regex a dollar figure out of. Live-
+        // confirmed across weight/volume/count units, including messy real
+        // ones ("large head", "clove", "servings", even a garbled
+        // "2-inch"). No search call needed: every grocery line already
+        // carries its resolved spoonacular_ingredient_id.
+        const spoonacularAmount = basis === "flat" ? 1 : 100;
+        const spoonacularUnit =
+          basis === "per_100g" ? "grams" : basis === "per_100ml" ? "milliliters" : unit || undefined;
+
+        let rateCents: number | null = null;
+        try {
+          const lookup = await lookupIngredientCost(ingredientId, spoonacularAmount, spoonacularUnit);
+          rateCents = lookup?.costCents ?? null;
+        } catch {
+          rateCents = null;
+        }
+
+        // Tavily is now a fallback ONLY — used when Spoonacular genuinely
+        // has no cost data for this ingredient (or is down/over quota).
+        // "flat" lines get a per-unit-label query (e.g. "per serving", "per
+        // can") rather than a generic price question — found live
+        // (2026-07-24): a generic "average price for parmesan cheese"
+        // answer is a whole-package price, and multiplying THAT by a
+        // serving count badly overcounts. Falls back to the generic query
+        // only when the unit string itself is unusable (bare count, unit
+        // === "").
+        if (rateCents === null) {
+          const referenceUnit: ReferenceQuantity | undefined =
+            basis === "per_100g"
+              ? { type: "weight_volume", amount: 100, unit: "g" }
+              : basis === "per_100ml"
+                ? { type: "weight_volume", amount: 100, unit: "ml" }
+                : unit
+                  ? { type: "unit_label", label: unit }
+                  : undefined;
+
+          try {
+            const lookup = await lookupIngredientPrice(name, region, referenceUnit);
+            rateCents = lookup?.priceCents ?? null;
+          } catch {
+            rateCents = null;
+          }
+        }
+
+        if (rateCents === null) return;
+
+        rateByKey.set(key, rateCents);
         await supabase.from("grocery_price_overrides").upsert(
           {
             user_id: userId,
-            spoonacular_ingredient_id: id,
+            spoonacular_ingredient_id: ingredientId,
             region,
-            price_cents: priceCents,
+            basis,
+            price_cents: rateCents,
             updated_at: new Date().toISOString(),
           },
-          { onConflict: "user_id,spoonacular_ingredient_id,region" },
+          { onConflict: "user_id,spoonacular_ingredient_id,region,basis" },
         );
       }),
   );
 
-  return lines.map((line) => ({ ...line, priceCents: priceByIngredientId.get(line.ingredientId) ?? null }));
+  return lines.map((line) => {
+    const basis = basisForUnit(line.unit);
+    const rateCents = rateByKey.get(rateKey(line.ingredientId, basis));
+    return {
+      ...line,
+      priceCents: rateCents === undefined ? null : computeLinePrice(rateCents, basis, line),
+    };
+  });
 }
 
 interface RawSlotIngredient {
@@ -157,7 +249,7 @@ export async function getGroceryList(
 
   const { data: pantryRows } = await supabase
     .from("pantry_items")
-    .select("name, spoonacular_ingredient_id")
+    .select("name, spoonacular_ingredient_id, amount, unit")
     .eq("user_id", userId);
 
   const slotIngredientLists: SlotIngredientEntry[][] = slotRows.map((row) =>
@@ -178,6 +270,8 @@ export async function getGroceryList(
   const pantryItems: PantryExclusionItem[] = (pantryRows ?? []).map((row) => ({
     name: row.name,
     spoonacularIngredientId: row.spoonacular_ingredient_id,
+    amount: row.amount,
+    unit: row.unit,
   }));
 
   const lines = aggregateGroceryList(slotIngredientLists, addonEntries, pantryItems)

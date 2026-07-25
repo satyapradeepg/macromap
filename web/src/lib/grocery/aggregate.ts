@@ -10,6 +10,8 @@
 // here explicitly or the grocery list silently under-counts every plan
 // that used the F3 gap-closer mechanism.
 
+import { classifyUnit, toBaseAmount } from "./units";
+
 export interface SlotIngredientEntry {
   id: number;
   name: string;
@@ -29,10 +31,16 @@ export interface AddonEntry {
 // pantry_items.spoonacular_ingredient_id is nullable (lazy resolution,
 // migration 0007_pantry_items.sql) — matching falls back to a loose name
 // comparison when it's not yet resolved, same as ranking.ts's
-// pantryOverlapDeduction.
+// pantryOverlapDeduction. amount/unit (migration 0018) are an OPTIONAL
+// structured quantity -- null when a pantry entry only ever had the
+// original free-text quantity_text (or no quantity at all), in which case
+// this item still matches by name/id but can't be quantitatively
+// subtracted (see applyPantryToLine below).
 export interface PantryExclusionItem {
   name: string;
   spoonacularIngredientId: number | null;
+  amount: number | null;
+  unit: string | null;
 }
 
 export interface GroceryLine {
@@ -77,13 +85,71 @@ function matchesPantryItem(line: GroceryLine, item: PantryExclusionItem): boolea
   return namesOverlap(line.name.toLowerCase(), item.name.toLowerCase());
 }
 
-// F6: pantry contents are excluded from the grocery list ENTIRELY — a hard
-// exclude, distinct from F3's soft pantry-bias preference in ranking.ts's
+// "1 clove" vs "1 cloves" vs "1 Clove" should all be treated as the same
+// count-style descriptor when checking whether an "other"-category pantry
+// quantity is comparable to a grocery line's -- same plural-tolerance
+// reasoning as wordBoundaryIncludes above, just for exact-unit comparison
+// rather than substring name matching.
+function normalizeOtherUnit(unit: string): string {
+  return unit.toLowerCase().trim().replace(/s$/, "");
+}
+
+// Returns how much of a grocery line's need one pantry item covers,
+// expressed in the LINE's own unit -- or null when the two genuinely can't
+// be compared (no structured quantity on the pantry item, different unit
+// categories, or same "other" category but a different descriptor, e.g.
+// pantry "1 bag" flour vs. a line in "cups"). Never guesses across an
+// unconvertible pair: the caller falls back to a hard exclude in that
+// case, exactly as if no quantity had been given at all.
+function pantryContributionInLineUnit(item: PantryExclusionItem, line: GroceryLine): number | null {
+  if (item.amount === null || item.unit === null) return null;
+
+  const pantryCategory = classifyUnit(item.unit);
+  const lineCategory = classifyUnit(line.unit);
+  if (pantryCategory !== lineCategory) return null;
+
+  if (pantryCategory === "other") {
+    if (normalizeOtherUnit(item.unit) !== normalizeOtherUnit(line.unit)) return null;
+    return item.amount; // same descriptor -- counts are directly comparable
+  }
+
+  const pantryBase = toBaseAmount(item.amount, item.unit);
+  const oneLineUnitInBase = toBaseAmount(1, line.unit);
+  if (!pantryBase || !oneLineUnitInBase || oneLineUnitInBase.baseAmount === 0) return null;
+  return pantryBase.baseAmount / oneLineUnitInBase.baseAmount;
+}
+
+// F6: reduces a grocery line by pantry quantities already on hand when
+// they're genuinely comparable to the line's unit; falls back to
+// excluding the line ENTIRELY (the original all-or-nothing behavior, kept
+// for every case a structured quantity can't settle) when any matching
+// pantry item lacks a structured amount/unit or its unit can't be
+// compared. Distinct from F3's soft pantry-bias preference in ranking.ts's
 // pantryOverlapDeduction (which only nudges recipe selection, never drops
 // a slot or an ingredient).
-function excludePantryItems(lines: GroceryLine[], pantryItems: PantryExclusionItem[]): GroceryLine[] {
+function applyPantryToLine(line: GroceryLine, pantryItems: PantryExclusionItem[]): GroceryLine | null {
+  const matches = pantryItems.filter((item) => matchesPantryItem(line, item));
+  if (matches.length === 0) return line;
+
+  let totalContribution = 0;
+  for (const item of matches) {
+    const contribution = pantryContributionInLineUnit(item, line);
+    if (contribution === null) return null; // hard exclude -- unconvertible or unquantified match
+    totalContribution += contribution;
+  }
+
+  const remaining = line.totalAmount - totalContribution;
+  return remaining > 0 ? { ...line, totalAmount: remaining } : null;
+}
+
+function applyPantryItems(lines: GroceryLine[], pantryItems: PantryExclusionItem[]): GroceryLine[] {
   if (pantryItems.length === 0) return lines;
-  return lines.filter((line) => !pantryItems.some((item) => matchesPantryItem(line, item)));
+  const result: GroceryLine[] = [];
+  for (const line of lines) {
+    const adjusted = applyPantryToLine(line, pantryItems);
+    if (adjusted) result.push(adjusted);
+  }
+  return result;
 }
 
 function normalizeUnit(unit: string): string {
@@ -151,5 +217,5 @@ export function aggregateGroceryList(
     }
   }
 
-  return excludePantryItems(lines, pantryItems);
+  return applyPantryItems(lines, pantryItems);
 }

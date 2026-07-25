@@ -8,6 +8,8 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
   const [items, setItems] = useState<PantryItemView[]>(initialItems);
   const [name, setName] = useState("");
   const [quantityText, setQuantityText] = useState("");
+  const [amount, setAmount] = useState("");
+  const [unit, setUnit] = useState("");
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +19,13 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
     setAdding(true);
     setError(null);
 
-    const result = await addPantryItem({ name, quantityText: quantityText || null });
+    const parsedAmount = amount.trim() ? parseFloat(amount) : null;
+    const result = await addPantryItem({
+      name,
+      quantityText: quantityText || null,
+      amount: parsedAmount,
+      unit: unit || null,
+    });
     setAdding(false);
 
     if (result.error || !result.item) {
@@ -27,6 +35,8 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
     setItems((prev) => [...prev, result.item!]);
     setName("");
     setQuantityText("");
+    setAmount("");
+    setUnit("");
   }
 
   async function handleRemove(id: string) {
@@ -47,8 +57,9 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
     <div className="rounded-lg border border-border bg-surface p-4">
       <h2 className="text-sm font-semibold text-foreground">Pantry</h2>
       <p className="mt-1 text-xs text-muted">
-        Add ingredients you already have on hand — generation is biased toward using them, and they&apos;re
-        left off your grocery list. Fully optional.
+        Add ingredients you already have on hand — generation is biased toward using them. A rough note is
+        fine, but adding a quantity + unit (e.g. 2, lb) lets us subtract what you have from the grocery list
+        instead of leaving the ingredient off entirely. Fully optional.
       </p>
 
       {items.length > 0 && (
@@ -57,7 +68,13 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
             <li key={item.id} className="flex items-center justify-between text-sm">
               <span className="text-foreground">
                 {item.name}
-                {item.quantityText && <span className="text-muted"> — {item.quantityText}</span>}
+                {item.amount !== null && item.unit && (
+                  <span className="text-muted">
+                    {" "}
+                    — {item.amount} {item.unit}
+                  </span>
+                )}
+                {item.quantityText && <span className="text-muted"> ({item.quantityText})</span>}
               </span>
               <button
                 type="button"
@@ -82,11 +99,27 @@ export function PantryPanel({ initialItems }: { initialItems: PantryItemView[] }
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
         />
         <input
+          type="number"
+          step="any"
+          min="0"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="Qty"
+          className="w-20 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+        />
+        <input
+          type="text"
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          placeholder="Unit (g, lb, can…)"
+          className="w-32 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+        />
+        <input
           type="text"
           value={quantityText}
           onChange={(e) => setQuantityText(e.target.value)}
-          placeholder="Rough quantity (optional)"
-          className="w-40 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+          placeholder="Note (optional)"
+          className="w-32 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
         />
         <button
           type="submit"

@@ -9,6 +9,11 @@ export interface PantryItemView {
   id: string;
   name: string;
   quantityText: string | null;
+  // Optional structured quantity (migration 0018) — see aggregate.ts's
+  // applyPantryToLine for how this lets the grocery list subtract instead
+  // of dropping a whole ingredient. Independent of quantityText.
+  amount: number | null;
+  unit: string | null;
 }
 
 export async function getPantryItems(
@@ -17,7 +22,7 @@ export async function getPantryItems(
 ): Promise<PantryItemView[]> {
   const { data } = await supabase
     .from("pantry_items")
-    .select("id, name, quantity_text")
+    .select("id, name, quantity_text, amount, unit")
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
 
@@ -25,5 +30,7 @@ export async function getPantryItems(
     id: row.id,
     name: row.name,
     quantityText: row.quantity_text,
+    amount: row.amount,
+    unit: row.unit,
   }));
 }

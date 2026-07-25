@@ -62,6 +62,51 @@ describe("lookupIngredientPrice", () => {
     expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer test-key" });
   });
 
+  it("phrases a per-weight/volume query when a weight_volume referenceUnit is given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ answer: "$0.85" }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await lookupIngredientPrice("chicken breast", "US", { type: "weight_volume", amount: 100, unit: "g" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.query).toBe("price of chicken breast per 100g in US");
+  });
+
+  it("phrases a per-unit-label query when a unit_label referenceUnit is given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ answer: "$0.85" }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await lookupIngredientPrice("parmesan cheese", "US", { type: "unit_label", label: "serving" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.query).toBe("average US grocery store price per serving of parmesan cheese in US");
+  });
+
+  it("falls back to the generic query when referenceUnit is omitted", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ answer: "$0.85" }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await lookupIngredientPrice("bay leaves", "US");
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.query).toBe("average US grocery store price for bay leaves in US");
+  });
+
   it("returns null when Tavily returns no answer", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,

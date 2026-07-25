@@ -37,7 +37,12 @@ function PriceCell({ line, onOverride }: { line: GroceryLineView; onOverride: (p
     setSaving(true);
     setError(null);
     const priceCents = Math.round(dollars * 100);
-    const result = await overrideGroceryPrice({ ingredientId: line.ingredientId, priceCents });
+    const result = await overrideGroceryPrice({
+      ingredientId: line.ingredientId,
+      priceCents,
+      totalAmount: line.totalAmount,
+      unit: line.unit,
+    });
     setSaving(false);
 
     if (result.error) {
@@ -95,9 +100,19 @@ function PriceCell({ line, onOverride }: { line: GroceryLineView; onOverride: (p
   );
 }
 
+// A resolved ingredient id can appear as more than one grocery line at
+// once (aggregate.ts splits a same-id group whenever units disagree,
+// needsManualCombine) — so an override must be keyed by (ingredient,
+// unit), not by ingredient id alone, or overriding one line would
+// silently overwrite the displayed price of an unrelated line sharing the
+// same ingredient.
+function lineKey(line: Pick<GroceryLineView, "ingredientId" | "unit">): string {
+  return `${line.ingredientId}-${line.unit}`;
+}
+
 export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "free" | "pro" }) {
   const [copied, setCopied] = useState(false);
-  const [priceOverrides, setPriceOverrides] = useState<Record<number, number>>({});
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, number>>({});
 
   async function handleCopy() {
     await navigator.clipboard.writeText(lines.map(lineToText).join("\n"));
@@ -107,7 +122,7 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
 
   const resolvedLines = lines.map((line) => ({
     ...line,
-    priceCents: priceOverrides[line.ingredientId] ?? line.priceCents,
+    priceCents: priceOverrides[lineKey(line)] ?? line.priceCents,
   }));
 
   // Contributes $0 until overridden (PRD 7.3 F4) — never fabricated.
@@ -134,7 +149,7 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
         <>
           <ul className="mt-3 flex flex-col gap-1.5">
             {resolvedLines.map((line) => (
-              <li key={`${line.ingredientId}-${line.unit}`} className="flex items-center justify-between gap-3 text-sm text-foreground">
+              <li key={lineKey(line)} className="flex items-center justify-between gap-3 text-sm text-foreground">
                 <span>
                   {formatAmount(line.totalAmount, line.unit)} {line.name}
                   {line.needsManualCombine && (
@@ -145,7 +160,7 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
                   <PriceCell
                     line={line}
                     onOverride={(priceCents) =>
-                      setPriceOverrides((prev) => ({ ...prev, [line.ingredientId]: priceCents }))
+                      setPriceOverrides((prev) => ({ ...prev, [lineKey(line)]: priceCents }))
                     }
                   />
                 )}

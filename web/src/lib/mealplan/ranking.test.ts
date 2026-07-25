@@ -462,4 +462,41 @@ describe("rankCandidates", () => {
       });
     });
   });
+
+  // Found live 2026-07-24: ingredients was the one field NOT scaled
+  // alongside proteinG/caloriesKcal/carbsG/fatG/servings/
+  // pricePerServingCents, so a recipe scaled to fit its slot's macro
+  // target still reported its NATIVE (pre-scale) ingredient amounts --
+  // silently mismatching the grocery list (F4, which sums these amounts
+  // directly) against the budget-compliance price shown during generation.
+  it("scales ingredient amounts by (scale / native servings), not scale alone", () => {
+    // Every macro scaled up by exactly 1.3x from the candidate's own
+    // defaults, so scale=1.3 is an unambiguous perfect-fit breakpoint (a
+    // partial scale, e.g. protein-only, can score WORSE than scale=1 if it
+    // pulls other already-matching macros further away — this target
+    // avoids that by scaling uniformly).
+    const uniformlyScaledTarget = { proteinG: 52, calories: 650, carbsG: 52, fatG: 19.5 };
+    // servings: 4 (not the candidate() default of 1) so this test actually
+    // exercises the division -- at servings=1, scale/servings === scale
+    // and the bug this test guards against would pass undetected.
+    const withIngredients = candidate({
+      proteinG: 40,
+      caloriesKcal: 500,
+      carbsG: 40,
+      fatG: 15,
+      servings: 4,
+      ingredients: [
+        { id: 1, name: "chicken breast", amount: 200, unit: "g", metricAmount: 200, metricUnit: "g" },
+      ],
+    });
+    const [ranked] = rankCandidates([withIngredients], uniformlyScaledTarget, {
+      tier: "free",
+      budgetPerMealUsd: null,
+    });
+
+    expect(ranked.scaleFactor).toBeCloseTo(1.3);
+    const expectedAmount = 200 * (ranked.scaleFactor / 4);
+    expect(ranked.ingredients[0].amount).toBeCloseTo(expectedAmount);
+    expect(ranked.ingredients[0].metricAmount).toBeCloseTo(expectedAmount);
+  });
 });

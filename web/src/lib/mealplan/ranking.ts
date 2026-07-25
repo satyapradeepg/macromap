@@ -233,8 +233,25 @@ export function rankCandidates(
     const { scale, score } = bestScaleAndScore(candidate, target);
     // Every macro/price/servings field below is scaled -- classifyTier,
     // budgetCompliant, and every downstream reader of this RankedCandidate
-    // (matchLabelFor, daily/weekly actual-summing, reconciliation) must all
-    // see what was actually picked, not the native Spoonacular amount.
+    // (matchLabelFor, daily/weekly actual-summing, reconciliation, and
+    // F4's grocery list which sums `ingredients` amounts directly) must
+    // all see what was actually picked, not the native Spoonacular amount.
+    // Found live 2026-07-24: `ingredients` was the one field NOT scaled
+    // here, so the grocery list and pricePerServingCents-based budget
+    // check silently described different quantities of the same recipe
+    // for any slot where scale != 1 (the common case).
+    //
+    // Ingredients scale by (scale / candidate.servings), NOT scale alone --
+    // confirmed live against real persisted data (a "Makes 2 servings"
+    // pancake recipe, scale~1.02, was persisting 3.07 eggs/253g ricotta,
+    // its full 2-serving batch barely nudged by scale, not the ~1.5
+    // eggs/127g ricotta one meal occurrence actually needs). Spoonacular's
+    // extendedIngredients amounts are for the recipe's ENTIRE native batch
+    // (candidate.servings, before scaling) -- one meal-plan slot only
+    // represents eating `scale` serving-equivalents of it, so the
+    // ingredient amount needed is the per-native-serving amount
+    // (amount / candidate.servings) times how many serving-equivalents
+    // this meal actually needs (scale).
     const scaledCandidate = {
       ...candidate,
       proteinG: candidate.proteinG * scale,
@@ -246,6 +263,11 @@ export function rankCandidates(
         candidate.pricePerServingCents === null
           ? null
           : Math.round(candidate.pricePerServingCents * scale),
+      ingredients: candidate.ingredients.map((ing) => ({
+        ...ing,
+        amount: ing.amount * (scale / candidate.servings),
+        metricAmount: ing.metricAmount * (scale / candidate.servings),
+      })),
     };
     return {
       ...scaledCandidate,

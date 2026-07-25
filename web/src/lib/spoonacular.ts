@@ -332,6 +332,72 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   };
 }
 
+export interface IngredientCostLookup {
+  costCents: number;
+}
+
+// Epic E3 (F4) grocery pricing — reuses the same ingredient information
+// endpoint as lookupIngredientMacros above, but a grocery line already
+// carries its resolved spoonacular_ingredient_id (from the recipe/
+// composition data that produced it), so no search call is needed first —
+// 1 point, not 2. `amount`/`unit` are caller-chosen (typically a fixed
+// reference like 100 grams/100 milliliters, or the line's own unit for a
+// count-based ingredient) so estimatedCost comes back already scaled to
+// exactly what was asked — live-confirmed across weight, volume, and
+// count/descriptor units (including messy real ones like "large head",
+// "clove", "servings", and even a garbled "2-inch" — Spoonacular always
+// either returns a plausible number or no cost data, never garbage).
+//
+// This is the PRIMARY grocery price source (Tavily is now a fallback only,
+// see groceryData.ts) precisely because this field is a structured number,
+// not a sentence to regex out of — sidesteps the exact failure mode found
+// live 2026-07-24 (Tavily's LLM-synthesized answer sometimes contains more
+// than one dollar figure, and a naive "first match" regex can grab the
+// wrong one, e.g. a whole-turkey headline price instead of the per-100g
+// figure actually being asked for).
+export async function lookupIngredientCost(
+  ingredientId: number,
+  amount: number,
+  unit?: string,
+): Promise<IngredientCostLookup | null> {
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey) {
+    throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
+  }
+
+  const params = new URLSearchParams({ apiKey, amount: String(amount) });
+  if (unit) params.set("unit", unit);
+
+  let response: Response;
+  try {
+    response = await fetch(`https://api.spoonacular.com/food/ingredients/${ingredientId}/information?${params.toString()}`);
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular request failed: ${(err as Error).message}`);
+  }
+
+  if (response.status === 402 || response.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${response.status})`);
+  }
+  // Not a quota/outage case — an unknown id or a request Spoonacular can't
+  // fulfill is expected/handled (falls through to the Tavily fallback),
+  // same "return null, don't throw" convention as searchIngredient above.
+  if (!response.ok) return null;
+
+  let info: SpoonacularIngredientInformationResponse;
+  try {
+    info = await response.json();
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular response was not valid JSON: ${(err as Error).message}`);
+  }
+
+  // A present-but-zero value is indistinguishable from "genuinely no cost
+  // data" — both map to null rather than a fabricated $0.00 (same
+  // precedent as lookupIngredientMacros's estimatedCostCentsPer100g).
+  const value = info.estimatedCost?.value;
+  if (!value || value <= 0) return null;
+  return { costCents: Math.round(value) };
+}
+
 function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
   return {
     id: recipe.id,

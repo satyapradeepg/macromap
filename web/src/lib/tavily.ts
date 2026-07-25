@@ -39,6 +39,40 @@ export interface IngredientPriceLookup {
   priceCents: number;
 }
 
+// Tavily's answer text doesn't reliably state a parseable, consistent unit
+// basis on its own ("$4.17 per pound" one time, "$13.45 for 2.5-5.25lbs"
+// another) — rather than parsing whatever unit Tavily happens to mention,
+// `referenceUnit` asks the question in a unit WE choose, so the only thing
+// that still needs extracting is the dollar figure itself (unchanged, via
+// extractPriceCents).
+//
+// Two forms:
+// - "weight_volume": weight/volume lines, phrased as "per 100g"/"per
+//   100ml" — the reference amount is a plain number we pick.
+// - "unit_label": count/package/descriptor lines (can, clove, serving,
+//   medium...). Found live (2026-07-24): omitting a reference here and
+//   asking a generic "average price for X" question, then multiplying
+//   that by the line's count, badly overcounts for units like "servings"
+//   — Tavily's generic answer is a whole-package price ("$8.96 for a
+//   parmesan block"), and multiplying a package price by "6 servings"
+//   is not the same number as 6 servings' worth of cheese. Explicitly
+//   asking "price per {label}" (e.g. "per serving", "per can", "per
+//   clove") gets an answer already scoped to the unit we're about to
+//   multiply by, instead of an ambiguous package price.
+export type ReferenceQuantity =
+  | { type: "weight_volume"; amount: number; unit: "g" | "ml" }
+  | { type: "unit_label"; label: string };
+
+function buildQuery(ingredientName: string, region: string, referenceUnit?: ReferenceQuantity): string {
+  if (!referenceUnit) {
+    return `average US grocery store price for ${ingredientName} in ${region}`;
+  }
+  if (referenceUnit.type === "weight_volume") {
+    return `price of ${ingredientName} per ${referenceUnit.amount}${referenceUnit.unit} in ${region}`;
+  }
+  return `average US grocery store price per ${referenceUnit.label} of ${ingredientName} in ${region}`;
+}
+
 // Returns null for a genuine no-result (no dollar amount in Tavily's
 // answer) — maps to the PRD's "$— Price unavailable — add manually" case.
 // Throws only on a real request failure; a 429 is modeled as
@@ -47,6 +81,7 @@ export interface IngredientPriceLookup {
 export async function lookupIngredientPrice(
   ingredientName: string,
   region: string,
+  referenceUnit?: ReferenceQuantity,
 ): Promise<IngredientPriceLookup | null> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
@@ -62,7 +97,7 @@ export async function lookupIngredientPrice(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        query: `average US grocery store price for ${ingredientName} in ${region}`,
+        query: buildQuery(ingredientName, region, referenceUnit),
         include_answer: true,
         max_results: 3,
       }),
