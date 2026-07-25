@@ -27,14 +27,22 @@ create index if not exists grocery_price_overrides_user_id_idx
 
 alter table public.grocery_price_overrides enable row level security;
 
+-- drop-then-create (Postgres has no `create policy if not exists`) so this
+-- migration is safely re-runnable, matching the `if not exists` treatment
+-- already used above for the table/index -- needed because this table was
+-- first created directly (outside `supabase db push`), leaving the CLI's
+-- migration-tracking table out of sync with what's actually live.
+drop policy if exists "Users can read their own grocery price overrides" on public.grocery_price_overrides;
 create policy "Users can read their own grocery price overrides"
 on public.grocery_price_overrides for select
 using (auth.uid() = user_id);
 
+drop policy if exists "Users can insert their own grocery price overrides" on public.grocery_price_overrides;
 create policy "Users can insert their own grocery price overrides"
 on public.grocery_price_overrides for insert
 with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update their own grocery price overrides" on public.grocery_price_overrides;
 create policy "Users can update their own grocery price overrides"
 on public.grocery_price_overrides for update
 using (auth.uid() = user_id);
