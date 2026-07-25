@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPantryRemainingTracker,
+  buildTrackerFromKnownConsumption,
   pantryCoverage,
   commitPantryConsumption,
   releasePantryConsumption,
@@ -171,6 +172,50 @@ describe("commitPantryConsumption / releasePantryConsumption", () => {
     );
     commitPantryConsumption(tracker, [ing({ name: "greek yogurt", metricAmount: 300, metricUnit: "g" })]);
     expect(tracker.pools[0].remainingBase).toBe(500); // untouched -- matched, but unconvertible
+  });
+});
+
+describe("buildTrackerFromKnownConsumption", () => {
+  it("with no consumed lists, is identical to buildPantryRemainingTracker(items, new Map())", () => {
+    const items = [pantryItem({ name: "chicken breast", amount: 450, unit: "g" })];
+    const tracker = buildTrackerFromKnownConsumption(items, []);
+    const baseline = buildPantryRemainingTracker(items, new Map());
+    expect(tracker).toEqual(baseline);
+  });
+
+  it("depletes the matching pool by one consumed ingredient list", () => {
+    const items = [pantryItem({ name: "chicken breast", amount: 450, unit: "g" })];
+    const tracker = buildTrackerFromKnownConsumption(items, [
+      [ing({ name: "chicken breast", metricAmount: 200, metricUnit: "g" })],
+    ]);
+    expect(tracker.pools[0].remainingBase).toBe(250);
+  });
+
+  it("accumulates depletion across multiple consumed lists (simulating several other plan slots)", () => {
+    const items = [pantryItem({ name: "white rice", amount: 500, unit: "g" })];
+    const tracker = buildTrackerFromKnownConsumption(items, [
+      [ing({ name: "white rice", metricAmount: 100, metricUnit: "g" })],
+      [ing({ name: "white rice", metricAmount: 150, metricUnit: "g" })],
+      [ing({ name: "white rice", metricAmount: 50, metricUnit: "g" })],
+    ]);
+    expect(tracker.pools[0].remainingBase).toBe(200); // 500 - (100 + 150 + 50)
+  });
+
+  it("leaves an unlimited pool (no structured quantity) at category null, unaffected by consumption", () => {
+    const items = [pantryItem({ name: "chicken breast" })];
+    const tracker = buildTrackerFromKnownConsumption(items, [
+      [ing({ name: "chicken breast", metricAmount: 999999, metricUnit: "g" })],
+    ]);
+    expect(tracker.pools[0].category).toBeNull();
+    expect(pantryCoverage(tracker, [ing({ name: "chicken breast" })])).toEqual([true]);
+  });
+
+  it("leaves the tracker unchanged when a consumed list doesn't match any pool", () => {
+    const items = [pantryItem({ name: "pea", amount: 10, unit: "g" })];
+    const tracker = buildTrackerFromKnownConsumption(items, [
+      [ing({ name: "peanut oil", metricAmount: 5, metricUnit: "g" })],
+    ]);
+    expect(tracker.pools[0].remainingBase).toBe(10);
   });
 });
 

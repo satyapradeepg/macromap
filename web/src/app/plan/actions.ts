@@ -9,7 +9,8 @@ import {
   SpoonacularRequestError,
 } from "@/lib/mealplan/orchestrate";
 import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
-import type { PantryItem } from "@/lib/mealplan/ranking";
+import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
+import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -364,10 +365,21 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
 
   const { data: existingSlots } = await supabase
     .from("meal_plan_slots")
-    .select("recipe_id")
+    .select("recipe_id, day_index, meal_type, ingredients")
     .eq("meal_plan_id", input.mealPlanId);
 
   const excludeRecipeIds = (existingSlots ?? []).map((s) => s.recipe_id);
+
+  // Every OTHER slot's ingredients (excluding the one being replaced, whose
+  // own consumption shouldn't count against its replacement) — used to
+  // build a pantry tracker that knows what the rest of the week's plan has
+  // already used, so a swap doesn't score candidates against a pantry that
+  // looks untouched. See buildTrackerFromKnownConsumption's own comment for
+  // why this stays unresolved/no-network rather than matching critic-
+  // repair's fully LLM-resolved in-generation swap tracker.
+  const otherSlotsIngredients = (existingSlots ?? [])
+    .filter((s) => !(s.day_index === input.dayIndex && s.meal_type === input.mealType))
+    .map((s) => (s.ingredients as CandidateIngredient[] | null) ?? []);
 
   const dailyTargets: MacroTargets = {
     calories: profile.daily_calories,
@@ -376,6 +388,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     fatG: profile.daily_fat_g,
   };
   const pantryItems = await loadPantryItems(supabase, user.id);
+  const pantryTracker = buildTrackerFromKnownConsumption(pantryItems, otherSlotsIngredients);
 
   let swapResult;
   try {
@@ -389,6 +402,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
       weeklyBudgetUsd: profile.weekly_budget_usd,
       excludeRecipeIds,
       pantryItems,
+      pantryTracker,
     });
   } catch (err) {
     if (err instanceof SpoonacularQuotaError || err instanceof SpoonacularRequestError) {

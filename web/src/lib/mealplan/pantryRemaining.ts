@@ -213,6 +213,26 @@ export function releasePantryConsumption(tracker: PantryRemainingTracker, ingred
   }
 }
 
+// Builds an unresolved tracker (no LLM/unit-conversion pre-pass -- see
+// header comment) and immediately commits every already-known ingredient
+// list into it. Used by the standalone swap-meal action (actions.ts's
+// swapMeal), which has no live rankOpts.pantryTracker to reuse the way
+// critic-repair's in-generation swap does -- this lets a swap still
+// account for what the REST of the current plan's slots have already
+// consumed, using only same-category/id/namesOverlap matching (tier 2 of
+// the three-tier degrade contract above), with no network calls and thus
+// no added latency versus today's swap.
+export function buildTrackerFromKnownConsumption(
+  pantryItems: PantryItem[],
+  consumedIngredientLists: CandidateIngredient[][],
+): PantryRemainingTracker {
+  const tracker = buildPantryRemainingTracker(pantryItems, new Map());
+  for (const ingredients of consumedIngredientLists) {
+    commitPantryConsumption(tracker, ingredients);
+  }
+  return tracker;
+}
+
 // The ONLY place this feature calls the network (LLM identity matching +
 // Spoonacular density conversion) -- must run BEFORE ranking starts.
 // Resolved once per pantry item, in parallel (each item's failure is

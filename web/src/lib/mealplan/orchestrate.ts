@@ -1667,17 +1667,25 @@ export interface SwapSlotInput {
   weeklyBudgetUsd: number | null;
   excludeRecipeIds: number[];
   pantryItems: PantryItem[];
-  // Optional: a LIVE, already-depleted tracker from an in-progress
-  // orchestrateGeneration pass (critic-repair's own call site below is
-  // the only current caller that has one). Omitted for the standalone
-  // "swap this meal" user action (actions.ts's swapMeal) -- deliberately
-  // out of scope for v1 of quantity-aware pantry depletion (see this
-  // feature's plan doc: a cold-cache identity-match resolution would add
-  // real, user-visible latency to what's otherwise a fast, synchronous
-  // single-click action). Omitting this falls back to an UNRESOLVED
-  // tracker built fresh from `pantryItems` -- namesOverlap-fallback
-  // matching, no depletion -- i.e. exactly today's boolean-only behavior,
-  // never a regression for this caller.
+  // Optional: a tracker reflecting pantry consumption already known to the
+  // caller. Two callers supply one, at different resolution tiers:
+  // critic-repair's own call site below passes a LIVE, already-depleted,
+  // LLM/unit-conversion-RESOLVED tracker reused from its in-progress
+  // orchestrateGeneration pass. The standalone "swap this meal" user
+  // action (actions.ts's swapMeal) instead builds an UNRESOLVED one via
+  // buildTrackerFromKnownConsumption (pantryRemaining.ts), committing the
+  // rest of the current plan's slots' ingredients into it -- same-
+  // category/id/namesOverlap matching only, no LLM/network calls, so no
+  // added latency versus a plain swap. Full LLM-resolved parity for the
+  // swap's OWN candidate set remains deliberately out of scope (would
+  // require restructuring this function's fetch-then-rank flow to insert
+  // a resolve step, and would reintroduce cold-cache latency on what's
+  // otherwise an instant single-click action) -- revisit only if usage
+  // data shows fuzzy-name/cross-unit pantry mismatches are common enough
+  // in swaps specifically to justify it. Omitting this argument entirely
+  // falls back to an UNRESOLVED tracker built fresh from `pantryItems`
+  // alone, with no other-slot consumption committed either -- today's
+  // original boolean-only behavior, never a regression for any caller.
   pantryTracker?: PantryRemainingTracker;
 }
 
