@@ -109,7 +109,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 - Track manual price correction rate in F4: what % of estimates get overridden (from either source)?
 - Post-shop prompt (week 2): "How close was your estimated total to your actual receipt?" (Much lower / About right / Much higher)
 - Monitor correlation between price correction rate and Pro churn
-- Separately (OQ9): for profiles that set a weekly budget, measure how far F4's real total lands from that stated budget across several cases (tight/loose/no budget) — not the same question as receipt accuracy, but related and worth tracking together
+- **Separately (OQ9) — live result, 2026-07-25:** tested across 4 profiles spanning $35–$275 stated weekly budget (plus one with no budget) — all four landed in the same $78–90/week real total, confirming stated budget currently has no measurable effect on the real number. This is a stronger, structural failure than the receipt-accuracy question above (a reconciliation gap, not an estimate-accuracy one) — see product-brief.md Section 07 (now High severity) and PRD OQ9. No product decision made yet on the fix.
 
 **Success threshold:**
 - Manual override rate < 25% of items
@@ -125,7 +125,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Source:** PRD Assumption A4 — *"if friction is too high, pantry feature won't be used"*
 
-**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6) — only barcode scanning (F8) remains V2. This hypothesis is testable from MVP launch, not gated on V2.
+**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6) — only barcode scanning (F8) remains V2. This hypothesis is testable from MVP launch, not gated on V2. **Updated July 25 2026:** matching is now an LLM identity classifier plus real Spoonacular unit conversion (not plain string/unit matching), and pantry depletion now also feeds meal ranking and the standalone swap action, not just the grocery list — see ai-agents.md Agent 4. Doesn't change this hypothesis's test method, but "meaningfully bias meal selection" is now a materially stronger claim than when this was written.
 
 **Test method:**
 - Measure pantry log completion rate: % of users who add ≥1 item before or during their first plan generation

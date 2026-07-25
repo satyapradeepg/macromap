@@ -100,7 +100,7 @@ Jordan studies exercise science and knows the theory but struggles to apply it o
 - No awareness of what's already in the pantry when planning — frequently re-buys things
 
 ### What He'd Pay For
-Free tier is the entry point. Would convert to Pro if the budget-aware grocery list genuinely saves him money and reduces food waste. Price-sensitive — $9/month is a stretch.
+Free tier is the entry point. Would convert to Pro if the budget-aware grocery list genuinely saves him money and reduces food waste. Price-sensitive — $9/month is a stretch. **Flag (2026-07-25):** a confirmed product gap directly threatens this — live testing found real grocery totals land at $78–90/week regardless of stated budget ($35 to $275 all tested the same), well above Jordan's $50 hard limit. Until the budget/real-total reconciliation gap (product-brief.md Section 07, PRD OQ9) is resolved, Jordan is the persona most likely to feel actively misled by "budget-aware," not converted by it.
 
 ### Features That Map to His Needs
 | Feature | Why it helps Jordan |
@@ -110,7 +110,7 @@ Free tier is the entry point. Would convert to Pro if the budget-aware grocery l
 | F11 Conversational plan assistant (Free) | Can just tell it what's in his fridge instead of filling out a form — lowers the entry friction that made him bounce off other apps |
 | F8 Barcode scanning (V2) | Scans items after shopping to auto-populate pantry — removes manual entry friction |
 | Reddit deep-link | Free inspiration from r/EatCheapAndHealthy without leaving the app |
-| F3 Budget-aware planning (Pro) | The conversion trigger — if it demonstrably saves him money, he upgrades |
+| F3 Budget-aware planning (Pro) | The intended conversion trigger — if it demonstrably saves him money, he upgrades. **Currently at risk:** the stated budget doesn't yet constrain the real grocery total (see flag above) — resolve before leaning on this row for Jordan-targeted messaging |
 
 ### Quote
 > "I know eggs and rice are cheap and healthy. I just want someone to make it less boring without blowing my budget."
