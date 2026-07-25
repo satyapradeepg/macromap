@@ -468,11 +468,29 @@ export function mergeConvertibleLines(
       const lineCategory = classifyUnit(line.unit);
       let convertedAmount: number | null = null;
 
-      if (lineCategory === targetCategory && targetCategory !== "other") {
+      if (lineCategory === targetCategory && targetCategory === "other") {
+        // A blank unit (Spoonacular sometimes omits a size qualifier
+        // entirely) and a named size descriptor ("medium", "large", ...)
+        // for the SAME ingredient id both mean "one whole item" -- live-
+        // found 2026-07-25: real plan data had one ingredient id ("onion")
+        // split across a blank-unit line and a "medium"-unit line that
+        // were clearly the same ingredient, never merging (buildGroceryLines
+        // splits by exact unit STRING, and "" !== "medium"). Treating a
+        // blank unit as compatible with any ONE other descriptor closes
+        // that gap. Two DIFFERENT named descriptors (e.g. "medium" vs
+        // "large") are deliberately NOT assumed equivalent -- a real size
+        // difference -- and fall through to unresolved, same as "clove"
+        // vs "slice" always has.
+        const targetIsBlank = normalizeUnit(target.unit) === "";
+        const lineIsBlank = normalizeUnit(line.unit) === "";
+        if (targetIsBlank !== lineIsBlank) {
+          convertedAmount = line.totalAmount;
+        }
+      } else if (lineCategory === targetCategory) {
         const targetUnitBase = toBaseAmount(1, target.unit)!;
         const lineBase = toBaseAmount(line.totalAmount, line.unit)!;
         convertedAmount = lineBase.baseAmount / targetUnitBase.baseAmount;
-      } else if (lineCategory !== targetCategory) {
+      } else {
         const resolved = crossCategoryRates.get(conversionKey(id, line.unit, target.unit));
         if (resolved) {
           convertedAmount = line.totalAmount * resolved.rate;

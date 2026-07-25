@@ -278,6 +278,38 @@ describe("aggregateGroceryList", () => {
       for (const line of merged) expect(line.needsManualCombine).toBe(true);
     });
 
+    // Bug fix 2026-07-25: real plan data had one ingredient id ("onion")
+    // split into a blank-unit line and a "medium"-unit line that were
+    // clearly the same ingredient, never merging since buildGroceryLines
+    // splits by exact unit STRING and "" !== "medium".
+    it("merges a blank unit with a single named 'other' descriptor for the same id (e.g. onion)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 11282, name: "onion", totalAmount: 0.5, unit: "", needsManualCombine: true, sourceCount: 1 },
+        {
+          ingredientId: 11282,
+          name: "onion",
+          totalAmount: 0.27,
+          unit: "medium",
+          needsManualCombine: true,
+          sourceCount: 1,
+        },
+      ];
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 0.77, needsManualCombine: false });
+    });
+
+    it("still does not merge two different NAMED 'other' descriptors (e.g. medium vs large) -- a real size difference", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "onion", totalAmount: 0.5, unit: "medium", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "onion", totalAmount: 0.3, unit: "large", needsManualCombine: true, sourceCount: 1 },
+      ];
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
     it("passes single-unit lines through unchanged", () => {
       const lines = buildGroceryLines([[slotIngredient({ id: 1, metricAmount: 200 })]], []);
       expect(mergeConvertibleLines(lines, new Map())).toEqual(lines);
