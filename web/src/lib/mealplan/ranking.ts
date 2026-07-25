@@ -245,13 +245,30 @@ export function rankCandidates(
     // ingredient amount needed is the per-native-serving amount
     // (amount / candidate.servings) times how many serving-equivalents
     // this meal actually needs (scale).
+    //
+    // servings is `scale` alone, NOT candidate.servings * scale -- bug
+    // found live 2026-07-25 alongside the ingredients one above, same root
+    // cause (conflating the native batch size with the scale factor).
+    // Cooking (scale / candidate.servings) of a candidate.servings-serving
+    // recipe yields candidate.servings * (scale / candidate.servings) =
+    // scale servings of food, by construction -- exactly what this one
+    // meal-plan slot represents eating. The old `candidate.servings *
+    // scale` double-counted the native serving count: a perfect match
+    // (scale = 1, i.e. this slot's target IS one standard serving, zero
+    // leftovers) still showed "Makes {candidate.servings} servings — cook a
+    // fraction or plan for leftovers" for any recipe with more than one
+    // native serving (the common case), even though the correctly-scaled
+    // ingredients above only ever produce one serving's worth of food in
+    // that scenario. MIN_SCALE/MAX_SCALE (0.6-1.6) confirm `scale` alone is
+    // the right shape here -- it's always in the "about one serving"
+    // neighborhood, never a multi-day-batch-sized number.
     const scaledCandidate = {
       ...candidate,
       proteinG: candidate.proteinG * scale,
       caloriesKcal: candidate.caloriesKcal * scale,
       carbsG: candidate.carbsG * scale,
       fatG: candidate.fatG * scale,
-      servings: candidate.servings * scale,
+      servings: scale,
       pricePerServingCents:
         candidate.pricePerServingCents === null
           ? null

@@ -11,6 +11,7 @@ import {
 import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
 import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
+import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -230,6 +231,9 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
           composedIngredients: isComposed
             ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
             : null,
+          recipeIngredients: isComposed
+            ? null
+            : s.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
           imageUrl: s.candidate.imageUrl,
           servings: s.candidate.servings,
           calories: s.candidate.caloriesKcal,
@@ -484,6 +488,9 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     composedIngredients: isComposed
       ? swapResult.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
       : null,
+    recipeIngredients: isComposed
+      ? null
+      : swapResult.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
     imageUrl: swapResult.candidate.imageUrl,
     servings: swapResult.candidate.servings,
     calories: swapResult.candidate.caloriesKcal,
@@ -498,4 +505,34 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   };
 
   return { slot, weeklyActual, blocked: false, blockingHint: null, error: null };
+}
+
+export interface GetRecipeInstructionsResult {
+  steps: string[];
+  sourceUrl: string | null;
+  error: string | null;
+}
+
+// Backs the "View recipe" detail (PlanView.tsx) — lazy-fetched only when a
+// user actually opens a slot's recipe, not at generation time (see
+// spoonacular.ts's fetchRecipeInstructions header comment for why this
+// stays a separate per-recipe call rather than folded into complexSearch).
+// recipeId is a public Spoonacular id, not a per-user resource, so this
+// only gates on "an active session exists" (same defensive check as
+// swapMeal/generatePlan) rather than checking slot ownership.
+export async function getRecipeInstructions(recipeId: number): Promise<GetRecipeInstructionsResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { steps: [], sourceUrl: null, error: "No active session — refresh the page and try again." };
+  }
+
+  const result = await resolveRecipeInstructions(recipeId);
+  if (!result) {
+    return { steps: [], sourceUrl: null, error: "Recipe details unavailable right now — try again shortly." };
+  }
+  return { steps: result.steps, sourceUrl: result.sourceUrl, error: null };
 }

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { commaSwapFallback, prefixStripFallback, glutenFreeQualifierStripFallback } from "./spoonacular";
+import {
+  commaSwapFallback,
+  prefixStripFallback,
+  glutenFreeQualifierStripFallback,
+  parseRecipeInformation,
+} from "./spoonacular";
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): Spoonacular's
 // ingredient search returned zero results for "jasmine rice, cooked" even
@@ -96,5 +101,44 @@ describe("glutenFreeQualifierStripFallback", () => {
   it("does not touch an unrelated allergen-free qualifier -- deliberately scoped to gluten-free only", () => {
     expect(glutenFreeQualifierStripFallback("dairy-free yogurt")).toBeNull();
     expect(glutenFreeQualifierStripFallback("yogurt (dairy-free)")).toBeNull();
+  });
+});
+
+describe("parseRecipeInformation", () => {
+  it("flattens analyzedInstructions' steps across all sections, in order", () => {
+    const result = parseRecipeInformation({
+      analyzedInstructions: [
+        { steps: [{ step: "Preheat oven to 400F." }, { step: "Chop the onion." }] },
+      ],
+      sourceUrl: "https://example.com/recipe",
+    });
+    expect(result.steps).toEqual(["Preheat oven to 400F.", "Chop the onion."]);
+    expect(result.sourceUrl).toBe("https://example.com/recipe");
+  });
+
+  it("falls back to spoonacularSourceUrl when sourceUrl is absent", () => {
+    const result = parseRecipeInformation({ spoonacularSourceUrl: "https://spoonacular.com/recipe/1" });
+    expect(result.sourceUrl).toBe("https://spoonacular.com/recipe/1");
+  });
+
+  it("returns null sourceUrl when neither is present", () => {
+    expect(parseRecipeInformation({}).sourceUrl).toBeNull();
+  });
+
+  it("filters out empty/non-string steps rather than including blanks", () => {
+    const result = parseRecipeInformation({
+      analyzedInstructions: [{ steps: [{ step: "Real step." }, { step: "" }, { step: undefined }] }],
+    });
+    expect(result.steps).toEqual(["Real step."]);
+  });
+
+  it("returns an empty steps array when analyzedInstructions is missing entirely", () => {
+    expect(parseRecipeInformation({}).steps).toEqual([]);
+  });
+
+  it("never throws on malformed/unexpected input shapes", () => {
+    expect(parseRecipeInformation(null).steps).toEqual([]);
+    expect(parseRecipeInformation("garbage").steps).toEqual([]);
+    expect(parseRecipeInformation({ analyzedInstructions: "not an array" }).steps).toEqual([]);
   });
 });

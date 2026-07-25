@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   MEAL_TYPES,
   DAYS_PER_WEEK,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/mealplan/targets";
 import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
-import { generatePlan, swapMeal } from "./actions";
+import { generatePlan, swapMeal, getRecipeInstructions } from "./actions";
 import type { BlockedSlotView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
 import type { PantryItemView } from "./pantryData";
@@ -38,7 +38,8 @@ const MEAL_TYPE_LABELS: Record<MealType, string> = {
 // Rounded to 1 decimal for display only; the underlying macro/price fields
 // already reflect the precise scaled amount, this is cosmetic.
 function formatServings(n: number): string {
-  return (Math.round(n * 10) / 10).toString();
+  const rounded = Math.round(n * 10) / 10;
+  return `${rounded} ${rounded === 1 ? "serving" : "servings"}`;
 }
 
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
@@ -363,6 +364,12 @@ function MealCard({
   swapping: boolean;
   onSwap: () => void;
 }) {
+  const [showRecipe, setShowRecipe] = useState(false);
+  // Only a real, non-composed recipe has ingredients/instructions worth a
+  // separate detail view — composed snacks/AI-composed meals already show
+  // everything they have (their flat ingredient list) directly on the card.
+  const hasRecipeDetail = !!slot && !slot.isComposed && slot.recipeId !== null;
+
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface">
       {slot?.imageUrl && (
@@ -395,7 +402,7 @@ function MealCard({
             ) : (
               slot.servings > 1 && (
                 <p className="mt-2 text-xs text-muted">
-                  Makes {formatServings(slot.servings)} servings — cook a fraction or plan for leftovers.
+                  Makes {formatServings(slot.servings)} — cook a fraction or plan for leftovers.
                 </p>
               )
             )}
@@ -415,20 +422,163 @@ function MealCard({
               <span className="text-xs text-muted">
                 {slot.isComposed && !slot.aiComposed ? "Combine and eat — no cooking" : ""}
               </span>
-              <button
-                type="button"
-                onClick={onSwap}
-                disabled={swapping}
-                className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted disabled:opacity-60"
-              >
-                {swapping ? "Swapping…" : "Swap"}
-              </button>
+              <div className="flex gap-2">
+                {hasRecipeDetail && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRecipe(true)}
+                    className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted"
+                  >
+                    Recipe
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onSwap}
+                  disabled={swapping}
+                  className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted disabled:opacity-60"
+                >
+                  {swapping ? "Swapping…" : "Swap"}
+                </button>
+              </div>
             </div>
           </>
         ) : (
           <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
         )}
       </div>
+      {showRecipe && slot && <RecipeModal slot={slot} onClose={() => setShowRecipe(false)} />}
     </div>
   );
+}
+
+// Modeled on the common recipe-app detail pattern (Mealime/Whisk/AllRecipes):
+// image -> ingredients -> numbered steps, with a source link as the honest
+// fallback when Spoonacular has no structured steps for this recipe (not
+// every recipe in its corpus does). A modal (not inline expansion) keeps the
+// card grid's height uniform — an inline expansion would shove every other
+// card in the row down whenever one recipe's step list is long.
+function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => void }) {
+  const [instructions, setInstructions] = useState<{ steps: string[]; sourceUrl: string | null } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (slot.recipeId === null) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    getRecipeInstructions(slot.recipeId).then((result) => {
+      if (cancelled) return;
+      setLoading(false);
+      if (result.error) {
+        setLoadError(result.error);
+        return;
+      }
+      setInstructions({ steps: result.steps, sourceUrl: result.sourceUrl });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [slot.recipeId]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-surface"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {slot.imageUrl && (
+          <div className="aspect-16/9 w-full shrink-0 bg-background">
+            {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, same as the card thumbnail above */}
+            <img src={slot.imageUrl} alt={slot.recipeTitle} className="h-full w-full object-cover" />
+          </div>
+        )}
+        <div className="overflow-y-auto p-4">
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="text-base font-semibold text-foreground">{slot.recipeTitle}</h2>
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 text-sm font-semibold text-muted"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <MacroPill>{Math.round(slot.calories)} cal</MacroPill>
+            <MacroPill>{Math.round(slot.proteinG)}g protein</MacroPill>
+            <MacroPill>{Math.round(slot.carbsG)}g carbs</MacroPill>
+            <MacroPill>{Math.round(slot.fatG)}g fat</MacroPill>
+            <MacroPill>{formatServings(slot.servings)}</MacroPill>
+          </div>
+
+          {slot.recipeIngredients && slot.recipeIngredients.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Ingredients</h3>
+              <ul className="mt-2 flex flex-col gap-1 text-sm text-foreground">
+                {slot.recipeIngredients.map((ing, i) => (
+                  <li key={i}>
+                    {formatIngredientAmount(ing.amount, ing.unit)} {ing.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="mt-4">
+            <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Instructions</h3>
+            {loading && <p className="mt-2 text-sm text-muted">Loading…</p>}
+            {!loading && loadError && <p className="mt-2 text-sm text-muted">{loadError}</p>}
+            {!loading && !loadError && instructions && instructions.steps.length > 0 && (
+              <ol className="mt-2 flex flex-col gap-2 text-sm text-foreground">
+                {instructions.steps.map((step, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="text-muted">{i + 1}.</span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {!loading && !loadError && instructions && instructions.steps.length === 0 && (
+              <p className="mt-2 text-sm text-muted">
+                No step-by-step instructions available for this recipe.
+              </p>
+            )}
+            {!loading && !loadError && instructions?.sourceUrl && (
+              <a
+                href={instructions.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 inline-block text-sm font-semibold text-accent-2"
+              >
+                View original recipe ↗
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 1 decimal, same rounding as GroceryList.tsx's formatAmount -- a scaled
+// ingredient amount (e.g. 12.67 almonds) reads as more precise than a home
+// cook would ever actually measure.
+function formatIngredientAmount(amount: number, unit: string): string {
+  const rounded = Math.round(amount * 10) / 10;
+  return unit ? `${rounded} ${unit}` : `${rounded}`;
 }

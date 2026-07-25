@@ -21,6 +21,16 @@ export interface ComposedIngredientView {
   amountG: number;
 }
 
+// A real recipe's ingredient list, for the "View recipe" detail
+// (PlanView.tsx) — amount/unit are the recipe's own native measurements
+// (e.g. "2 cups"), not the metric ones grocery/aggregate.ts sums by, since
+// a recipe reads more naturally in the units it was actually written in.
+export interface RecipeIngredientView {
+  name: string;
+  amount: number;
+  unit: string;
+}
+
 export interface PlanSlotView {
   dayIndex: number;
   mealType: MealType;
@@ -38,6 +48,12 @@ export interface PlanSlotView {
   // copy for the former (see PlanView.tsx's MealCard).
   aiComposed: boolean;
   composedIngredients: ComposedIngredientView[] | null;
+  // null for composed/AI-composed slots (no single recipe backs them — see
+  // composedIngredients above instead). Populated from the same persisted
+  // ingredients this slot's grocery-list lines are already derived from
+  // (aggregate.ts), just in the recipe's native amount/unit rather than
+  // grocery/units.ts's metric grams/ml.
+  recipeIngredients: RecipeIngredientView[] | null;
   imageUrl: string | null;
   servings: number;
   calories: number;
@@ -135,6 +151,13 @@ export async function getMostRecentPlan(
               amountG: i.amount,
             }))
           : null,
+        recipeIngredients: isComposed
+          ? null
+          : (s.ingredients as Array<{ name: string; amount: number; unit: string }>).map((i) => ({
+              name: i.name,
+              amount: i.amount,
+              unit: i.unit,
+            })),
         imageUrl: s.image_url,
         servings: s.servings,
         calories: s.calories,

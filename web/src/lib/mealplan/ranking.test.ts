@@ -317,7 +317,7 @@ describe("rankCandidates", () => {
   });
 
   describe("portion scaling", () => {
-    it("scales proteinG/caloriesKcal/carbsG/fatG/servings/pricePerServingCents together and reports scaleFactor", () => {
+    it("scales proteinG/caloriesKcal/carbsG/fatG/pricePerServingCents by scale, and reports servings as scale alone", () => {
       // Same 0.8x-uniform fixture as bestScaleAndScore's "ideally-ratio'd"
       // test -- ideal scale is 1.25, a perfect fit on all 4 macros.
       const candidate1 = candidate({
@@ -335,7 +335,11 @@ describe("rankCandidates", () => {
       expect(ranked.caloriesKcal).toBeCloseTo(500, 5);
       expect(ranked.carbsG).toBeCloseTo(40, 5);
       expect(ranked.fatG).toBeCloseTo(15, 5);
-      expect(ranked.servings).toBeCloseTo(2.5, 5);
+      // Cooking (scale / native servings) = 1.25/2 = 62.5% of this
+      // 2-serving recipe yields 2 * 0.625 = 1.25 servings of food -- scale
+      // alone, not servings * scale (2.5), which would double-count the
+      // native serving count (bug fix 2026-07-25).
+      expect(ranked.servings).toBeCloseTo(1.25, 5);
       expect(ranked.pricePerServingCents).toBe(250); // 200 * 1.25, rounded
     });
 

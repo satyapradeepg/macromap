@@ -424,3 +424,72 @@ function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
     })),
   };
 }
+
+// "View recipe" detail (mealplan/recipeInstructions.ts's cached wrapper) --
+// a second, per-recipe call, deliberately NOT folded into complexSearch's
+// addRecipeInformation above: complexSearch already returns
+// analyzedInstructions/sourceUrl for every candidate in the pool, but only
+// the ONE recipe a user actually claims for a slot ever needs its steps
+// shown, and that set is a tiny fraction of the pool fetched per
+// generation -- fetching full instructions for every candidate up front
+// would burn quota on ~20-60x more recipes than anyone will ever open.
+interface SpoonacularRecipeInformationResponse {
+  analyzedInstructions?: Array<{ steps?: Array<{ step?: string }> }>;
+  sourceUrl?: string;
+  spoonacularSourceUrl?: string;
+}
+
+export interface RecipeInstructions {
+  steps: string[];
+  sourceUrl: string | null;
+}
+
+// Never trusts the response shape blindly -- same "never fake progress"
+// discipline as this codebase's other Spoonacular/LLM parsers. Exported
+// (pure, no network) so it's directly unit-testable rather than the fetch
+// call itself, matching aggregate.ts/identityMatch.ts/unitConversion.ts's
+// existing convention.
+export function parseRecipeInformation(raw: unknown): RecipeInstructions {
+  const body = (typeof raw === "object" && raw !== null ? raw : {}) as SpoonacularRecipeInformationResponse;
+  const sections = Array.isArray(body.analyzedInstructions) ? body.analyzedInstructions : [];
+  const steps = sections
+    .flatMap((section) => (Array.isArray(section.steps) ? section.steps : []))
+    .map((s) => s.step)
+    .filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+  const sourceUrl = body.sourceUrl || body.spoonacularSourceUrl || null;
+  return { steps, sourceUrl };
+}
+
+export async function fetchRecipeInstructions(recipeId: number): Promise<RecipeInstructions | null> {
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey) {
+    throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.spoonacular.com/recipes/${recipeId}/information?${new URLSearchParams({ apiKey }).toString()}`,
+    );
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular request failed: ${(err as Error).message}`);
+  }
+
+  if (response.status === 402 || response.status === 429) {
+    throw new SpoonacularQuotaError(`Spoonacular quota exceeded (HTTP ${response.status})`);
+  }
+  // An unknown/removed recipe id or a request Spoonacular can't fulfill is
+  // expected/handled (the UI falls back to "ingredients only"), same
+  // "return null, don't throw" convention as searchIngredient/
+  // lookupIngredientCost above.
+  if (!response.ok) return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (err) {
+    throw new SpoonacularRequestError(`Spoonacular response was not valid JSON: ${(err as Error).message}`);
+  }
+
+  return parseRecipeInformation(body);
+}
