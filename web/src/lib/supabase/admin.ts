@@ -1,9 +1,10 @@
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
 // Service-role client for tables with NO per-user owner and a default-deny
-// RLS policy set: public.recipe_query_cache (0006) and
-// public.ingredient_identity_matches (0019) — only this client (which
-// bypasses RLS entirely) can read/write either. Never use this for
+// RLS policy set: public.recipe_query_cache (0006),
+// public.ingredient_identity_matches (0019), and
+// public.ingredient_unit_conversions (0020) — only this client (which
+// bypasses RLS entirely) can read/write any of them. Never use this for
 // profiles/meal_plans/meal_plan_slots/pantry_items — those must keep going
 // through src/lib/supabase/server.ts so per-user RLS stays enforced.
 export function createAdminClient() {

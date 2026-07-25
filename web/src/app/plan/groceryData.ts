@@ -18,6 +18,7 @@ import {
   type SlotIngredientEntry,
 } from "@/lib/grocery/aggregate";
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
+import { resolveConversionRate } from "@/lib/grocery/unitConversion";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
 import { lookupIngredientCost } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
@@ -288,12 +289,55 @@ export async function getGroceryList(
     ),
   );
 
+  // Cross-category conversion (e.g. a pantry entry in ml crediting a
+  // matched line that needs grams of the same ingredient) only matters
+  // for quantified pantry items whose matched lines include at least one
+  // line outside the item's own unit category/descriptor -- unquantified
+  // items and same-category matches already resolve inside aggregate.ts.
+  // Resolved in parallel across pantry items, each against only the
+  // distinct target units it actually needs (typically 0-2), so this
+  // stays cheap even before the global cache in unitConversion.ts warms up.
+  const unitConversionRatesByRow = await Promise.all(
+    rawPantryRows.map(async (row, i) => {
+      if (row.amount === null || row.unit === null) return null;
+      const matchedNames = matchedLineNamesByRow[i];
+      if (!matchedNames || matchedNames.size === 0) return null;
+
+      const itemCategory = classifyUnit(row.unit);
+      const sourceUnit = itemCategory === "weight" ? "g" : itemCategory === "volume" ? "ml" : row.unit;
+      const itemDescriptor = itemCategory === "other" ? row.unit.toLowerCase().trim().replace(/s$/, "") : null;
+
+      const targetUnits = new Set(
+        rawLines
+          .filter((line) => matchedNames.has(line.name.toLowerCase().trim()))
+          .map((line) => ({ unit: line.unit, category: classifyUnit(line.unit) }))
+          .filter(
+            (line) =>
+              line.category !== itemCategory ||
+              (itemCategory === "other" && line.unit.toLowerCase().trim().replace(/s$/, "") !== itemDescriptor),
+          )
+          .map((line) => line.unit.toLowerCase().trim()),
+      );
+      if (targetUnits.size === 0) return null;
+
+      const rates = new Map<string, number>();
+      await Promise.all(
+        [...targetUnits].map(async (targetUnit) => {
+          const rate = await resolveConversionRate(row.name, sourceUnit, targetUnit);
+          if (rate) rates.set(targetUnit, rate);
+        }),
+      );
+      return rates.size > 0 ? rates : null;
+    }),
+  );
+
   const pantryItems: PantryExclusionItem[] = rawPantryRows.map((row, i) => ({
     name: row.name,
     spoonacularIngredientId: row.spoonacular_ingredient_id,
     amount: row.amount,
     unit: row.unit,
     matchedLineNames: matchedLineNamesByRow[i],
+    unitConversionRates: unitConversionRatesByRow[i],
   }));
 
   const lines = applyPantryItems(rawLines, pantryItems)

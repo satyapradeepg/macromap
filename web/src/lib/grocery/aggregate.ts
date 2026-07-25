@@ -53,6 +53,20 @@ export interface PantryExclusionItem {
   // matching nothing, same "never silently do less than before"
   // precedent as the rest of this file's pantry logic.
   matchedLineNames?: Set<string> | null;
+  // Precomputed via lib/grocery/unitConversion.ts's resolveConversionRate
+  // (Spoonacular's real density-aware /recipes/convert endpoint + a
+  // global cache), keyed by a matched grocery line's lowercased/trimmed
+  // unit string, value = how many of that unit equal one unit of this
+  // pantry item's own base (grams/ml for weight/volume, or this item's
+  // own declared unit for "other"). Lets a category-mismatched-but-
+  // quantified match (e.g. pantry "500ml greek yogurt" vs. a line needing
+  // grams) still contribute instead of hard-excluding the line outright
+  // regardless of amount -- found live 2026-07-25 that the pre-fix
+  // behavior let a volume-only pantry entry silently zero out an
+  // unrelated weight-based need for the same ingredient. Absent/no entry
+  // for a given unit falls back to the safe hard-exclude, same "never do
+  // worse than before" precedent as matchedLineNames above.
+  unitConversionRates?: Map<string, number> | null;
 }
 
 export interface GroceryLine {
@@ -145,7 +159,7 @@ function buildPantryPools(pantryItems: PantryExclusionItem[]): PantryPool[] {
 // rather than reapplying its full amount per line. Falls back to
 // excluding the line ENTIRELY (the original all-or-nothing behavior) only
 // when EVERY matching pantry item is structurally unusable against this
-// line (no structured quantity, or an incompatible unit/descriptor) --
+// line (no structured quantity, or an incompatible/unconvertible unit) --
 // fixes a second bug found live 2026-07-25 where a single unquantified
 // match discarded a different, perfectly usable match's contribution for
 // the same line. A pool that's merely exhausted (already spent on an
@@ -154,40 +168,60 @@ function buildPantryPools(pantryItems: PantryExclusionItem[]): PantryPool[] {
 // Distinct from F3's soft pantry-bias preference in ranking.ts's
 // pantryOverlapDeduction (which only nudges recipe selection, never drops
 // a slot or an ingredient).
+//
+// Every usable pool contributes via one rate: how many of THIS LINE's
+// unit equal one unit of the pool's own base. Same-category matches get
+// a rate derived from the existing weight/volume conversion table (or 1,
+// once "other" descriptors are confirmed equal); cross-category matches
+// get a rate from PantryExclusionItem.unitConversionRates (a real,
+// ingredient-specific density lookup precomputed in groceryData.ts) when
+// available -- e.g. a pantry entry declared in ml can now credit a line
+// that needs grams of the SAME ingredient, instead of the pre-fix
+// behavior of hard-excluding it outright regardless of amount (found
+// live 2026-07-25: a volume-only "greek yogurt" pantry entry silently
+// zeroed out an unrelated 825g weight-based need for the same
+// ingredient, from a different recipe, elsewhere in the same plan).
+// Tracking `remainingNeed` in the line's own unit throughout (rather than
+// converting everything into a shared weight/volume base up front) is
+// what lets same-category and cross-category pools mix in one loop.
 function applyPantryToLine(line: GroceryLine, pools: PantryPool[]): GroceryLine | null {
   const lineCategory = classifyUnit(line.unit);
   const matches = pools.filter((pool) => matchesPantryItem(line, pool.item));
   if (matches.length === 0) return line;
 
-  const usable = matches.filter(
-    (pool) =>
-      pool.category !== null &&
-      pool.category === lineCategory &&
-      (pool.category !== "other" || pool.otherDescriptor === normalizeOtherUnit(line.unit)),
-  );
-  if (usable.length === 0) return null; // every match is unquantified or unit-incompatible -- safe hard-exclude fallback
+  const usable: Array<{ pool: PantryPool; lineUnitsPerPoolBase: number }> = [];
+  for (const pool of matches) {
+    if (pool.category === null) continue;
 
-  let remainingNeedBase: number;
-  let oneLineUnitBase = 1;
-  if (lineCategory === "other") {
-    remainingNeedBase = line.totalAmount;
-  } else {
-    const need = toBaseAmount(line.totalAmount, line.unit);
-    const oneUnit = toBaseAmount(1, line.unit);
-    if (!need || !oneUnit) return line; // classifyUnit already guarantees this line's unit converts
-    remainingNeedBase = need.baseAmount;
-    oneLineUnitBase = oneUnit.baseAmount;
+    if (pool.category === lineCategory) {
+      if (pool.category === "other") {
+        if (pool.otherDescriptor === normalizeOtherUnit(line.unit)) {
+          usable.push({ pool, lineUnitsPerPoolBase: 1 });
+        }
+        continue;
+      }
+      const oneLineUnitBase = toBaseAmount(1, line.unit);
+      if (oneLineUnitBase && oneLineUnitBase.baseAmount > 0) {
+        usable.push({ pool, lineUnitsPerPoolBase: 1 / oneLineUnitBase.baseAmount });
+      }
+      continue;
+    }
+
+    const rate = pool.item.unitConversionRates?.get(line.unit.toLowerCase().trim());
+    if (rate) usable.push({ pool, lineUnitsPerPoolBase: rate });
+  }
+  if (usable.length === 0) return null; // no usable or convertible match -- safe hard-exclude fallback
+
+  let remainingNeed = line.totalAmount;
+  for (const { pool, lineUnitsPerPoolBase } of usable) {
+    if (pool.remainingBase <= 0 || remainingNeed <= 0) continue;
+    const maxConsumableInLineUnits = pool.remainingBase * lineUnitsPerPoolBase;
+    const consumedInLineUnits = Math.min(maxConsumableInLineUnits, remainingNeed);
+    pool.remainingBase -= consumedInLineUnits / lineUnitsPerPoolBase;
+    remainingNeed -= consumedInLineUnits;
   }
 
-  for (const pool of usable) {
-    if (pool.remainingBase <= 0 || remainingNeedBase <= 0) continue;
-    const consumed = Math.min(pool.remainingBase, remainingNeedBase);
-    pool.remainingBase -= consumed;
-    remainingNeedBase -= consumed;
-  }
-
-  const remainingInLineUnit = remainingNeedBase / oneLineUnitBase;
-  return remainingInLineUnit > 0 ? { ...line, totalAmount: remainingInLineUnit } : null;
+  return remainingNeed > 0 ? { ...line, totalAmount: remainingNeed } : null;
 }
 
 // Exported so callers needing the identity-match pass (see

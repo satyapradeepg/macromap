@@ -286,5 +286,90 @@ describe("aggregateGroceryList", () => {
 
       expect(lines).toHaveLength(0);
     });
+
+    // unitConversionRates (bug fix 2026-07-25): before this, a matching
+    // pantry item with a real quantity in an incompatible unit CATEGORY
+    // (e.g. ml vs. a line needing g) was treated identically to a match
+    // with no quantity at all -- hard-excluded outright, regardless of
+    // amount. Live-confirmed this could silently zero out an unrelated
+    // weight-based need for the same ingredient just because a pantry
+    // entry happened to be logged in a different unit type. These tests
+    // use a precomputed rate map (as lib/grocery/unitConversion.ts's
+    // resolveConversionRate would produce), matching this file's
+    // "aggregate.ts consumes already-resolved data, no network" contract.
+    describe("cross-category conversion (unitConversionRates)", () => {
+      it("credits a category-mismatched match using a precomputed conversion rate instead of hard-excluding it", () => {
+        // Pantry: 500ml greek yogurt. Line: 825g greek yogurt (a
+        // different recipe's weight-based need). Density resolved
+        // elsewhere as "1g per 1ml" for this test's numbers.
+        const pantry = [
+          pantryItem({
+            name: "greek yogurt",
+            amount: 500,
+            unit: "ml",
+            matchedLineNames: new Set(["greek yogurt"]),
+            unitConversionRates: new Map([["g", 1]]), // 1g per 1ml, i.e. rate = target(g) per 1 source(ml)
+          }),
+        ];
+        const lines = aggregateGroceryList(
+          [[slotIngredient({ id: 1, name: "greek yogurt", metricAmount: 825, metricUnit: "g" })]],
+          [],
+          pantry,
+        );
+
+        expect(lines).toHaveLength(1);
+        expect(lines[0].totalAmount).toBeCloseTo(325); // 825 - (500ml * 1g/ml)
+      });
+
+      it("still hard-excludes a category-mismatched match when no conversion rate was resolved for that unit", () => {
+        const pantry = [
+          pantryItem({
+            name: "greek yogurt",
+            amount: 500,
+            unit: "ml",
+            matchedLineNames: new Set(["greek yogurt"]),
+            unitConversionRates: new Map(), // resolution attempted but came back empty (e.g. API error)
+          }),
+        ];
+        const lines = aggregateGroceryList(
+          [[slotIngredient({ id: 1, name: "greek yogurt", metricAmount: 825, metricUnit: "g" })]],
+          [],
+          pantry,
+        );
+
+        expect(lines).toHaveLength(0);
+      });
+
+      it("pools a cross-category conversion across the SAME shared pool as a same-category match on a different line", () => {
+        // One 500ml pantry entry needs to cover BOTH a same-category (ml)
+        // line and a cross-category (g) line -- the pool must deplete
+        // consistently across both, not double-credit.
+        const pantry = [
+          pantryItem({
+            name: "greek yogurt",
+            amount: 500,
+            unit: "ml",
+            matchedLineNames: new Set(["greek yogurt"]),
+            unitConversionRates: new Map([["g", 1]]),
+          }),
+        ];
+        const lines = aggregateGroceryList(
+          [
+            [
+              slotIngredient({ id: 1, name: "greek yogurt", metricAmount: 300, metricUnit: "ml" }),
+              slotIngredient({ id: 2, name: "greek yogurt", metricAmount: 400, metricUnit: "g" }),
+            ],
+          ],
+          [],
+          pantry,
+        );
+
+        // 300ml consumed first (same-category, whichever line is
+        // processed first) leaves 200ml (== 200g at this rate) for the
+        // second line: 400 - 200 = 200 remaining.
+        expect(lines).toHaveLength(1);
+        expect(lines[0].totalAmount).toBeCloseTo(200);
+      });
+    });
   });
 });
