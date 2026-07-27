@@ -204,9 +204,27 @@ async function groundIngredientForAiMeal(query: string): Promise<GroundedIngredi
   return lookupIngredientMacrosCached(query);
 }
 
+// `addons` is one Map shared across the WHOLE week (declared once, not
+// per-day) -- iterating addons.values() unconditionally, as this used to,
+// summed every addon in the entire plan into whatever `claimed` subset was
+// passed in, not just the addons belonging to it. Every day-scoped caller
+// (all of reconciliation's gap checks, both never-worse guards, and the
+// final per-day within_band/outside_band_after_retries status) was getting
+// silently inflated by every OTHER day's addons too -- worse for later
+// days, since addons added during earlier days' own reconciliation stay in
+// the same shared map. Found live 2026-07-27 while implementing the
+// phase-2 recompute+guard fix above. Fixed by looking up each of THIS
+// call's own `claimed` slots' addon via slotKey (which already encodes
+// day+mealType) instead of blindly draining the whole map -- behavior-
+// preserving for the one caller that already passes the full week's
+// claimed list (summing via lookup over that same list is identical to
+// summing every map value, since every addon always belongs to some
+// claimed slot), and behavior-correcting for every day-scoped caller.
 function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
   let total = sumActuals(claimed);
-  for (const addon of addons.values()) {
+  for (const c of claimed) {
+    const addon = addons.get(slotKey(c.slotId));
+    if (!addon) continue;
     total = {
       calories: total.calories + addon.caloriesKcal,
       proteinG: total.proteinG + addon.proteinG,
