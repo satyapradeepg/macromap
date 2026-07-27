@@ -214,9 +214,29 @@ export function commaSwapFallback(query: string): string | null {
 // touches the rest of the name -- same conservative reasoning as
 // commaSwapFallback: this is a reorder/strip of a prep descriptor, not a
 // guess at a different ingredient.
+//
+// "sliced" added 2026-07-27 (marathon-session queue item #2): a live
+// AI-compose diagnostic against vegetarian_cut found the same zero-result
+// pattern for a leading "sliced" (e.g. "sliced avocado"). Same shape
+// descriptor risk profile as the rest of this list -- slicing doesn't
+// change a food's per-100g macros, so dropping it is safe the same way
+// dropping "steamed"/"roasted" is.
 const PREP_PREFIXES = [
-  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried",
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced",
 ];
+
+// Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
+// vegetarian_cut diagnostic: Claude's AI-compose sometimes names a
+// meat-analogue ingredient with a trailing shape/form descriptor Spoonacular's
+// search doesn't recognize either, e.g. "tempeh bacon strips" or "seitan
+// crumbles". Like "sliced", "strips"/"crumbles" describe a cut/shape, not a
+// distinct reformulated product, so dropping them carries the same low risk
+// as the leading-prefix case -- confirmed by checking each term names a
+// shape, not a branded product, before adding it here (see the module
+// comment on glutenFreeQualifierStripFallback below for the class of risk
+// this deliberately avoids: a qualifier that names a genuinely different
+// product must NOT be added to this list).
+const TRAILING_DESCRIPTORS = ["strips", "crumbles"];
 
 export function prefixStripFallback(query: string): string | null {
   const trimmed = query.trim();
@@ -224,6 +244,13 @@ export function prefixStripFallback(query: string): string | null {
     const match = new RegExp(`^${prefix}\\s+`, "i").exec(trimmed);
     if (match) {
       const rest = trimmed.slice(match[0].length).trim();
+      return rest || null;
+    }
+  }
+  for (const suffix of TRAILING_DESCRIPTORS) {
+    const match = new RegExp(`\\s+${suffix}$`, "i").exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(0, match.index).trim();
       return rest || null;
     }
   }

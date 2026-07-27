@@ -69,6 +69,47 @@ describe("prefixStripFallback", () => {
   it("only strips a leading occurrence, not one appearing mid-name", () => {
     expect(prefixStripFallback("baby carrots, steamed")).toBeNull();
   });
+
+  // Added 2026-07-27 (marathon-session queue item #2): live AI-compose
+  // diagnostic against vegetarian_cut found "sliced" hitting the same
+  // zero-result pattern as the other prep-word prefixes.
+  it("strips a leading 'sliced' prefix", () => {
+    expect(prefixStripFallback("sliced avocado")).toBe("avocado");
+    expect(prefixStripFallback("SLICED almonds")).toBe("almonds");
+  });
+
+  // Trailing counterpart found in the same diagnostic: a meat-analogue
+  // ingredient named with a trailing shape descriptor Spoonacular's search
+  // doesn't recognize either.
+  it("strips a trailing 'strips' descriptor", () => {
+    expect(prefixStripFallback("tempeh bacon strips")).toBe("tempeh bacon");
+    expect(prefixStripFallback("chicken strips")).toBe("chicken");
+  });
+
+  it("strips a trailing 'crumbles' descriptor", () => {
+    expect(prefixStripFallback("seitan crumbles")).toBe("seitan");
+    expect(prefixStripFallback("tofu crumbles")).toBe("tofu");
+  });
+
+  it("matches trailing descriptors case-insensitively", () => {
+    expect(prefixStripFallback("seitan CRUMBLES")).toBe("seitan");
+  });
+
+  it("returns null when stripping a trailing descriptor would leave nothing", () => {
+    expect(prefixStripFallback("strips")).toBeNull();
+    expect(prefixStripFallback("crumbles")).toBeNull();
+  });
+
+  it("only strips a trailing occurrence, not one appearing mid-name", () => {
+    expect(prefixStripFallback("crumbles of seitan")).toBeNull();
+  });
+
+  it("prefers the leading-prefix match when both a leading and trailing descriptor are present", () => {
+    // "sliced" is stripped first; the trailing "strips" on the remainder is
+    // left untouched by this single call, matching every other fallback in
+    // this file being a one-shot retry, not a multi-pass rewrite.
+    expect(prefixStripFallback("sliced bacon strips")).toBe("bacon strips");
+  });
 });
 
 // Sibling gap to audit item #1, live-confirmed 2026-07-22 (stacked-safety
