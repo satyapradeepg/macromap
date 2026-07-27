@@ -110,15 +110,6 @@ export function weeklyAccuracyTier(actual: MacroTargets, target: MacroTargets): 
   return "off_target";
 }
 
-// A single re-query can only nudge protein+calories bounds one way at a
-// time (see nudgedBounds) — if multiple macros are out of band in opposite
-// directions, pick the one with the largest relative overshoot to drive
-// the nudge direction for this reconciliation round.
-export function dominantDirection(gaps: MacroGapDirection[]): "increase" | "decrease" | null {
-  if (gaps.length === 0) return null;
-  return [...gaps].sort((a, b) => b.overshootPct - a.overshootPct)[0].direction;
-}
-
 // F3 snack/add-on gap-closer: an add-on can only ever ADD macros, so it's
 // only useful for "increase" gaps (weekly actual too low) — a "decrease"
 // gap (too high) can't be helped by adding food, only by swapping to a
@@ -179,25 +170,46 @@ export function pickSlackSlots(
 
 // Single targeted re-fetch (not a fresh 3-tier cascade) — re-running the
 // full cascade per slack slot could burn the whole retry budget on
-// tier-widening alone. Nudges all four macros in the same direction (not
-// just protein/calories) so the carb/fat compliance preference (see
-// ranking.ts's macroCompliant) also leans the right way during this
-// targeted retry, not just the Spoonacular-side protein/calorie query.
+// tier-widening alone.
+//
+// Nudges each macro in ITS OWN gap's direction, not one shared direction
+// across all four -- fixed 2026-07-27 after live evidence (two ordinary
+// maintain-goal profiles landing ~19% under target on carbs while fat ran
+// 7-18% over, simultaneously) traced to exactly this: the old signature
+// took a single `direction` (from the now-removed dominantDirection,
+// picked by whichever macro had the single largest raw overshoot) and
+// applied it to every macro's bounds uniformly. When carbs needed
+// "increase" and fat needed "decrease" at the same time, a carb-fixing
+// retry pass was ALSO searching for more fat -- actively undoing itself.
+// orchestrate.ts's addon-at-selection phase comment already named this
+// exact tension as a known, unsolved gap before this fix.
+//
+// A macro with no entry in `gaps` (already within its own band) gets a
+// neutral +/-BAND_PCT band around its own target instead of being dragged
+// toward whichever OTHER macro is driving this round -- same threshold
+// that already defines "in band" everywhere else in this file, not a new
+// magic number.
 export function nudgedBounds(
   perMealTargetForSlot: MacroTargets,
-  direction: "increase" | "decrease",
+  gaps: MacroGapDirection[],
   pct = 0.15,
 ): MacroBounds {
-  const multiplier = direction === "increase" ? 1 + pct : 1 - pct;
-  const nudged = (value: number) => value * multiplier;
-  const bound = (value: number) => ({
-    min: Math.min(value, nudged(value)),
-    max: Math.max(value, nudged(value)),
-  });
-  const protein = bound(perMealTargetForSlot.proteinG);
-  const calories = bound(perMealTargetForSlot.calories);
-  const carbs = bound(perMealTargetForSlot.carbsG);
-  const fat = bound(perMealTargetForSlot.fatG);
+  const gapDirectionFor = (macro: MacroKey): "increase" | "decrease" | null =>
+    gaps.find((g) => g.macro === macro)?.direction ?? null;
+
+  const bound = (value: number, direction: "increase" | "decrease" | null) => {
+    if (direction === null) {
+      return { min: value * (1 - BAND_PCT), max: value * (1 + BAND_PCT) };
+    }
+    const multiplier = direction === "increase" ? 1 + pct : 1 - pct;
+    const nudged = value * multiplier;
+    return { min: Math.min(value, nudged), max: Math.max(value, nudged) };
+  };
+
+  const protein = bound(perMealTargetForSlot.proteinG, gapDirectionFor("proteinG"));
+  const calories = bound(perMealTargetForSlot.calories, gapDirectionFor("calories"));
+  const carbs = bound(perMealTargetForSlot.carbsG, gapDirectionFor("carbsG"));
+  const fat = bound(perMealTargetForSlot.fatG, gapDirectionFor("fatG"));
   return {
     minProtein: protein.min,
     maxProtein: protein.max,

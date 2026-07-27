@@ -5,7 +5,6 @@ import {
   outsideMacros,
   macroGapDirections,
   isWithinBand,
-  dominantDirection,
   dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
@@ -120,20 +119,6 @@ describe("weeklyAccuracyTier", () => {
   });
 });
 
-describe("dominantDirection", () => {
-  it("returns null when there are no gaps", () => {
-    expect(dominantDirection([])).toBeNull();
-  });
-
-  it("picks the direction of the largest relative overshoot", () => {
-    const gaps = [
-      { macro: "calories" as const, direction: "decrease" as const, overshootPct: 0.02 },
-      { macro: "proteinG" as const, direction: "increase" as const, overshootPct: 0.3 },
-    ];
-    expect(dominantDirection(gaps)).toBe("increase");
-  });
-});
-
 describe("dominantIncreaseGap", () => {
   it("returns null when there are no gaps", () => {
     expect(dominantIncreaseGap([])).toBeNull();
@@ -220,9 +205,16 @@ describe("pickSlackSlots", () => {
 
 describe("nudgedBounds", () => {
   const perMeal = { proteinG: 40, calories: 500, carbsG: 50, fatG: 20 };
+  const allIncrease = [
+    { macro: "proteinG" as const, direction: "increase" as const, overshootPct: 0.1 },
+    { macro: "calories" as const, direction: "increase" as const, overshootPct: 0.1 },
+    { macro: "carbsG" as const, direction: "increase" as const, overshootPct: 0.1 },
+    { macro: "fatG" as const, direction: "increase" as const, overshootPct: 0.1 },
+  ];
+  const allDecrease = allIncrease.map((g) => ({ ...g, direction: "decrease" as const }));
 
-  it("widens upward on 'increase', across all four macros", () => {
-    const bounds = nudgedBounds(perMeal, "increase", 0.15);
+  it("widens upward when every macro's own gap says 'increase'", () => {
+    const bounds = nudgedBounds(perMeal, allIncrease, 0.15);
     expect(bounds.minProtein).toBe(40);
     expect(bounds.maxProtein).toBeCloseTo(46, 5);
     expect(bounds.minCalories).toBe(500);
@@ -233,14 +225,48 @@ describe("nudgedBounds", () => {
     expect(bounds.maxFat).toBeCloseTo(23, 5);
   });
 
-  it("widens downward on 'decrease', across all four macros", () => {
-    const bounds = nudgedBounds(perMeal, "decrease", 0.15);
+  it("widens downward when every macro's own gap says 'decrease'", () => {
+    const bounds = nudgedBounds(perMeal, allDecrease, 0.15);
     expect(bounds.maxProtein).toBe(40);
     expect(bounds.minProtein).toBeCloseTo(34, 5);
     expect(bounds.maxCarbs).toBe(50);
     expect(bounds.minCarbs).toBeCloseTo(42.5, 5);
     expect(bounds.maxFat).toBe(20);
     expect(bounds.minFat).toBeCloseTo(17, 5);
+  });
+
+  // The actual regression this fix is for (live-confirmed 2026-07-27): carbs
+  // under target and fat over target AT THE SAME TIME used to both get
+  // nudged in whichever ONE direction had the biggest raw overshoot --
+  // e.g. a carb-driven "increase" call also searched for MORE fat, undoing
+  // itself. Each macro must now move only in its OWN gap's direction.
+  it("nudges each macro independently when their gap directions disagree", () => {
+    const mixedGaps = [
+      { macro: "carbsG" as const, direction: "increase" as const, overshootPct: 0.19 },
+      { macro: "fatG" as const, direction: "decrease" as const, overshootPct: 0.1 },
+    ];
+    const bounds = nudgedBounds(perMeal, mixedGaps, 0.15);
+    // carbs: nudged UP, same shape as the all-increase case.
+    expect(bounds.minCarbs).toBe(50);
+    expect(bounds.maxCarbs).toBeCloseTo(57.5, 5);
+    // fat: nudged DOWN, same shape as the all-decrease case -- NOT dragged
+    // up just because carbs needed to increase.
+    expect(bounds.maxFat).toBe(20);
+    expect(bounds.minFat).toBeCloseTo(17, 5);
+    // protein/calories have no gap at all -- neutral +/-5% band around
+    // their own target, not pushed toward either carbs' or fat's direction.
+    expect(bounds.minProtein).toBeCloseTo(38, 5);
+    expect(bounds.maxProtein).toBeCloseTo(42, 5);
+    expect(bounds.minCalories).toBeCloseTo(475, 5);
+    expect(bounds.maxCalories).toBeCloseTo(525, 5);
+  });
+
+  it("gives every macro a neutral +/-5% band when there are no gaps at all", () => {
+    const bounds = nudgedBounds(perMeal, []);
+    expect(bounds.minProtein).toBeCloseTo(38, 5);
+    expect(bounds.maxProtein).toBeCloseTo(42, 5);
+    expect(bounds.minCarbs).toBeCloseTo(47.5, 5);
+    expect(bounds.maxCarbs).toBeCloseTo(52.5, 5);
   });
 });
 

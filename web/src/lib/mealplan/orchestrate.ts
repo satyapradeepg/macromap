@@ -49,7 +49,6 @@ import {
   sumActuals,
   macroGapDirections,
   isWithinBand,
-  dominantDirection,
   dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
@@ -613,17 +612,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // leave more non-addon'd slot inventory per day for the swap-eligibility
     // soft preference below to work with -- it overshot the other way
     // (addon-at-selection stopped firing at all in that run, carbs got
-    // worse than Phase 1 alone). Reverted to p10. See that same commit's
-    // notes for the honest, unresolved tension this keeps running into:
-    // reconciliation's dominantDirection picks whichever macro has the
-    // single largest RAW overshoot, unweighted -- it has no notion that
-    // fixing fat matters less to the overall score than protein/calories
-    // (macroDeviationScore's own weights), so it keeps chasing whichever
-    // macro has the biggest number and can undo an addon's fat-fixing work
-    // as a side effect even with this soft preference in place. Fully
-    // solving that needs reconciliation itself to be macro-weight-aware or
-    // addon-target-aware, not a threshold tweak -- flagged, not solved,
-    // this session.
+    // worse than Phase 1 alone). Reverted to p10.
+    //
+    // Partially resolved 2026-07-27: Phase 2's recipe-requery bounds
+    // (nudgedBounds, reconciliation.ts) used to apply ONE shared direction
+    // to all 4 macros, so a carb-fixing swap could actively search for
+    // MORE fat even while fat was already over target -- undoing this
+    // phase's own fat-fixing addon as a side effect. Fixed: nudgedBounds
+    // now nudges each macro in its own gap's direction (or a neutral band
+    // if that macro's already in band), never an unrelated one. Still
+    // real, still unresolved: dominantIncreaseGap (just below) picks WHICH
+    // macro gets an addon attempt by raw overshoot, unweighted by
+    // macroDeviationScore's own protein/calories-first weighting -- that's
+    // a different question (target selection, not bounds direction) and
+    // wasn't part of this fix.
     const gap = dominantIncreaseGap(macroGapDirections(candidateAsTargets, toleranceBand(target, TOLERANCE_PCT.p10)));
     if (!gap || !trySpend(selectionAddonBudget, ADDON_ATTEMPT_COST)) return;
     retryQueriesUsed++;
@@ -786,7 +788,6 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       }
 
       if (gaps.length > 0) {
-        const direction = dominantDirection(gaps)!;
         // Recipe requery only applies to recipe-mechanism slots — a composed
         // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
         // throws for snack types); a snack with remaining slack only gets
@@ -831,7 +832,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             .filter((_, i) => i !== existingIndex)
             .map((c) => c.candidate.id);
           const slotTarget = mealTypeTargets[slotId.mealType];
-          const bounds = nudgedBounds(slotTarget, direction);
+          const bounds = nudgedBounds(slotTarget, gaps);
           const raw = await fetchCandidatesWithCache(
             admin,
             // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
@@ -933,7 +934,12 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
             .map((c) => c.candidate.id);
           const slotTarget = mealTypeTargets[mealType];
-          const bounds = nudgedBounds(slotTarget, "increase");
+          // [floorGap] only, not a broader gaps list -- this phase is a
+          // protein-floor top-up specifically; the other 3 macros should
+          // stay near their own target rather than get pushed up too just
+          // because protein needs to increase (the exact cross-macro-drag
+          // bug nudgedBounds was fixed for above, applies here too).
+          const bounds = nudgedBounds(slotTarget, [floorGap]);
           const raw = await fetchCandidatesWithCache(
             admin,
             { bounds, tier: existingNow.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
