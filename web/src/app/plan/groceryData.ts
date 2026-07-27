@@ -24,7 +24,12 @@ import {
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
 import { resolveLineIdentityRemap } from "@/lib/grocery/lineIdentity";
 import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
-import { aisleCacheKey, resolveIngredientAisle, UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
+import {
+  aisleCacheKey,
+  resolveIngredientAisle,
+  seedAisleFromSpoonacular,
+  UNCATEGORIZED_AISLE,
+} from "@/lib/grocery/ingredientAisle";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
 import { lookupIngredientCost } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
@@ -95,8 +100,8 @@ function computeLinePrice(rateCents: number, basis: PriceBasis, line: { totalAmo
 async function resolvePricedLines(
   supabase: SupabaseClient,
   userId: string,
-  lines: Array<Omit<GroceryLineView, "priceCents">>,
-): Promise<GroceryLineView[]> {
+  lines: Array<Omit<GroceryLineView, "priceCents" | "aisle">>,
+): Promise<Array<Omit<GroceryLineView, "aisle">>> {
   const { data: profile } = await supabase.from("profiles").select("zip_code").eq("id", userId).maybeSingle();
   const region = profile?.zip_code || "US";
 
@@ -194,6 +199,13 @@ async function resolvePricedLines(
         try {
           const lookup = await lookupIngredientCost(ingredientId, spoonacularAmount, spoonacularUnit);
           rateCents = lookup?.costCents ?? null;
+          // Same Spoonacular response already carries a real aisle (see
+          // spoonacular.ts's lookupIngredientCost) -- seed it here so the
+          // aisle-resolution pass right after this function returns is a
+          // cache hit for this id instead of a second identical request.
+          if (lookup?.aisle) {
+            await seedAisleFromSpoonacular(ingredientId, name, lookup.aisle);
+          }
         } catch {
           rateCents = null;
         }
@@ -443,6 +455,23 @@ export async function getGroceryList(
 
   const excludedLines = applyPantryItems(rawLines, pantryItems);
 
+  const linesWithMergedIds = excludedLines.map((line) => ({
+    ...line,
+    mergedIds: [...(canonicalToOriginals.get(line.ingredientId) ?? new Set([line.ingredientId]))],
+  }));
+
+  // Resolved BEFORE aisle below, Pro tier only -- lookupIngredientCost hits
+  // the exact same Spoonacular endpoint resolveIngredientAisle would
+  // otherwise call separately for the same ingredient id, and its response
+  // already carries `aisle` too (see spoonacular.ts). Running price first
+  // lets it seed ingredient_aisle_cache from that same response (inside
+  // resolvePricedLines), so the aisle-resolution pass right after is a
+  // cache hit for every id Pro-tier pricing already looked up, instead of
+  // firing a second identical network call per ingredient -- found live
+  // 2026-07-27 this was costing up to ~150 avoidable extra requests per
+  // Pro-tier grocery-list computation.
+  const pricedLines = tier === "pro" ? await resolvePricedLines(supabase, userId, linesWithMergedIds) : null;
+
   // Deduped by the SAME cache-key convention resolveIngredientAisle itself
   // uses (id when resolved, else normalized name) -- a real plan can have
   // far fewer distinct ingredients than lines (aggregate.ts splits a same-
@@ -458,8 +487,8 @@ export async function getGroceryList(
     ),
   );
 
-  const lines = excludedLines
-    .map((line) => ({
+  return linesWithMergedIds
+    .map((line, i) => ({
       ingredientId: line.ingredientId,
       name: line.name,
       totalAmount: line.totalAmount,
@@ -467,13 +496,8 @@ export async function getGroceryList(
       aisle: aisleByKey.get(aisleCacheKey(line.ingredientId, line.name)) ?? UNCATEGORIZED_AISLE,
       needsManualCombine: line.needsManualCombine,
       viaAiEstimate: line.viaAiEstimate,
-      mergedIds: [...(canonicalToOriginals.get(line.ingredientId) ?? new Set([line.ingredientId]))],
+      mergedIds: line.mergedIds,
+      priceCents: pricedLines ? pricedLines[i].priceCents : null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
-  if (tier !== "pro") {
-    return lines.map((line) => ({ ...line, priceCents: null }));
-  }
-
-  return resolvePricedLines(supabase, userId, lines);
 }

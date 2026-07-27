@@ -334,7 +334,16 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
 }
 
 export interface IngredientCostLookup {
-  costCents: number;
+  costCents: number | null;
+  // Same response this cost lookup already fetched also carries the
+  // ingredient's real aisle (see lookupIngredientAisle's header comment
+  // below) -- exposed here so a Pro-tier price lookup can seed
+  // ingredient_aisle_cache from data it already paid for, instead of
+  // groceryData.ts firing a second, separate call to this exact same
+  // Spoonacular endpoint just to get the aisle. null when Spoonacular
+  // didn't return one (or returned several ";"-joined ones with none
+  // parseable — see parsePrimaryAisle).
+  aisle: string | null;
 }
 
 // Epic E3 (F4) grocery pricing — reuses the same ingredient information
@@ -394,9 +403,11 @@ export async function lookupIngredientCost(
   // A present-but-zero value is indistinguishable from "genuinely no cost
   // data" — both map to null rather than a fabricated $0.00 (same
   // precedent as lookupIngredientMacros's estimatedCostCentsPer100g).
+  // Returns the object (with costCents: null) rather than null outright in
+  // that case -- aisle can still be real and usable even when cost isn't.
   const value = info.estimatedCost?.value;
-  if (!value || value <= 0) return null;
-  return { costCents: Math.round(value) };
+  const costCents = value && value > 0 ? Math.round(value) : null;
+  return { costCents, aisle: parsePrimaryAisle(info.aisle) };
 }
 
 // Grocery-list categorization (grouping by aisle, e.g. "Produce", "Baking")
@@ -404,10 +415,17 @@ export async function lookupIngredientCost(
 // above (confirmed live 2026-07-25: the exact response Spoonacular already
 // returns for cost lookups also carries a real `aisle` string, e.g.
 // "Baking" for brown sugar, "Produce" for tomato), just without amount/unit
-// params since aisle doesn't depend on quantity. A separate function (not
-// folded into lookupIngredientCost) rather than complicating that already-
-// tested tier-conditional pricing path -- aisle categorization applies
-// regardless of tier, cost lookups don't.
+// params since aisle doesn't depend on quantity. Kept as its OWN function
+// (not folded into lookupIngredientCost) because aisle categorization
+// applies regardless of tier, cost lookups don't -- Free-tier users still
+// need this standalone path since there's no cost lookup for them to piggy-
+// back on. For Pro tier, groceryData.ts now avoids calling this a second
+// time for the same ingredient id: it seeds ingredient_aisle_cache directly
+// from lookupIngredientCost's own aisle field first (found live 2026-07-27
+// this was a genuine duplicate call to this exact endpoint for every
+// distinct ingredient on Pro tier -- up to ~150 avoidable extra requests
+// per grocery-list computation), so this function only ever fires for ids
+// that pricing didn't already resolve.
 export async function lookupIngredientAisle(ingredientId: number): Promise<string | null> {
   const apiKey = process.env.SPOONACULAR_API_KEY;
   if (!apiKey) {

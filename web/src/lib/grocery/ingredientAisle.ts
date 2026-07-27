@@ -196,3 +196,21 @@ export async function resolveIngredientAisle(ingredientId: number, name: string)
 
   return { aisle, source };
 }
+
+// Seeds the cache from an aisle value obtained by a DIFFERENT lookup that
+// happened to hit the same Spoonacular endpoint (groceryData.ts's Pro-tier
+// price resolution -- lookupIngredientCost's response already carries
+// `aisle`, see spoonacular.ts). Lets the resolveIngredientAisle call for the
+// same ingredient right after be a cache hit instead of a second, wasted
+// network request to the exact same endpoint -- found live 2026-07-27 this
+// was genuinely happening for every distinct ingredient on Pro tier. No-op
+// when aisle is null (nothing to seed); never overwrites a cheaper-to-have
+// but already-correct existing entry incorrectly, since both sources agree
+// on the same real Spoonacular value when both are present.
+export async function seedAisleFromSpoonacular(ingredientId: number, name: string, aisle: string | null): Promise<void> {
+  if (!aisle) return;
+  const key = aisleCacheKey(ingredientId, name);
+  const source: AisleSource = "spoonacular";
+  const admin = createAdminClient();
+  await admin.from("ingredient_aisle_cache").upsert({ cache_key: key, aisle, source }, { onConflict: "cache_key" });
+}
