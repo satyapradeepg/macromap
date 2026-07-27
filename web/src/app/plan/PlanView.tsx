@@ -429,9 +429,12 @@ function MealCard({
               </p>
             )}
             {slot.addon && (
+              // A single template literal, not JSX text split across lines --
+              // the line-wrapped text below this cost a real space (JSX's
+              // whitespace collapsing silently ate the space after
+              // {slot.addon.ingredientName}, rendering "almondsto help...").
               <p className="mt-1 text-xs text-accent-2">
-                + {Math.round(slot.addon.amountG)}g {slot.addon.ingredientName} to help hit this week&apos;s
-                targets ({Math.round(slot.addon.caloriesKcal)} cal)
+                {`+ ${Math.round(slot.addon.amountG)}g ${slot.addon.ingredientName} to help hit this week's targets (${Math.round(slot.addon.caloriesKcal)} cal)`}
               </p>
             )}
 
