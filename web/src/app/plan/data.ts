@@ -85,6 +85,11 @@ export interface PlanView {
   reconciliationStatus: "within_band" | "outside_band_after_retries";
   weeklyTarget: MacroTargets;
   weeklyActual: MacroTargets;
+  // planCritic.ts's 1-2 sentence take on the week's variety/macro fit,
+  // computed during generation. Null on any plan generated before this
+  // field existed, or where the critique itself was skipped/failed (no
+  // ANTHROPIC_API_KEY, or a recoverable API error) — absence isn't an error.
+  weeklyAssessment: string | null;
   slots: PlanSlotView[];
   // Only populated on a freshly-generated plan (ephemeral, from the action's
   // return value) — blocked slots have no meal_plan_slots row, so a plan
@@ -122,6 +127,7 @@ export async function getMostRecentPlan(
     id: plan.id,
     generatedAt: plan.generated_at,
     reconciliationStatus: plan.reconciliation_status,
+    weeklyAssessment: plan.weekly_assessment,
     weeklyTarget: {
       calories: plan.weekly_target_calories,
       proteinG: plan.weekly_target_protein_g,

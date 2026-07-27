@@ -246,6 +246,15 @@ export function PlanBoard({
             <MacroStat label="Carbs" unit="g" actual={plan.weeklyActual.carbsG} target={plan.weeklyTarget.carbsG} />
             <MacroStat label="Fat" unit="g" actual={plan.weeklyActual.fatG} target={plan.weeklyTarget.fatG} />
           </div>
+          {plan.weeklyAssessment && (
+            // A generation-time note, not a live description of the current
+            // plan -- planCritic.ts runs before any critic-triggered repair
+            // swaps, so a flagged issue mentioned here may already be fixed.
+            // Absent on any plan generated before this field existed, or
+            // whenever the underlying critique call was skipped/failed
+            // (both silent, non-error conditions -- see orchestrate.ts).
+            <p className="mt-3 border-t border-border pt-3 text-sm text-muted">{plan.weeklyAssessment}</p>
+          )}
         </div>
       )}
 

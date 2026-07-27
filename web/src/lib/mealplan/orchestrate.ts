@@ -307,6 +307,11 @@ export interface OrchestrateResult {
   // consumer yet (see plan-critic-diet-violation-spec-2026-07-16.md,
   // OQ-B) — this is the data shape for a follow-up warning banner.
   unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }>;
+  // planCritic.ts's 1-2 sentence take on the week's variety/macro fit,
+  // computed during generation (before any critic-triggered repair swaps
+  // run) -- null if the critique itself was skipped or failed (no
+  // ANTHROPIC_API_KEY, or a recoverable API error).
+  weeklyAssessment: string | null;
 }
 
 export async function orchestrateGeneration(input: OrchestrateInput): Promise<OrchestrateResult> {
@@ -1374,6 +1379,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // overwhelming majority of plans; only ever populated for a genuine,
   // unresolvable safety flag, never for repetitive/macro_miss/other.
   const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }> = [];
+  // Previously computed every generation but only ever console.log'd below
+  // -- null whenever the critique itself is skipped/fails (no
+  // ANTHROPIC_API_KEY, or a recoverable API error), same as today's
+  // existing graceful-skip behavior for the repair pass it feeds.
+  let weeklyAssessment: string | null = null;
 
   // Post-generation plan critique + repair (built July 15 2026, extended
   // July 16 2026 with diet_violation) — the per-slot pipeline above never
@@ -1439,6 +1449,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       });
 
       if (critique) {
+        weeklyAssessment = critique.overallAssessment;
         console.log(
           `[mealplan] plan critique: ${critique.overallAssessment} (${critique.flaggedSlots.length} slots flagged)`,
         );
@@ -1620,6 +1631,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     weeklyTarget: weekly,
     weeklyActual: actual,
     unresolvedDietaryConcerns,
+    weeklyAssessment,
   };
 }
 

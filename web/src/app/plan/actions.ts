@@ -127,6 +127,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         weekly_actual_fat_g: result.weeklyActual.fatG,
         reconciliation_status: result.reconciliationStatus,
         retry_queries_used: result.retryQueriesUsed,
+        weekly_assessment: result.weeklyAssessment,
       })
       .select()
       .single();
@@ -217,6 +218,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       id: insertedPlan.id,
       generatedAt: insertedPlan.generated_at,
       reconciliationStatus: result.reconciliationStatus,
+      weeklyAssessment: result.weeklyAssessment,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
       slots: result.slots.map((s) => {
