@@ -211,5 +211,25 @@ describe("rankByPantryAndPrice", () => {
       const result = rankByPantryAndPrice(candidates, ctx);
       expect(result.ordered[0].name).toBe("walnuts");
     });
+
+    // Same latent defect as the live-confirmed dislike-leak fixed in
+    // openEndedIngredientSafety.ts 2026-07-27 (wordBoundaryIncludes is a
+    // per-file copy, not shared): a plural pantry name against a singular
+    // occurrence inside a longer compound pool-item name isn't saved by
+    // trying both directions -- neither direction finds the full phrase.
+    it("matches a plural pantry name against a singular occurrence inside a compound pool-item name", () => {
+      const candidates: TestItem[] = [
+        { name: "mushroom broth", costCentsPer100g: 40 },
+        { name: "banana", costCentsPer100g: 13 },
+      ];
+      const ctx: PantryPriceContext = { pantryItemNames: ["mushrooms"], budgetAware: false };
+      const result = rankByPantryAndPrice(candidates, ctx);
+      expect(result.ordered[0].name).toBe("mushroom broth");
+      // A single pantry match still reports preferredCount 2 (the
+      // documented minimum-2-preferred floor from the July 15 2026 fix
+      // above) -- this assertion isn't about that floor, just confirming
+      // the match itself fired (>=1) rather than 0/no-match.
+      expect(result.preferredCount).toBeGreaterThanOrEqual(1);
+    });
   });
 });

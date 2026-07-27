@@ -53,8 +53,16 @@ function normalize(s: string): string {
 // both "walnuts" and "peanut butter", collapsing distinct allergen-
 // relevant items into one preference bucket. Allows an optional trailing
 // "s" so pantry "yogurt" still matches pool item "greek yogurt".
+//
+// Strips any trailing "s" off the needle BEFORE re-appending it as
+// optional -- same fix as the sibling ingredientSafety.ts/
+// openEndedIngredientSafety.ts/pantryRemaining.ts copies (2026-07-27):
+// makes the match symmetric regardless of which side is singular/plural
+// (e.g. a plural pantry name matching a singular pool item name), with
+// no change for needles already singular.
 function wordBoundaryIncludes(haystack: string, needle: string): boolean {
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stem = needle.replace(/s$/i, "");
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
 }
 

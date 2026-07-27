@@ -31,8 +31,19 @@ import { resolveIdentityMatches } from "../grocery/identityMatch";
 import { resolveConversionRate } from "../grocery/unitConversion";
 import type { CandidateIngredient, PantryItem } from "./ranking";
 
+// Strips any trailing "s" off the needle BEFORE re-appending it as
+// optional, so matching is symmetric regardless of which side (pantry
+// name vs. ingredient name) happens to be singular/plural -- same fix as
+// the sibling ingredientSafety.ts/openEndedIngredientSafety.ts copies,
+// applied here 2026-07-27 after a live-confirmed miss elsewhere in this
+// bug class (a plural dislike like "mushrooms" failed to match a
+// singular real occurrence like "cream of mushroom soup"). No change for
+// needles already singular or for a literal word ending in a
+// non-plural "s" (e.g. "hummus" still matches "hummus" via its own
+// trailing s? tolerance).
 function wordBoundaryIncludes(haystack: string, needle: string): boolean {
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stem = needle.replace(/s$/i, "");
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
 }
 

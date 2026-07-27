@@ -128,8 +128,20 @@ function normalize(s: string): string {
 // matching its plain plural ("cashews", "almonds", "walnuts"), which
 // strict word-boundary matching alone would have silently broken (a
 // regression a first pass at this fix introduced and a test caught).
+//
+// Strips any trailing "s" off the needle BEFORE re-appending it as
+// optional -- live-confirmed 2026-07-27: a free-text dislike typed as a
+// plain plural ("mushrooms") only ever built the regex \bmushroomss?\b,
+// which can never match a singular real-recipe occurrence like "cream of
+// mushroom soup" (no trailing s at all). Stemming first makes the match
+// symmetric regardless of which side is singular/plural, with no change
+// for needles already singular (stemming a word with no trailing s is a
+// no-op) and no change for the literal word itself when the needle
+// happens to end in a non-plural "s" (e.g. "hummus" stems to "hummu",
+// but "hummus?" still matches the real word "hummus" exactly as before).
 function wordBoundaryIncludes(haystack: string, needle: string): boolean {
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stem = needle.replace(/s$/i, "");
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
 }
 

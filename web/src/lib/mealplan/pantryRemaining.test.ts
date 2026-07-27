@@ -83,6 +83,19 @@ describe("pantryCoverage (read-only)", () => {
     expect(pantryCoverage(tracker, [ing({ name: "peanut oil" })])).toEqual([false]);
   });
 
+  // namesOverlap tries both directions, but that alone doesn't save a
+  // plural pantry name against a singular occurrence buried in a longer
+  // compound ingredient name -- e.g. "mushrooms" vs "mushroom broth":
+  // (a,b) needs the whole phrase "mushroom broth" inside "mushrooms" (no),
+  // (b,a) needs "mushrooms" inside "mushroom broth" (no, it's singular
+  // there). Same latent defect as the live-confirmed dislike-leak fixed
+  // in openEndedIngredientSafety.ts 2026-07-27, applied here too since
+  // wordBoundaryIncludes is a per-file copy, not a shared function.
+  it("matches a plural pantry name against a singular occurrence inside a compound ingredient name", () => {
+    const tracker = buildPantryRemainingTracker([pantryItem({ name: "mushrooms" })], new Map());
+    expect(pantryCoverage(tracker, [ing({ name: "mushroom broth" })])).toEqual([true]);
+  });
+
   it("uses matchedIngredientNames instead of namesOverlap when present", () => {
     const tracker = buildPantryRemainingTracker(
       [pantryItem({ name: "green onions" })],

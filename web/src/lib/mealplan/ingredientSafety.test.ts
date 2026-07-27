@@ -158,6 +158,17 @@ describe("word-boundary false-positive fixes (audit round 3, July 15 2026)", () 
     expect(isKnownIngredientUnsafeFor("almonds", ctx)).not.toBeNull();
   });
 
+  // Live-confirmed miss, 2026-07-27: a free-text dislike typed as a plain
+  // plural ("bananas") built the regex \bbananass?\b, which can never
+  // match the static table's singular "banana" entry (no trailing s at
+  // all) -- opposite direction from the nutmeg/donut case above.
+  // wordBoundaryIncludes now stems the needle's own trailing "s" before
+  // re-appending it, so a plural dislike matches a singular ingredient.
+  it("catches a singular ingredient for a plural free-text dislike", () => {
+    const ctx: DietaryContext = { ...NONE, dislikes: ["bananas"] };
+    expect(isKnownIngredientUnsafeFor("banana", ctx)).not.toBeNull();
+  });
+
   // Found live July 20 2026 (dimension-5 dislike stress test): category
   // expansion via mentionsAny is now allergy/dietary-style ONLY -- a bare
   // dislike no longer expands into the whole synonym category, only a

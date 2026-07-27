@@ -182,6 +182,18 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("chopped walnuts", ctx)).not.toBeNull();
     });
 
+    // Live-confirmed miss, 2026-07-27: a free-text dislike typed as a plain
+    // plural ("mushrooms") built the regex \bmushroomss?\b, which can never
+    // match a singular real-recipe occurrence ("cream of mushroom soup") --
+    // opposite direction from the case above (plural allergy word vs.
+    // plural ingredient form). wordBoundaryIncludes now stems the needle's
+    // own trailing "s" before re-appending it, so both directions match.
+    it("catches a singular ingredient occurrence for a plural free-text dislike", () => {
+      const ctx: DietaryContext = { ...NONE, dislikes: ["mushrooms"] };
+      expect(isOpenEndedIngredientUnsafeFor("campbell's cream of mushroom soup", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("mushroom", ctx)).not.toBeNull();
+    });
+
     it("still catches the real live-confirmed violation: chicken broth in a vegetarian-tagged recipe", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("chicken broth", ctx)).not.toBeNull();
