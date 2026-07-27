@@ -3,11 +3,15 @@
 // Spoonacular cost, not a flat per-action count. A full recipe
 // cascade/requery (claim-resolution's exhaustion retries, weekly
 // reconciliation's slack-meal requery) costs ~5.6 real points
-// (complexSearch's confirmed 2 + 0.06*resultCount formula at number=60);
-// a snack add-on attempt (addon.ts) costs ~2 points (one ingredient search
-// + one information call, 1.0pt flat each, both live-confirmed). Modeled
-// here as a round 3:1 ratio (RECIPE_ACTION_COST/ADDON_ATTEMPT_COST) — an
-// approximation of the real ~2.8:1, not meant to be exact.
+// (complexSearch's confirmed 2 + 0.06*resultCount formula at number=60 --
+// orchestrate.ts's CANDIDATES_PER_QUERY was later raised to 100 for the
+// budget-compliant-pool-size fix; the formula was never re-verified above
+// number=60, so ~8pts/call at 100 is an extrapolation, not a live-confirmed
+// number); a snack add-on attempt (addon.ts) costs ~2 points (one
+// ingredient search + one information call, 1.0pt flat each, both
+// live-confirmed). Modeled here as a round 3:1 ratio
+// (RECIPE_ACTION_COST/ADDON_ATTEMPT_COST) — an approximation of the real
+// ~2.8:1, not meant to be exact.
 //
 // Originally a flat "3 actions total, not 3 each" budget (docs/
 // PRD-MacroMap.md OQ7 + weekly reconciliation) from before add-ons

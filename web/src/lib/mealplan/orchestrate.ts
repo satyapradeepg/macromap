@@ -231,13 +231,31 @@ function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): 
 // Spoonacular: for an unrestricted 60g-protein/meal profile, p30 alone has
 // 226 real matches (vs p10's 25), and only fetching the tightest tier left
 // almost nothing for the carb/fat compliance preference to work with
-// (1/25 vs 6/40 compliant). 60 gives real headroom over that wider
-// population without over-fetching — still just ONE deduped call per
-// unique (bounds, type, ...) query per generation. Kept the same for both
-// meal-type pools for now rather than tuning breakfast's smaller 7-claim
-// need separately — no live fill-rate data yet to justify a different
-// number per type.
-const CANDIDATES_PER_QUERY = 60;
+// (1/25 vs 6/40 compliant). Kept the same for both meal-type pools for now
+// rather than tuning breakfast's smaller 7-claim need separately — no live
+// fill-rate data yet to justify a different number per type.
+//
+// Raised 60 -> 100 (Spoonacular's real per-call max, live-confirmed: a
+// number=100 call returns exactly 100 results, no error) as the queue's
+// budget-vs-grocery-price gap investigation's one safe, low-risk lever:
+// ranking.ts's budget-compliant candidates are placed entirely ahead of
+// non-compliant ones whenever at least one exists (ranking.ts:310-315,
+// deliberate/tested, NOT a weak tiebreak) -- but at realistic per-meal
+// budgets that compliant subset is usually EMPTY (live-confirmed: even a
+// loose $60/week budget had only 1/60 compliant candidates), which is why
+// budget behaves like a no-op in practice. More candidates per fetch is
+// the lever that actually helps -- it raises how often that already-strong
+// preference gets to fire at all. ranking.ts's own scoring/partition logic
+// is untouched by this change.
+//
+// This changes recipe_query_cache's cache key (resultCount is part of the
+// hashed signature, cacheKey.ts) -- a one-time, bounded cold-cache event
+// across the whole cache table right after deploy (old rows simply stop
+// matching, no migration/backfill needed), not an ongoing cost; the cache
+// is cross-user with a 7-day TTL, so the extra real Spoonacular cost per
+// distinct (bounds, diet, type, ...) combo is paid once per 7-day window,
+// amortized across every user hitting that combo.
+const CANDIDATES_PER_QUERY = 100;
 
 export interface OrchestrateInput {
   userId: string;
