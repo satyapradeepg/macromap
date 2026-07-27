@@ -254,3 +254,46 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
 export function lookupIngredientMacrosStatic(query: string): StaticIngredientMacro | null {
   return STATIC_INGREDIENT_MACROS[query.toLowerCase().trim()] ?? null;
 }
+
+// Display-only realism note (2026-07-27): 4 of the 13 pool ingredients
+// aren't things a person actually eats standalone in the sized amount --
+// protein powder/pea protein powder need a liquid, chia/hemp seeds are
+// normally a topping/mix-in, not a bowl of dry seeds. The macros are real
+// either way; this only fixes how the amount is DESCRIBED.
+//
+// Every note here points at water (zero macro impact) or at something
+// ALREADY tracked in the same context (the recipe an addon sits next to,
+// or this same composed snack's other ingredients) -- never at an
+// untracked outside food like milk/yogurt/oats. Suggesting those would
+// silently let someone eat more than the app is tracking, exactly the
+// "recorded macros don't match what's actually eaten" failure class this
+// whole session has been fixing elsewhere (sumWithAddons, reconciliation).
+export type PrepNoteContext = "addon" | "snack";
+
+export function prepNoteFor(
+  ingredientName: string,
+  context: PrepNoteContext,
+  hasOtherTrackedIngredients: boolean,
+): string | null {
+  const name = ingredientName.toLowerCase().trim();
+
+  if (name === "protein powder" || name === "pea protein powder") {
+    // Water only, never offered alongside milk -- milk carries real
+    // macros that aren't part of the sized/tracked amount.
+    return "mix with water";
+  }
+
+  if (name === "chia seeds" || name === "hemp seeds") {
+    // An addon always sits next to a real recipe slot, so there's always
+    // something already-tracked to sprinkle it over.
+    if (context === "addon") return "sprinkle over your meal";
+    if (hasOtherTrackedIngredients) return "sprinkle over the rest of this snack";
+    // Standalone in a composed snack (the other 2 roles didn't resolve) --
+    // chia genuinely gels in plain water (real chia-pudding prep, still
+    // zero extra macros); hemp seeds have no equivalent zero-macro
+    // standalone prep, so the honest note doesn't pretend one exists.
+    return name === "chia seeds" ? "soak in water" : "best paired with a meal you're already having";
+  }
+
+  return null;
+}

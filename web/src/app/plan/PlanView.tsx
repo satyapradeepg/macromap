@@ -11,8 +11,9 @@ import {
 } from "@/lib/mealplan/targets";
 import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
+import { prepNoteFor } from "@/lib/mealplan/staticIngredientMacros";
 import { generatePlan, swapMeal, getRecipeInstructions } from "./actions";
-import type { BlockedSlotView, PlanSlotView, PlanView } from "./data";
+import type { BlockedSlotView, ComposedIngredientView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
 import type { PantryItemView } from "./pantryData";
 import { GroceryList } from "./GroceryList";
@@ -40,6 +41,22 @@ const MEAL_TYPE_LABELS: Record<MealType, string> = {
 function formatServings(n: number): string {
   const rounded = Math.round(n * 10) / 10;
   return `${rounded} ${rounded === 1 ? "serving" : "servings"}`;
+}
+
+// Composed snacks default to "Combine and eat — no cooking", but a handful
+// of pool ingredients (protein powder, chia/hemp seeds) aren't realistically
+// eaten as a bowl of dry powder/seeds -- swap in the specific prep note for
+// whichever ingredient needs one instead. At most one ingredient per snack
+// ever carries a note (protein-powder variants and chia/hemp seeds each
+// occupy a different, mutually exclusive composeSnack role), so there's
+// never a conflict between two notes.
+function composedSnackFooter(ingredients: ComposedIngredientView[] | null): string {
+  const hasOtherTrackedIngredients = (ingredients?.length ?? 0) > 1;
+  for (const ingredient of ingredients ?? []) {
+    const note = prepNoteFor(ingredient.name, "snack", hasOtherTrackedIngredients);
+    if (note) return `${note} — no cooking`;
+  }
+  return "Combine and eat — no cooking";
 }
 
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
@@ -433,14 +450,25 @@ function MealCard({
               // the line-wrapped text below this cost a real space (JSX's
               // whitespace collapsing silently ate the space after
               // {slot.addon.ingredientName}, rendering "almondsto help...").
+              // Appends a realism note for the handful of pool ingredients
+              // (protein powder, chia/hemp seeds) that aren't eaten standalone
+              // as-is -- see staticIngredientMacros.ts's prepNoteFor for why
+              // the note only ever points at water or the meal this addon is
+              // already attached to, never an untracked outside food.
               <p className="mt-1 text-xs text-accent-2">
                 {`+ ${Math.round(slot.addon.amountG)}g ${slot.addon.ingredientName} to help hit this week's targets (${Math.round(slot.addon.caloriesKcal)} cal)`}
+                {(() => {
+                  const note = prepNoteFor(slot.addon.ingredientName, "addon", false);
+                  return note ? ` — ${note}` : "";
+                })()}
               </p>
             )}
 
             <div className="mt-auto flex items-center justify-between pt-3">
               <span className="text-xs text-muted">
-                {slot.isComposed && !slot.aiComposed ? "Combine and eat — no cooking" : ""}
+                {slot.isComposed && !slot.aiComposed
+                  ? composedSnackFooter(slot.composedIngredients)
+                  : ""}
               </span>
               <div className="flex gap-2">
                 {hasRecipeDetail && (
