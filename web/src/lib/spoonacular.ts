@@ -483,12 +483,19 @@ function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
 
 // "View recipe" detail (mealplan/recipeInstructions.ts's cached wrapper) --
 // a second, per-recipe call, deliberately NOT folded into complexSearch's
-// addRecipeInformation above: complexSearch already returns
-// analyzedInstructions/sourceUrl for every candidate in the pool, but only
-// the ONE recipe a user actually claims for a slot ever needs its steps
-// shown, and that set is a tiny fraction of the pool fetched per
-// generation -- fetching full instructions for every candidate up front
-// would burn quota on ~20-60x more recipes than anyone will ever open.
+// addRecipeInformation above. A prior version of this comment claimed
+// complexSearch already returns analyzedInstructions for every candidate,
+// and that the separate call was purely to avoid wasting quota on the
+// 20-60x candidates that never get claimed -- checked live 2026-07-27 by
+// inspecting a raw complexSearch(addRecipeInformation=true,
+// addRecipeNutrition=true) response directly: it does NOT include
+// analyzedInstructions or instructions at all (only sourceUrl/
+// spoonacularSourceUrl, nutrition, servings, etc.), even for the one
+// candidate actually claimed. So there's no free data being discarded here
+// -- a dedicated /information call is the ONLY way to get real steps, and
+// eagerly calling it for every claimed slot (rather than only the ones a
+// user actually opens) would spend quota on recipes most users never view,
+// not save it. Confirmed this genuinely is the cheapest correct design.
 interface SpoonacularRecipeInformationResponse {
   analyzedInstructions?: Array<{ steps?: Array<{ step?: string }> }>;
   sourceUrl?: string;
