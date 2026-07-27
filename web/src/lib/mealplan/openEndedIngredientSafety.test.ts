@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isOpenEndedIngredientUnsafeFor, anyIngredientUnsafeFor, type DietaryContext } from "./openEndedIngredientSafety";
+import { isOpenEndedIngredientUnsafeFor, anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, type DietaryContext } from "./openEndedIngredientSafety";
 
 const NONE: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
 
@@ -120,6 +120,27 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).toBeNull();
       expect(isOpenEndedIngredientUnsafeFor("black beans", ctx)).toBeNull();
+    });
+
+    // Pre-existing false positive, found 2026-07-27 while live-validating
+    // the title check below against a real ~640-recipe Spoonacular sample:
+    // "goat" is in NON_VEGETARIAN_KEYWORDS (real goat meat), but "goat
+    // cheese"/"goat milk" are completely ordinary vegetarian dairy
+    // products -- the same false-positive shape as "coconut milk" vs the
+    // DAIRY_SYNONYMS "milk" check, just not yet given the equivalent
+    // exception. Not introduced by anything in this session; found
+    // incidentally, fixed here since it's the same mechanism.
+    it("does not flag goat cheese/milk as non-vegetarian (goat-as-dairy-source, not goat meat)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("goat cheese", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("fresh goat milk", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("goat yogurt", ctx)).toBeNull();
+    });
+
+    it("still flags real goat meat, not just any 'goat' occurrence", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("roasted goat leg", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("goat stew meat", ctx)).not.toBeNull();
     });
   });
 
@@ -343,5 +364,67 @@ describe("anyIngredientUnsafeFor", () => {
   it("returns null when every ingredient passes", () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: ["nuts"], dislikes: ["cilantro"] };
     expect(anyIngredientUnsafeFor(["quinoa", "black beans", "halloumi cheese", "avocado"], ctx)).toBeNull();
+  });
+});
+
+// Added 2026-07-27: closes a real, live-confirmed gap the ingredient-name
+// check above cannot see -- Spoonacular's own structured ingredient data
+// can be incomplete relative to what a recipe's TITLE names. Live-
+// verified against a real ~640-recipe Spoonacular sample (3 real
+// mistagged-vegetarian recipes found, 0 false positives observed) before
+// building this -- see the exact titles/ingredient lists reproduced below.
+describe("isRecipeTitleUnsafeFor", () => {
+  const VEGETARIAN: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+  const VEGAN: DietaryContext = { dietaryStyles: ["vegan"], allergies: [], dislikes: [] };
+  const NO_RESTRICTION: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
+
+  it("catches the real recipe that motivated this check: title says ham, real ingredients never mention it", () => {
+    // Live Spoonacular data: extendedIngredients was exactly [sprouted
+    // wheat bread, swiss cheese, mushroom, kale, thyme, dijon mustard] --
+    // zero mention of ham -- so anyIngredientUnsafeFor alone passed this.
+    expect(isRecipeTitleUnsafeFor("Ham and Swiss Panini With Mushrooms and Kale", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("catches 2 more real Spoonacular mistagged-vegetarian recipes found in the same live sample", () => {
+    expect(isRecipeTitleUnsafeFor("Broccoli Rabe and Breaded Veal Scallopini", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Mussels & Clams in White Wine {Cozze e Vongole}", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("does not flag anything when no vegetarian/vegan style is set", () => {
+    expect(isRecipeTitleUnsafeFor("Ham and Swiss Panini", NO_RESTRICTION)).toBeNull();
+  });
+
+  it("exempts a meat-analogue-branded title (the failure mode a past session rejected title-scanning over)", () => {
+    expect(isRecipeTitleUnsafeFor("Vegan Chicken Nuggets", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Meatless Bacon BLT", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Plant-Based Beef Tacos", VEGAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Mock Duck Stir Fry", VEGETARIAN)).toBeNull();
+  });
+
+  it("exempts a real plant/fungus species that shares a name with meat", () => {
+    expect(isRecipeTitleUnsafeFor("Chicken of the Woods Mushroom Stir Fry", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Hen of the Woods with Garlic Butter", VEGETARIAN)).toBeNull();
+  });
+
+  it("exempts goat cheese/milk in a title, same fix as the ingredient-level check above", () => {
+    expect(isRecipeTitleUnsafeFor("Vegetable Tart With Goat Cheese", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Herbed Goat Cheese Yogurt Dip w. Caramelized Onions", VEGETARIAN)).toBeNull();
+  });
+
+  it("does not over-exempt a genuinely mixed dish just because it also names a plant ingredient", () => {
+    // Real Spoonacular recipe: genuinely contains real bacon alongside
+    // tofu -- the qualifier exception must not treat "tofu" in the title
+    // as if it were a "meatless"/"vegan" qualifier for "bacon".
+    expect(isRecipeTitleUnsafeFor("Bacon Wrapped Tofu Tacos", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("flags dairy/eggs/honey in a title for vegan but not for merely vegetarian", () => {
+    expect(isRecipeTitleUnsafeFor("Honey Glazed Carrots", VEGAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Honey Glazed Carrots", VEGETARIAN)).toBeNull();
+  });
+
+  it("is case-insensitive", () => {
+    expect(isRecipeTitleUnsafeFor("HAM AND SWISS PANINI", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("vegan CHICKEN nuggets", VEGETARIAN)).toBeNull();
   });
 });

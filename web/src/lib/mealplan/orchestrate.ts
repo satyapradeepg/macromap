@@ -61,7 +61,7 @@ import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafe
 import { type PantryPriceContext } from "./pantryPricePreference";
 import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
 import { proposeMealViaClaude, proposeMealsBatchViaClaude } from "./mealProposer";
-import { anyIngredientUnsafeFor } from "./openEndedIngredientSafety";
+import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor } from "./openEndedIngredientSafety";
 import { critiquePlan, type PlanSlotSummary } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
@@ -1688,8 +1688,19 @@ async function fetchCandidatesWithCache(
   const raw = await fetchRawCandidates(admin, query, inFlight);
   const exclude = new Set(excludeIds);
   const dietaryCtx = dietaryCtxFor(query);
+  // Title check added 2026-07-27, alongside the pre-existing ingredient
+  // check -- closes a real, live-confirmed gap where Spoonacular's own
+  // structured ingredients for a recipe don't mention a meat/shellfish the
+  // TITLE names (e.g. a "Ham and Swiss Panini" whose real ingredient list
+  // never mentions ham). Applied at this one choke point so every
+  // recipe-candidate fetch benefits (initial generation, reconciliation
+  // swaps, repair swaps, user-initiated swaps), not just the repair path
+  // where the gap was first found.
   return raw.filter(
-    (c) => !exclude.has(c.id) && anyIngredientUnsafeFor(c.ingredients.map((i) => i.name), dietaryCtx) === null,
+    (c) =>
+      !exclude.has(c.id) &&
+      anyIngredientUnsafeFor(c.ingredients.map((i) => i.name), dietaryCtx) === null &&
+      isRecipeTitleUnsafeFor(c.title, dietaryCtx) === null,
   );
 }
 

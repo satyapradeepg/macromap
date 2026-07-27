@@ -175,6 +175,28 @@ function hasSafePlantCompound(haystack: string, word: string): boolean {
   return reordered !== null && PLANT_MODIFIERS.some((mod) => wordBoundaryIncludes(reordered, `${mod} ${word}`));
 }
 
+// Mirror of hasSafePlantCompound above, roles reversed: there the RISKY
+// word was a dairy product name and the exception looked for a PLANT
+// modifier in front of it ("coconut milk"). Here the risky word is an
+// ANIMAL name from NON_VEGETARIAN_KEYWORDS ("goat") and the exception
+// looks for a DAIRY PRODUCT word next to it ("goat cheese") -- goat is
+// the one NON_VEGETARIAN_KEYWORDS entry that's also a completely normal
+// dairy-source name, the same false-positive shape as "coconut milk"
+// wrongly tripping DAIRY_SYNONYMS' "milk". Live-confirmed 2026-07-27
+// against a real ~640-recipe Spoonacular sample: 15 genuinely vegetarian
+// "goat cheese" recipes would all have been wrongly excluded without
+// this -- a pre-existing gap, not introduced by the title check below,
+// found while validating it.
+const ANIMAL_DAIRY_SOURCE_WORDS = ["goat"];
+const DAIRY_PRODUCT_WORDS = ["cheese", "milk", "yogurt", "yoghurt", "butter", "curd", "feta"];
+
+function hasAnimalDairySourceCompound(haystack: string, word: string): boolean {
+  if (!ANIMAL_DAIRY_SOURCE_WORDS.includes(word)) return false;
+  if (DAIRY_PRODUCT_WORDS.some((dw) => wordBoundaryIncludes(haystack, `${word} ${dw}`))) return true;
+  const reordered = commaSwapFallback(haystack);
+  return reordered !== null && DAIRY_PRODUCT_WORDS.some((dw) => wordBoundaryIncludes(reordered, `${word} ${dw}`));
+}
+
 // Live-confirmed (2026-07-21, stacked-safety investigation): "gluten-free
 // rolled oats" and "rolled oats (gluten-free)" both got flagged unsafe for
 // a gluten_free profile -- the bare word-boundary match for "gluten"
@@ -196,9 +218,26 @@ function hasGlutenFreeQualifier(haystack: string, word: string): boolean {
 function containsAny(haystack: string, needles: string[]): string | null {
   return (
     needles.find(
-      (n) => wordBoundaryIncludes(haystack, n) && !hasSafePlantCompound(haystack, n) && !hasGlutenFreeQualifier(haystack, n),
+      (n) =>
+        wordBoundaryIncludes(haystack, n) &&
+        !hasSafePlantCompound(haystack, n) &&
+        !hasGlutenFreeQualifier(haystack, n) &&
+        !hasAnimalDairySourceCompound(haystack, n),
     ) ?? null
   );
+}
+
+// Shared by isOpenEndedIngredientUnsafeFor and isRecipeTitleUnsafeFor below
+// so the vegan/vegetarian branch stays in exactly one place -- extracted
+// 2026-07-27 when the title check was added, no behavior change for the
+// ingredient-name path.
+function vegetarianOrVeganViolation(name: string, dietaryStyles: string[]): string | null {
+  if (dietaryStyles.includes("vegan")) {
+    return containsAny(name, NON_VEGAN_EXTRA_KEYWORDS);
+  } else if (dietaryStyles.includes("vegetarian")) {
+    return containsAny(name, NON_VEGETARIAN_KEYWORDS);
+  }
+  return null;
 }
 
 // Returns a human-readable reason the ingredient is unsafe/should be
@@ -255,12 +294,10 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     }
   }
 
-  if (ctx.dietaryStyles.includes("vegan")) {
-    const hit = containsAny(name, NON_VEGAN_EXTRA_KEYWORDS);
-    if (hit) return `"${ingredientName}" contains "${hit}", not vegan-compliant`;
-  } else if (ctx.dietaryStyles.includes("vegetarian")) {
-    const hit = containsAny(name, NON_VEGETARIAN_KEYWORDS);
-    if (hit) return `"${ingredientName}" contains "${hit}", not vegetarian-compliant`;
+  const dietHit = vegetarianOrVeganViolation(name, ctx.dietaryStyles);
+  if (dietHit) {
+    const style = ctx.dietaryStyles.includes("vegan") ? "vegan" : "vegetarian";
+    return `"${ingredientName}" contains "${dietHit}", not ${style}-compliant`;
   }
 
   return null;
@@ -271,5 +308,56 @@ export function anyIngredientUnsafeFor(ingredientNames: string[], ctx: DietaryCo
     const reason = isOpenEndedIngredientUnsafeFor(name, ctx);
     if (reason) return reason;
   }
+  return null;
+}
+
+// Real recipe titles routinely brand a genuinely plant-based dish with a
+// meat-analogue word ("Vegan Chicken Nuggets," "Meatless Bacon BLT") --
+// live-searched Spoonacular's actual corpus 2026-07-27 and found none of
+// that branding pattern discoverable there at all ("vegan chicken",
+// "meatless bacon", "vegan ham", "tempeh bacon", etc. every one returned
+// zero results), so this exemption is cheap insurance against a pattern
+// that may simply be rare in this specific corpus, not proof it never
+// occurs. A qualifier ANYWHERE in the (short) title exempts the whole
+// title, not just an adjacent-word pairing -- simpler than pairing each
+// keyword with a qualifier immediately next to it, and titles are short
+// enough that an unrelated qualifier elsewhere in the same title is a
+// low-probability coincidence.
+const MEAT_ANALOGUE_QUALIFIERS = [
+  "vegan", "vegetarian", "meatless", "plant-based", "plant based", "veggie", "mock", "faux", "meat-free", "meat free",
+];
+
+// A handful of real plant/fungus species share a name with meat --
+// "chicken of the woods" is a genuine, common edible mushroom, no
+// relation to poultry. Deliberately short and specific, same philosophy
+// as PLANT_MODIFIERS above -- add to this list only when a real
+// collision is confirmed, not speculatively.
+const MEAT_NAMED_PLANT_FOODS = ["chicken of the woods", "hen of the woods"];
+
+// Deterministic backstop for a real, live-confirmed gap (2026-07-27): the
+// ingredient-name check above only ever sees Spoonacular's OWN structured
+// ingredient list, which can be incomplete relative to what a recipe's
+// title implies -- live-confirmed on a real recipe titled "Ham and Swiss
+// Panini With Mushrooms and Kale" whose actual extendedIngredients never
+// mentioned ham at all (bread, cheese, mushroom, kale, thyme, mustard),
+// so the ingredient check alone passed a genuine vegetarian violation.
+// Same live sample also found "Broccoli Rabe and Breaded Veal Scallopini"
+// and "Mussels & Clams in White Wine" both similarly mistagged vegetarian
+// by Spoonacular with the meat/shellfish absent from their own ingredient
+// data -- not a one-off, a real recurring gap in Spoonacular's own data
+// quality. This check is titles-only; it does not replace
+// anyIngredientUnsafeFor above, it closes what that check structurally
+// cannot see.
+export function isRecipeTitleUnsafeFor(title: string, ctx: DietaryContext): string | null {
+  const name = normalize(title);
+  if (MEAT_NAMED_PLANT_FOODS.some((food) => name.includes(food))) return null;
+  if (MEAT_ANALOGUE_QUALIFIERS.some((q) => wordBoundaryIncludes(name, q))) return null;
+
+  const dietHit = vegetarianOrVeganViolation(name, ctx.dietaryStyles);
+  if (dietHit) {
+    const style = ctx.dietaryStyles.includes("vegan") ? "vegan" : "vegetarian";
+    return `title "${title}" contains "${dietHit}", not ${style}-compliant`;
+  }
+
   return null;
 }
