@@ -31,6 +31,7 @@ import {
   type PantryRemainingTracker,
 } from "./pantryRemaining";
 import { runCascadeForSlot, matchLabelFor, type FetchCandidatesFn } from "./cascade";
+import { auditDepletionBlindSpot } from "./depletionAudit";
 import {
   createRetryBudget,
   trySpend,
@@ -385,6 +386,40 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   }
 
   const claimResult = resolveClaims(recipeSlotIds.map((slotId, i) => ({ slotId, cascade: cascades[i] })));
+
+  // Diagnostic-only detection pass (depletionAudit.ts) for the same-pass
+  // pantry-depletion blind spot documented above and in
+  // pantryRemaining.ts's Phase 1 header -- never affects this or any real
+  // plan (operates on a cloned tracker, wrapped so a bug here can't reach
+  // the real generation). Logs only when at least one slot would have
+  // scored differently with live depletion visibility, so this accumulates
+  // real evidence across real generations before any restructure is
+  // considered, instead of guessing again.
+  try {
+    const claimedBySlotKey = new Map(claimResult.claimed.map((c) => [slotKey(c.slotId), c.candidate]));
+    const divergences = auditDepletionBlindSpot(
+      recipeSlotIds,
+      cascades,
+      mealTypeTargets,
+      claimedBySlotKey,
+      rankOpts.pantryTracker,
+      { tier: rankOpts.tier, budgetPerMealUsd: rankOpts.budgetPerMealUsd },
+    );
+    if (divergences.length > 0) {
+      console.log(
+        `[mealplan] depletion-blind-spot audit: ${divergences.length}/${claimResult.claimed.length} slot(s) would score differently with live depletion visibility: ` +
+          divergences
+            .map(
+              (d) =>
+                `${d.slotKey} actual=${d.actualCandidateId}(score ${d.actualScore.toFixed(3)}) simulated=${d.simulatedCandidateId}(score ${d.simulatedScore.toFixed(3)})`,
+            )
+            .join("; "),
+      );
+    }
+  } catch (err) {
+    console.log("[mealplan] depletion-blind-spot audit failed (diagnostic only, ignored):", err);
+  }
+
   // Bookkeeping for the initial pass -- every one of these 21 (or fewer)
   // slots was already scored/picked before any of them were committed
   // (the initial fan-out above ranks all slots from one shared snapshot),
