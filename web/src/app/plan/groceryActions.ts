@@ -37,6 +37,13 @@ export async function fetchGroceryList(planId: string): Promise<FetchGroceryList
 
 export interface OverrideGroceryPriceInput {
   ingredientId: number;
+  // Every raw Spoonacular id folded into this line via lineIdentity.ts's
+  // cross-id display merge (see groceryData.ts's GroceryLineView) — the
+  // override is written under ALL of them, not just the currently-displayed
+  // canonical id, so it still applies if a future plan resolves the same
+  // real ingredient through a different subset of ids and picks a
+  // different canonical one.
+  mergedIds: number[];
   // What the user says THIS line (its current amount/unit) costs, total —
   // matches the UX of typing "what this costs me," not an abstract rate.
   priceCents: number;
@@ -82,15 +89,18 @@ export async function overrideGroceryPrice(input: OverrideGroceryPriceInput): Pr
   const { data: profile } = await supabase.from("profiles").select("zip_code").eq("id", user.id).maybeSingle();
   const region = profile?.zip_code || "US";
 
+  const idsToWrite = input.mergedIds.length > 0 ? input.mergedIds : [input.ingredientId];
+  const updatedAt = new Date().toISOString();
+
   const { error } = await supabase.from("grocery_price_overrides").upsert(
-    {
+    idsToWrite.map((spoonacularIngredientId) => ({
       user_id: user.id,
-      spoonacular_ingredient_id: input.ingredientId,
+      spoonacular_ingredient_id: spoonacularIngredientId,
       region,
       basis,
       price_cents: rateCents,
-      updated_at: new Date().toISOString(),
-    },
+      updated_at: updatedAt,
+    })),
     { onConflict: "user_id,spoonacular_ingredient_id,region,basis" },
   );
 

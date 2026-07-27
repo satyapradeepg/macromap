@@ -22,6 +22,7 @@ import {
   type SlotIngredientEntry,
 } from "@/lib/grocery/aggregate";
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
+import { resolveLineIdentityRemap } from "@/lib/grocery/lineIdentity";
 import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
 import { aisleCacheKey, resolveIngredientAisle, UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
@@ -41,6 +42,13 @@ export interface GroceryLineView {
   // amount was combined across units using an AI density estimate rather
   // than Spoonacular's real conversion data.
   viaAiEstimate?: boolean;
+  // Every raw Spoonacular ingredient id folded into this line's canonical
+  // `ingredientId` by lineIdentity.ts's cross-id display merge (includes
+  // ingredientId itself; just [ingredientId] when nothing merged). Needed
+  // so a Pro-tier price override survives even if a FUTURE plan resolves
+  // the same real ingredient to a different subset of ids and picks a
+  // different canonical id — see resolvePricedLines/overrideGroceryPrice.
+  mergedIds: number[];
   // null on Free tier, and on Pro tier when no price could be resolved
   // (PRD 7.3 F4: "$— Price unavailable — add manually").
   priceCents: number | null;
@@ -117,22 +125,48 @@ async function resolvePricedLines(
     }
   }
   const keys = [...nameByKey.keys()];
-  const ingredientIds = [...new Set(keys.map((key) => idByKey.get(key)!))];
+
+  // Query overrides across every id that ever merged into one of this
+  // response's canonical ids, not just the canonical ids themselves — a
+  // manual override written under a since-superseded non-canonical id
+  // (this feature's own price-override staleness fix — a future plan can
+  // pick a different canonical id for the same real ingredient, see
+  // lineIdentity.ts's header comment) still needs to be found.
+  const lineByIngredientId = new Map(lines.map((l) => [l.ingredientId, l]));
+  const overrideLookupIds = [...new Set(lines.flatMap((l) => l.mergedIds))];
 
   const { data: overrideRows } =
-    ingredientIds.length > 0
+    overrideLookupIds.length > 0
       ? await supabase
           .from("grocery_price_overrides")
           .select("spoonacular_ingredient_id, basis, price_cents, updated_at")
           .eq("user_id", userId)
           .eq("region", region)
-          .in("spoonacular_ingredient_id", ingredientIds)
+          .in("spoonacular_ingredient_id", overrideLookupIds)
       : { data: [] };
 
-  const rateByKey = new Map<string, number>();
+  const rateByIdBasis = new Map<string, number>();
   for (const row of overrideRows ?? []) {
     if (Date.now() - new Date(row.updated_at).getTime() < THIRTY_DAYS_MS) {
-      rateByKey.set(rateKey(row.spoonacular_ingredient_id, row.basis as PriceBasis), row.price_cents);
+      rateByIdBasis.set(rateKey(row.spoonacular_ingredient_id, row.basis as PriceBasis), row.price_cents);
+    }
+  }
+
+  // Resolved rate per (canonical id, basis) — prefers an override found
+  // under the canonical id itself, falling back to any other id folded
+  // into it via mergedIds.
+  const rateByKey = new Map<string, number>();
+  for (const key of keys) {
+    const basis = basisByKey.get(key)!;
+    const canonicalId = idByKey.get(key)!;
+    const candidateIds = lineByIngredientId.get(canonicalId)?.mergedIds ?? [canonicalId];
+    const orderedCandidates = [canonicalId, ...candidateIds.filter((id) => id !== canonicalId)];
+    for (const id of orderedCandidates) {
+      const rate = rateByIdBasis.get(rateKey(id, basis));
+      if (rate !== undefined) {
+        rateByKey.set(key, rate);
+        break;
+      }
     }
   }
 
@@ -282,7 +316,38 @@ export async function getGroceryList(
     amountG: row.amount,
   }));
 
-  const splitLines = buildGroceryLines(slotIngredientLists, addonEntries);
+  // Cross-Spoonacular-id display merge (Epic E3 follow-up, 2026-07-27):
+  // canonicalizes ingredient identity BEFORE aggregate.ts ever groups
+  // anything, so the same real ingredient resolved to different ids across
+  // recipes (live-confirmed 2026-07-25: one plan's "onion" split across ids
+  // 11282, 10011282, 10511282) shows as one line instead of several.
+  // aggregate.ts itself is never modified — every exported function below
+  // only ever sees already-canonicalized ids from here on.
+  const idRemap = await resolveLineIdentityRemap([
+    ...slotIngredientLists.flat().map((ing) => ({ id: ing.id, name: ing.name })),
+    ...addonEntries.map((a) => ({ id: a.ingredientId, name: a.ingredientName })),
+  ]);
+  // Inverse of idRemap — every original id that folded into a given
+  // canonical id, including the canonical id itself. Attached to each final
+  // GroceryLineView as `mergedIds` (see below) so a Pro-tier price override
+  // can still be found even if a future plan picks a different canonical
+  // id for the same real ingredient (see resolvePricedLines).
+  const canonicalToOriginals = new Map<number, Set<number>>();
+  for (const [original, canonical] of idRemap) {
+    const existing = canonicalToOriginals.get(canonical);
+    if (existing) existing.add(original);
+    else canonicalToOriginals.set(canonical, new Set([original]));
+  }
+
+  const remappedSlotIngredientLists = slotIngredientLists.map((list) =>
+    list.map((ing) => ({ ...ing, id: idRemap.get(ing.id) ?? ing.id })),
+  );
+  const remappedAddonEntries = addonEntries.map((addon) => ({
+    ...addon,
+    ingredientId: idRemap.get(addon.ingredientId) ?? addon.ingredientId,
+  }));
+
+  const splitLines = buildGroceryLines(remappedSlotIngredientLists, remappedAddonEntries);
 
   // Reconcile same-ingredient lines buildGroceryLines split apart over a
   // unit mismatch (e.g. "127.5ml vegetable stock" + "249.9g vegetable
@@ -361,7 +426,15 @@ export async function getGroceryList(
 
   const pantryItems: PantryExclusionItem[] = rawPantryRows.map((row, i) => ({
     name: row.name,
-    spoonacularIngredientId: row.spoonacular_ingredient_id,
+    // Must go through the SAME idRemap as the grocery lines above — a
+    // pantry item resolved to a now-non-canonical id would otherwise fail
+    // matchesPantryItem's hard id-equality check (aggregate.ts has no
+    // fallback to name-matching once a pantry item already has a resolved
+    // id), a real regression in pantry exclusion, not merely a missed merge.
+    spoonacularIngredientId:
+      row.spoonacular_ingredient_id !== null
+        ? (idRemap.get(row.spoonacular_ingredient_id) ?? row.spoonacular_ingredient_id)
+        : null,
     amount: row.amount,
     unit: row.unit,
     matchedLineNames: matchedLineNamesByRow[i],
@@ -394,6 +467,7 @@ export async function getGroceryList(
       aisle: aisleByKey.get(aisleCacheKey(line.ingredientId, line.name)) ?? UNCATEGORIZED_AISLE,
       needsManualCombine: line.needsManualCombine,
       viaAiEstimate: line.viaAiEstimate,
+      mergedIds: [...(canonicalToOriginals.get(line.ingredientId) ?? new Set([line.ingredientId]))],
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 

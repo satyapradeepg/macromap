@@ -40,6 +40,7 @@ function PriceCell({ line, onOverride }: { line: GroceryLineView; onOverride: (p
     const priceCents = Math.round(dollars * 100);
     const result = await overrideGroceryPrice({
       ingredientId: line.ingredientId,
+      mergedIds: line.mergedIds,
       priceCents,
       totalAmount: line.totalAmount,
       unit: line.unit,
