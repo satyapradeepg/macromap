@@ -120,6 +120,76 @@ describe("macroDeviationScore", () => {
       expect(perfectFit).toBeLessThan(hasUnwantedCarbs);
     });
   });
+
+  // Root-caused 2026-07-27 (small_body_aggressive_cut fat-deviation
+  // regression, 106.1%->113.5%): a small-body, aggressive-cut profile's
+  // per-meal fat share can be as little as ~5g -- ordinary incidental fat
+  // in any real recipe then reads as 60-100%+ "off" against a target this
+  // tiny, even though the absolute miss is a few grams. Fixed with a
+  // denominator floor (MIN_TARGET_G/MIN_TARGET_KCAL), not a numerator
+  // subtraction -- see the code comment for why the subtract approach was
+  // tried first and reverted.
+  describe("small-target denominator floor (2026-07-27)", () => {
+    it("dampens deviation for a target below the gram floor, without zeroing it out", () => {
+      // 5g fat target (below the 8g floor), candidate at 9g -- a real,
+      // live-observed shape (small_body_aggressive_cut's dinner/snack fat
+      // share). Deviation should be computed against the 8g floor, not the
+      // raw 5g target: |9-5|/8 = 0.5, not |9-5|/5 = 0.8.
+      const score = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 500, carbsG: 40, fatG: 9 },
+        { ...target, fatG: 5 },
+      );
+      const fatContribution = score; // every other macro is an exact match here
+      expect(fatContribution).toBeCloseTo(0.5 * 0.5, 5); // 0.5 deviation * CARB_FAT_WEIGHT (0.5)
+    });
+
+    it("still scales up for a larger miss on a tiny target -- floor dampens, never fully flattens", () => {
+        const nearTarget = macroDeviationScore(
+          { proteinG: 40, caloriesKcal: 500, carbsG: 40, fatG: 6 },
+          { ...target, fatG: 5 },
+        );
+        const farFromTarget = macroDeviationScore(
+          { proteinG: 40, caloriesKcal: 500, carbsG: 40, fatG: 20 },
+          { ...target, fatG: 5 },
+        );
+        expect(farFromTarget).toBeGreaterThan(nearTarget);
+    });
+
+    it("does not change any deviation for a target at or above the gram floor (8g) -- this file's own 15g fat target is unaffected", () => {
+      // Same as the existing "weights carbs/fat deviation at 0.5x" test
+      // above -- the floor must never touch a target this size.
+      const fatOff = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 500, carbsG: 40, fatG: 16.5 },
+        target,
+      );
+      expect(fatOff).toBeCloseTo(0.05, 5);
+    });
+
+    it("does not change any deviation for a calorie target at or above the kcal floor (40) -- this file's own 500kcal target is unaffected", () => {
+      const caloriesOff = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 550, carbsG: 40, fatG: 15 },
+        target,
+      );
+      expect(caloriesOff).toBeCloseTo(0.1, 5);
+    });
+
+    it("dampens a tiny calorie target (below the 40kcal floor) the same way", () => {
+      const score = macroDeviationScore(
+        { proteinG: 40, caloriesKcal: 60, carbsG: 40, fatG: 15 },
+        { ...target, calories: 30 },
+      );
+      // |60-30|/max(30,40) = 30/40 = 0.75, not 30/30 = 1.0
+      expect(score).toBeCloseTo(0.75, 5);
+    });
+
+    it("leaves the zero-target special case untouched -- floor only applies to a nonzero target", () => {
+      const zeroCarbTarget = { ...target, carbsG: 0 };
+      const score = macroDeviationScore({ proteinG: 40, caloriesKcal: 500, carbsG: 3, fatG: 15 }, zeroCarbTarget);
+      // A 0 target with a nonzero candidate is still the bounded "full
+      // deviation" case (1 * CARB_FAT_WEIGHT), not divided by the floor.
+      expect(score).toBeCloseTo(1 * 0.5, 5);
+    });
+  });
 });
 
 describe("bestScaleAndScore", () => {

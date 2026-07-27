@@ -99,19 +99,46 @@ const CARB_FAT_WEIGHT = 0.5;
 // candidate value is treated as a full (100%) deviation on that macro --
 // bounded, not infinite, so it still ranks worse than any real percentage
 // deviation without blowing up the comparator.
-function safeRelativeDeviation(candidateValue: number, targetValue: number): number {
+//
+// Sibling gap, found live 2026-07-27 root-causing small_body_aggressive_cut's
+// fat-deviation regression: a target that's small but NOT zero has the same
+// blow-up shape as the zero case, just bounded instead of infinite. A
+// small-body, aggressive-cut profile's per-meal fat share (targets.ts's
+// MEAL_TYPE_SHARE splitting an already-tight daily fat budget across 5
+// meals) can be as little as ~5g -- and any ordinary real recipe's
+// unavoidable incidental fat content then reads as 60-100%+ "off," even
+// though the absolute miss is a few grams and nutritionally irrelevant.
+// This let real, meaningful improvements to protein/calories fit (the
+// this-session guards' actual optimization target) get bundled with a fat
+// increase that looked catastrophic in relative terms but wasn't in
+// absolute ones.
+//
+// Fixed by flooring the DENOMINATOR, not subtracting a flat amount from the
+// numerator -- tried that first and reverted: sized large enough to matter
+// for a ~5g target, a subtract-based floor zeroed out real, meaningful
+// deviations on this file's own smallest already-tested normal target (15g
+// fat, the "weights carbs/fat deviation at 0.5x" test below). Flooring the
+// denominator instead leaves any target AT OR ABOVE the floor completely
+// unchanged -- provably safe for every currently-tested profile, since the
+// smallest real target anywhere in this file's test suite is 15g/500kcal,
+// both above MIN_TARGET_G/MIN_TARGET_KCAL below -- and only softens the
+// case where the target itself is tinier than these thresholds.
+const MIN_TARGET_G = 8;
+const MIN_TARGET_KCAL = 40;
+
+function safeRelativeDeviation(candidateValue: number, targetValue: number, minTarget: number): number {
   if (targetValue === 0) return candidateValue === 0 ? 0 : 1;
-  return Math.abs(candidateValue - targetValue) / targetValue;
+  return Math.abs(candidateValue - targetValue) / Math.max(targetValue, minTarget);
 }
 
 export function macroDeviationScore(
   candidate: { proteinG: number; caloriesKcal: number; carbsG: number; fatG: number },
   target: { proteinG: number; calories: number; carbsG: number; fatG: number },
 ): number {
-  const proteinDeviation = safeRelativeDeviation(candidate.proteinG, target.proteinG) * 2;
-  const caloriesDeviation = safeRelativeDeviation(candidate.caloriesKcal, target.calories);
-  const carbsDeviation = safeRelativeDeviation(candidate.carbsG, target.carbsG) * CARB_FAT_WEIGHT;
-  const fatDeviation = safeRelativeDeviation(candidate.fatG, target.fatG) * CARB_FAT_WEIGHT;
+  const proteinDeviation = safeRelativeDeviation(candidate.proteinG, target.proteinG, MIN_TARGET_G) * 2;
+  const caloriesDeviation = safeRelativeDeviation(candidate.caloriesKcal, target.calories, MIN_TARGET_KCAL);
+  const carbsDeviation = safeRelativeDeviation(candidate.carbsG, target.carbsG, MIN_TARGET_G) * CARB_FAT_WEIGHT;
+  const fatDeviation = safeRelativeDeviation(candidate.fatG, target.fatG, MIN_TARGET_G) * CARB_FAT_WEIGHT;
   return proteinDeviation + caloriesDeviation + carbsDeviation + fatDeviation;
 }
 
