@@ -65,9 +65,9 @@ import { anyIngredientUnsafeFor } from "./openEndedIngredientSafety";
 import { critiquePlan, type PlanSlotSummary } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
+import { lookupIngredientMacrosCached } from "./ingredientMacroCache";
 import {
   complexSearch,
-  lookupIngredientMacros,
   SpoonacularQuotaError,
   SpoonacularRequestError,
 } from "@/lib/spoonacular";
@@ -176,7 +176,7 @@ async function fetchSnackIngredientPool(ctx: DietaryContext) {
     safeNames.map(async (name) => {
       const staticMatch = lookupIngredientMacrosStatic(name);
       if (staticMatch) return [name, staticMatch] as const;
-      return [name, await lookupIngredientMacros(name)] as const;
+      return [name, await lookupIngredientMacrosCached(name)] as const;
     }),
   );
   return Object.fromEntries(
@@ -194,14 +194,14 @@ async function fetchSnackIngredientPool(ctx: DietaryContext) {
 const lookupIngredientMacrosForAddon: FetchIngredientMacrosFn = async (query: string): Promise<IngredientMacroLookup | null> => {
   const staticMatch = lookupIngredientMacrosStatic(query);
   if (staticMatch) return staticMatch;
-  return lookupIngredientMacros(query);
+  return lookupIngredientMacrosCached(query);
 };
 
 // aiMealComposition.ts's ingredients are open-ended (Claude's own choice,
 // not from the fixed 9), so this always resolves live — no static-table
 // shortcut applies here the way it does for the fixed pool above.
 async function groundIngredientForAiMeal(query: string): Promise<GroundedIngredientData | null> {
-  return lookupIngredientMacros(query);
+  return lookupIngredientMacrosCached(query);
 }
 
 function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): MacroTargets {
