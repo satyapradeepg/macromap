@@ -723,6 +723,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // with any other day, only with this day's own protein-floor
     // enforcement pass further down.
     const dayRetryBudget = createRetryBudget();
+    // Shared by both gap-closing phases below -- macroDeviationScore's
+    // candidate side uses caloriesKcal (asymmetric naming vs MacroTargets'
+    // calories, already established elsewhere in this file/ranking.ts).
+    const asCandidate = (a: MacroTargets) => ({ proteinG: a.proteinG, caloriesKcal: a.calories, carbsG: a.carbsG, fatG: a.fatG });
 
     // Whole day wrapped in one try/catch: a quota/outage error can surface
     // from several calls below (add-on lookups, recipe requeries). If it's
@@ -760,10 +764,6 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // making the day's weighted accuracy worse every time it fired,
         // this whole time, independent of anything built this session.
         if (addon) {
-          // macroDeviationScore's candidate side uses caloriesKcal (asymmetric
-          // naming vs MacroTargets' calories, already established elsewhere
-          // in this file/ranking.ts) -- remap rather than fight it.
-          const asCandidate = (a: MacroTargets) => ({ proteinG: a.proteinG, caloriesKcal: a.calories, carbsG: a.carbsG, fatG: a.fatG });
           const dayActualWith = {
             calories: dayActualBefore.calories + addon.caloriesKcal,
             proteinG: dayActualBefore.proteinG + addon.proteinG,
@@ -787,64 +787,87 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         increaseGap = dominantIncreaseGap(gaps);
       }
 
-      if (gaps.length > 0) {
+      // Recipe requery, one slot at a time, gap recomputed after every
+      // attempt -- rebuilt 2026-07-27 to match phase 1's own discipline
+      // above, after live instrumentation confirmed this phase used to
+      // compute its whole batch of target slots ONCE from the gap snapshot
+      // taken before this loop started, then execute all of them against
+      // that same stale snapshot: swap #2/#3 had no idea what swap #1
+      // already fixed. Also newly guarded the same way phase 1 already is
+      // (macroDeviationScore before/after, see asCandidate above) -- this
+      // phase previously had no check at all that a swap actually improved
+      // the day's real fit, unlike phase 1's addon guard.
+      const swapTriedThisDay = new Set<string>();
+      while (gaps.length > 0 && trySpend(dayRetryBudget, RECIPE_ACTION_COST)) {
+        retryQueriesUsed++;
+
         // Recipe requery only applies to recipe-mechanism slots — a composed
         // snack has no Spoonacular recipe to "requery" (mealTypeToSpoonacularType
         // throws for snack types); a snack with remaining slack only gets
         // helped by phase 1's add-on, not this phase.
         //
-        // Prefer swapping slots that DON'T already carry a selection-time
-        // addon, only reaching into addon'd ones if there isn't enough
-        // non-addon'd slack to close the gap. Found live July 20 2026, in
-        // two steps: excluding addon'd slots entirely (the original design)
-        // starved this phase once addon-at-selection started touching
-        // roughly half the week's recipe slots -- a day that overshot after
-        // selection-time addons had no way back into band. But swapping
-        // them completely unrestricted let this phase freely cannibalize
-        // addon-at-selection's fat-fixing work (whichever macro this
-        // phase's own dominantDirection cares about that round, not
-        // specifically fat), reopening the exact regression Phase 2 was
-        // built to close. This soft preference gets both: non-addon'd slots
-        // (plenty of real slack in a typical week) absorb ordinary
-        // correction first, addon'd slots stay protected unless truly
-        // necessary.
+        // Prefer a slot that DOESN'T already carry a selection-time addon,
+        // only reaching into addon'd ones once the non-addon'd pool is
+        // exhausted. Found live July 20 2026: excluding addon'd slots
+        // entirely (the original design) starved this phase once
+        // addon-at-selection started touching roughly half the week's
+        // recipe slots; swapping them completely unrestricted let this
+        // phase cannibalize addon-at-selection's own fixing work. This soft
+        // preference gets both. Both pools also exclude anything already
+        // tried THIS phase today, whether the swap was accepted or
+        // rejected — without that, a rejected slot (same cached candidates,
+        // same guard outcome) would get re-picked and re-rejected
+        // identically, burning the day's whole budget on one futile slot.
         const recipeSlotsToday = daySlots().filter((c) => slotMechanism(c.slotId.mealType) === "recipe");
-        const nonAddonedEligible = recipeSlotsToday.filter((c) => !addonedThisDay.has(slotKey(c.slotId)));
-        const addonedEligible = recipeSlotsToday.filter((c) => addonedThisDay.has(slotKey(c.slotId)));
-        const affordableRequeries = Math.floor(dayRetryBudget.remaining / RECIPE_ACTION_COST);
-        const slackSlotIds = pickSlackSlots(nonAddonedEligible, mealTypeTargets, gaps, affordableRequeries);
-        if (slackSlotIds.length < affordableRequeries) {
-          const stillNeeded = affordableRequeries - slackSlotIds.length;
-          for (const id of pickSlackSlots(addonedEligible, mealTypeTargets, gaps, stillNeeded)) {
-            slackSlotIds.push(id);
-          }
-        }
+        const nonAddonedEligible = recipeSlotsToday.filter(
+          (c) => !addonedThisDay.has(slotKey(c.slotId)) && !swapTriedThisDay.has(slotKey(c.slotId)),
+        );
+        const addonedEligible = recipeSlotsToday.filter(
+          (c) => addonedThisDay.has(slotKey(c.slotId)) && !swapTriedThisDay.has(slotKey(c.slotId)),
+        );
+        const pool = nonAddonedEligible.length > 0 ? nonAddonedEligible : addonedEligible;
+        const [slotId] = pickSlackSlots(pool, mealTypeTargets, gaps, 1);
+        if (!slotId) break; // no untried recipe slot left this day
 
-        for (const slotId of slackSlotIds) {
-          if (!trySpend(dayRetryBudget, RECIPE_ACTION_COST)) break;
-          retryQueriesUsed++;
+        swapTriedThisDay.add(slotKey(slotId));
 
-          const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
-          if (existingIndex === -1) continue;
-          const existing = claimResult.claimed[existingIndex];
+        const existingIndex = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
+        if (existingIndex === -1) continue;
+        const existing = claimResult.claimed[existingIndex];
 
-          const claimedIds = claimResult.claimed
-            .filter((_, i) => i !== existingIndex)
-            .map((c) => c.candidate.id);
-          const slotTarget = mealTypeTargets[slotId.mealType];
-          const bounds = nudgedBounds(slotTarget, gaps);
-          const raw = await fetchCandidatesWithCache(
-            admin,
-            // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
-            // tier — reuse the slot's own original tier purely as a label for
-            // the cache row's informational tolerance_tier column.
-            { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
-            claimedIds,
-            inFlight,
+        const claimedIds = claimResult.claimed
+          .filter((_, i) => i !== existingIndex)
+          .map((c) => c.candidate.id);
+        const slotTarget = mealTypeTargets[slotId.mealType];
+        const bounds = nudgedBounds(slotTarget, gaps);
+        const raw = await fetchCandidatesWithCache(
+          admin,
+          // Reconciliation's nudge doesn't correspond to a named p10/p20/p30
+          // tier — reuse the slot's own original tier purely as a label for
+          // the cache row's informational tolerance_tier column.
+          { bounds, tier: existing.tier, diet, intolerances, excludeIngredients, type: mealTypeToSpoonacularType(slotId.mealType), dietaryStyles: input.dietaryStyles, allergies: input.allergies },
+          claimedIds,
+          inFlight,
+        );
+        const ranked = rankCandidates(raw, slotTarget, rankOpts);
+        const pick = ranked.find((c) => !claimedIds.includes(c.id));
+
+        if (pick) {
+          // Never-worse guard (new 2026-07-27, same shape as phase 1's addon
+          // guard above): build the day's hypothetical actual with this
+          // slot swapped in (and its old addon, if any, dropped -- a swap
+          // always drops the old addon below, so the guard must account for
+          // that too, not just the candidate's own macros) and only commit
+          // if it's a genuine improvement against the real daily target.
+          const dayActualBefore = sumWithAddons(daySlots(), addons);
+          const hypotheticalClaimed = daySlots().map((c) =>
+            slotKey(c.slotId) === slotKey(slotId) ? { ...c, candidate: pick } : c,
           );
-          const ranked = rankCandidates(raw, slotTarget, rankOpts);
-          const pick = ranked.find((c) => !claimedIds.includes(c.id));
-          if (pick) {
+          const hypotheticalAddons = new Map(addons);
+          hypotheticalAddons.delete(slotKey(slotId));
+          const dayActualWith = sumWithAddons(hypotheticalClaimed, hypotheticalAddons);
+
+          if (macroDeviationScore(asCandidate(dayActualWith), input.dailyTargets) < macroDeviationScore(asCandidate(dayActualBefore), input.dailyTargets)) {
             // The nudge intentionally searches outside the slot's original
             // tier — recompute the pick's real tier against the true per-meal
             // target (not the nudged one) so the persisted label/match_label
@@ -873,9 +896,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             addons.delete(slotKey(slotId));
             addonedThisDay.delete(slotKey(slotId));
           }
-          // If nothing found, leave the existing claim unchanged — the gap
-          // simply isn't closed for that slot (never fakes an exact match).
+          // Guard-rejected swaps are discarded, not committed -- but the
+          // slot stays marked swapTriedThisDay (above) so the next
+          // iteration tries a different slot rather than re-attempting the
+          // same non-improving one.
         }
+        // If no candidate was found, the slot is still marked
+        // swapTriedThisDay for the same reason — never fakes progress that
+        // didn't happen.
+
+        gaps = macroGapDirections(sumWithAddons(daySlots(), addons), dailyBand);
       }
 
       // Protein-distribution enforcement (targets.ts's proteinFloorViolations)
