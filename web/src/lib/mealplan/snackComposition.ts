@@ -23,6 +23,7 @@
 
 import type { MacroTargets } from "./targets";
 import { rankByPantryAndPrice, type PantryPriceContext } from "./pantryPricePreference";
+import { MAX_REALISTIC_AMOUNT_G, DEFAULT_MAX_REALISTIC_AMOUNT_G } from "./staticIngredientMacros";
 
 export type MacroRole = "protein" | "carb" | "fat";
 
@@ -125,50 +126,10 @@ export interface ComposedSnack {
 
 const MIN_INGREDIENT_AMOUNT_G = 10;
 
-// Audit item #3 (2026-07-21 spec): this file had no upper bound at all --
-// a low-density carb like orange (11.8g carb/100g) sizing to close a
-// genuinely large carb gap could reach ~340g with nothing catching it.
-// Deliberately PER-INGREDIENT, not per-role like aiMealComposition.ts's
-// PORTION_BOUNDS_G -- that file has to use one generic bound per role
-// because it's grounding arbitrary LLM-proposed ingredient names it can't
-// enumerate in advance. This pool is the opposite case: a small, fully
-// known, fixed set of 13 real foods (INGREDIENT_POOL above), and macro
-// density varies too widely WITHIN a role for one shared ceiling to work
-// -- protein powder (83g protein/100g) and greek yogurt (10g protein/100g)
-// are both "protein role," but a per-role max loose enough to allow a
-// normal ~200g yogurt serving would also wave through an absurd ~200g of
-// protein powder (166g protein, several days' worth of scoops in one
-// snack). An explicit editorial call per ingredient, not a density-derived
-// formula, so it can't silently drift wrong as the pool's foods change.
-// A rejection here just skips that role's contribution (composeSnack
-// already treats a null role result as "skip," same graceful degradation
-// as the existing MIN_INGREDIENT_AMOUNT_G floor) -- never rejects the
-// whole snack.
-const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
-  "greek yogurt": 300,
-  // 260g+ is a real, already-validated output for this file's own
-  // reference 29g-protein snack target (roughly 1.15 cups) -- not the
-  // unrealistic case this bound exists to catch. 300, not 250.
-  "cottage cheese": 300,
-  "protein powder": 60,
-  "pea protein powder": 60,
-  "hemp seeds": 50,
-  banana: 250,
-  apple: 300,
-  // Needs headroom up to ~260g for the same reference target (a realistic
-  // ~2-orange snack), while still catching the audit's actual ~340g
-  // problem case. 280, not 250.
-  orange: 280,
-  almonds: 60,
-  "peanut butter": 50,
-  walnuts: 60,
-  "sunflower seed butter": 50,
-  "chia seeds": 40,
-};
-// Safety net for a future INGREDIENT_POOL addition someone forgets to add
-// a bound for above -- fails closed (a real, if conservative, cap) rather
-// than silently reproducing this exact gap for the new ingredient.
-const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
+// Per-ingredient realistic-portion ceiling (MAX_REALISTIC_AMOUNT_G /
+// DEFAULT_MAX_REALISTIC_AMOUNT_G) now lives in staticIngredientMacros.ts,
+// shared with addon.ts -- see that file for the full rationale (audit item
+// #3, 2026-07-21 spec originally; moved here 2026-07-28).
 
 // Sizes one ingredient to close a specific macro gap (protein/carbs/fat),
 // rounding down to the nearest 5g and skipping it entirely if that rounds

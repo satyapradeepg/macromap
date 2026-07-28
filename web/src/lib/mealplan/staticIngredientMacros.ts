@@ -255,6 +255,56 @@ export function lookupIngredientMacrosStatic(query: string): StaticIngredientMac
   return STATIC_INGREDIENT_MACROS[query.toLowerCase().trim()] ?? null;
 }
 
+// Per-ingredient realistic-portion ceiling, shared by every path that sizes
+// one of this fixed 13-ingredient pool to close a macro gap (snackComposition.ts's
+// composeSnack, addon.ts's buildAddonForSlot) -- moved here from
+// snackComposition.ts (2026-07-28) so both consumers read one table instead
+// of risking two definitions drifting apart.
+//
+// Originally added to snackComposition.ts (audit item #3, 2026-07-21 spec):
+// that file had no upper bound at all -- a low-density carb like orange
+// (11.8g carb/100g) sizing to close a genuinely large carb gap could reach
+// ~340g with nothing catching it. Deliberately PER-INGREDIENT, not per-role
+// like aiMealComposition.ts's PORTION_BOUNDS_G -- that file has to use one
+// generic bound per role because it's grounding arbitrary LLM-proposed
+// ingredient names it can't enumerate in advance. This pool is the opposite
+// case: a small, fully known, fixed set of 13 real foods, and macro density
+// varies too widely WITHIN a role for one shared ceiling to work -- protein
+// powder (83g protein/100g) and greek yogurt (10g protein/100g) are both
+// "protein role," but a per-role max loose enough to allow a normal ~200g
+// yogurt serving would also wave through an absurd ~200g of protein powder
+// (166g protein, several days' worth of scoops in one snack/addon). An
+// explicit editorial call per ingredient, not a density-derived formula, so
+// it can't silently drift wrong as the pool's foods change. A rejection here
+// just skips that ingredient's contribution (both callers already treat a
+// null result as "skip, try the next thing") -- never breaks the whole
+// snack/addon/plan.
+export const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
+  "greek yogurt": 300,
+  // 260g+ is a real, already-validated output for snackComposition.ts's own
+  // reference 29g-protein snack target (roughly 1.15 cups) -- not the
+  // unrealistic case this bound exists to catch. 300, not 250.
+  "cottage cheese": 300,
+  "protein powder": 60,
+  "pea protein powder": 60,
+  "hemp seeds": 50,
+  banana: 250,
+  apple: 300,
+  // Needs headroom up to ~260g for the same reference target (a realistic
+  // ~2-orange snack), while still catching the audit's actual ~340g problem
+  // case. 280, not 250.
+  orange: 280,
+  almonds: 60,
+  "peanut butter": 50,
+  walnuts: 60,
+  "sunflower seed butter": 50,
+  "chia seeds": 40,
+};
+// Safety net for a future pool addition someone forgets to add a bound for
+// above -- fails closed (a real, if conservative, cap) rather than silently
+// reproducing this exact gap for the new ingredient.
+export const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
+
 // Display-only realism note (2026-07-27): 4 of the 13 pool ingredients
 // aren't things a person actually eats standalone in the sized amount --
 // protein powder/pea protein powder need a liquid, chia/hemp seeds are
