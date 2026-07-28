@@ -67,10 +67,14 @@ describe("createSelectionAddonBudget", () => {
 // slots starved every time. This is a separate, additive budget so that
 // pass always gets a real chance regardless of how many slots are
 // blocked that week.
+//
+// Adaptive since 2026-07-28 (was a flat 2 attempts) -- live-confirmed a
+// vegetarian-cut profile had 6 real null-tier slots in one week, and the
+// old flat budget only covered 2 of them.
 describe("createBadFitSwapBudget", () => {
   it("is a separate budget from createAiComposeBudget, not shared or carved out of it", () => {
     const aiComposeBudget = createAiComposeBudget();
-    const badFitBudget = createBadFitSwapBudget();
+    const badFitBudget = createBadFitSwapBudget(2);
     // Draining the blocked-slot budget entirely must not affect the
     // bad-fit budget at all -- they're independent objects.
     while (trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) {
@@ -80,10 +84,23 @@ describe("createBadFitSwapBudget", () => {
     expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * 2);
   });
 
-  it("guarantees at least 2 attempts, matching the typical 1-3 thin-pool slots per plan found in the offline cached-pool survey", () => {
-    const budget = createBadFitSwapBudget();
+  it("sizes to exactly cover the real count of null-tier slots found this generation", () => {
+    const budget = createBadFitSwapBudget(6);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(6);
+  });
+
+  it("allocates zero budget when nothing needs repair, rather than wasting a flat allowance", () => {
+    const budget = createBadFitSwapBudget(0);
+    expect(budget.remaining).toBe(0);
+    expect(trySpend(budget, AI_COMPOSE_ACTION_COST)).toBe(false);
+  });
+
+  it("clamps at RECIPE_SLOTS_PER_WEEK (21) even if an implausibly large count is passed", () => {
+    const budget = createBadFitSwapBudget(30);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(21);
   });
 });

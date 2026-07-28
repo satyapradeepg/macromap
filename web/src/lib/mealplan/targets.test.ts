@@ -10,6 +10,8 @@ import {
   mealTypeToSpoonacularType,
   structuralCalorieFloorExceedsTarget,
   STRUCTURAL_CALORIE_FLOOR_TOTAL,
+  markKnownBad,
+  knownBadIdsFor,
 } from "./targets";
 
 describe("allSlotIds", () => {
@@ -219,5 +221,40 @@ describe("mealTypeToSpoonacularType", () => {
   it("throws for snack types rather than querying Spoonacular's thin snack corpus", () => {
     expect(() => mealTypeToSpoonacularType("snack1")).toThrow();
     expect(() => mealTypeToSpoonacularType("snack2")).toThrow();
+  });
+});
+
+describe("markKnownBad / knownBadIdsFor", () => {
+  it("tracks a real recipe id under its meal type's Spoonacular class", () => {
+    const knownBad = new Set<string>();
+    markKnownBad(knownBad, 12345, "lunch");
+    expect(knownBadIdsFor("lunch", knownBad)).toEqual([12345]);
+  });
+
+  it("scopes by meal-type class, not bare id -- lunch and dinner share a class, breakfast doesn't", () => {
+    const knownBad = new Set<string>();
+    markKnownBad(knownBad, 111, "lunch");
+    markKnownBad(knownBad, 222, "breakfast");
+
+    // lunch and dinner both map to "main course" -- a lunch-flagged id
+    // should also be excluded from a dinner search, since they draw from
+    // the same corpus.
+    expect(knownBadIdsFor("dinner", knownBad)).toEqual([111]);
+    // But it should NOT show up under breakfast's distinct class.
+    expect(knownBadIdsFor("breakfast", knownBad)).toEqual([222]);
+  });
+
+  it("never tracks a synthetic (non-positive) id", () => {
+    const knownBad = new Set<string>();
+    markKnownBad(knownBad, -1, "lunch");
+    markKnownBad(knownBad, 0, "dinner");
+    expect(knownBadIdsFor("lunch", knownBad)).toEqual([]);
+    expect(knownBadIdsFor("dinner", knownBad)).toEqual([]);
+  });
+
+  it("returns an empty array for a meal type with no known-bad entries", () => {
+    const knownBad = new Set<string>();
+    markKnownBad(knownBad, 999, "breakfast");
+    expect(knownBadIdsFor("lunch", knownBad)).toEqual([]);
   });
 });

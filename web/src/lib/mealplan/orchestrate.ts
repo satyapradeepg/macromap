@@ -16,6 +16,8 @@ import {
   mealTypeToSpoonacularType,
   MEALS_PER_WEEK,
   DAYS_PER_WEEK,
+  markKnownBad,
+  knownBadIdsFor,
   type MealSlotId,
   type MacroTargets,
   type MealType,
@@ -274,6 +276,17 @@ function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): 
 // distinct (bounds, diet, type, ...) combo is paid once per 7-day window,
 // amortized across every user hitting that combo.
 const CANDIDATES_PER_QUERY = 100;
+
+// Caps how many slots go into a single proposeMealsBatchViaClaude call
+// (2026-07-28, alongside createBadFitSwapBudget becoming adaptive) --
+// widening that budget means `eligible` can now genuinely hold many more
+// entries for a diet-restricted profile. mealProposer.ts's batch prompt
+// computes ONE shared "concentrate protein into fewer dishes" strategy
+// across the whole batch (its own maxSlotProteinG is batch-wide, not
+// per-chunk) -- dumping too many heterogeneous slots into one call dilutes
+// that guidance per-dish. Chunking keeps each call's guidance focused
+// without capping how many total slots can get repaired in a generation.
+const MAX_AI_COMPOSE_BATCH_SIZE = 4;
 
 export interface OrchestrateInput {
   userId: string;
@@ -609,6 +622,18 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const addons = new Map<string, SlotAddon>();
   const selectionAddonBudget = createSelectionAddonBudget();
 
+  // Generation-scoped "known-bad" recipe tracking (2026-07-28) -- shared by
+  // every pass below that can replace a real recipe candidate (day
+  // reconciliation's Phase 2 requery, the protein-floor swap, the bad-fit
+  // AI-compose pass, and plan-repair). Live-confirmed bug this closes: a
+  // recipe correctly removed by one pass for being a bad fit had nothing
+  // stopping a LATER, independent pass from pulling it back in for a
+  // different slot from the same cached pool, since only "currently
+  // claimed elsewhere" was ever excluded -- never "already rejected this
+  // generation." See targets.ts's markKnownBad/knownBadIdsFor for why this
+  // is keyed by (id, Spoonacular type class) rather than bare id.
+  const excludedRecipeKeys = new Set<string>();
+
   // Only called from the initial pass below. Tried also calling this again
   // after every later reconciliation swap (to give a freshly-swapped pick a
   // fair shot at whatever gap it has) — live-confirmed July 20 2026 that
@@ -873,7 +898,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
         const claimedIds = claimResult.claimed
           .filter((_, i) => i !== existingIndex)
-          .map((c) => c.candidate.id);
+          .map((c) => c.candidate.id)
+          .concat(knownBadIdsFor(slotId.mealType, excludedRecipeKeys));
         const slotTarget = mealTypeTargets[slotId.mealType];
         const bounds = nudgedBounds(slotTarget, gaps);
         const raw = await fetchCandidatesWithCache(
@@ -911,6 +937,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // that no longer matches the actual deviation.
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existing.candidate.id, slotId.mealType);
             claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any -- from addon-at-selection or an
@@ -1002,7 +1029,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           retryQueriesUsed++;
           const claimedIds = claimResult.claimed
             .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
-            .map((c) => c.candidate.id);
+            .map((c) => c.candidate.id)
+            .concat(knownBadIdsFor(mealType, excludedRecipeKeys));
           const slotTarget = mealTypeTargets[mealType];
           // [floorGap] only, not a broader gaps list -- this phase is a
           // protein-floor top-up specifically; the other 3 macros should
@@ -1025,6 +1053,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
             releasePantryConsumption(rankOpts.pantryTracker, existingNow.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existingNow.candidate.id, mealType);
             claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any) was sized against the pre-swap recipe's
@@ -1206,6 +1235,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     const newScore = macroDeviationScore(candidate, entry.target);
     if (newScore < existingScore) {
       releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+      markKnownBad(excludedRecipeKeys, existing.candidate.id, entry.slotId.mealType);
       claimResult.claimed[entry.claimedIndex] = { slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" };
       commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
     }
@@ -1260,7 +1290,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // detection itself (this loop, no API cost) found them every time. A
   // separate, smaller, additive budget guarantees this pass always gets a
   // real chance, regardless of how many slots are blocked that week.
-  const badFitSwapBudget = createBadFitSwapBudget();
+  // Sized to the REAL count of null-tier recipe slots found this generation
+  // (free to compute -- classifyTier returning null, no API cost) rather
+  // than a flat guess -- see retryBudget.ts's createBadFitSwapBudget for
+  // why (live-confirmed a diet-restricted profile can have far more than
+  // the "typical" 1-3 thin-pool slots the old flat budget assumed).
+  const nullTierRecipeCount = claimResult.claimed.filter(
+    (c) => slotMechanism(c.slotId.mealType) === "recipe" && c.candidate.actualTier === null,
+  ).length;
+  const badFitSwapBudget = createBadFitSwapBudget(nullTierRecipeCount);
   for (const [claimedIndex, c] of claimResult.claimed.entries()) {
     if (slotMechanism(c.slotId.mealType) !== "recipe") continue;
     if (c.candidate.actualTier !== null) continue;
@@ -1268,8 +1306,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     eligible.push({ key: slotKey(c.slotId), slotId: c.slotId, target: mealTypeTargets[c.slotId.mealType], claimedIndex });
   }
 
-  if (eligible.length > 0) {
-    const aggregateTarget = eligible.reduce<MacroTargets>(
+  // Chunked into groups of MAX_AI_COMPOSE_BATCH_SIZE (2026-07-28) -- each
+  // chunk gets its own batch call/aggregateTarget/fallback, exactly as if
+  // it were the only group this generation, so a wider `eligible` (now
+  // possible with the adaptive bad-fit-swap budget above) can't dilute any
+  // one call's "concentrate protein" guidance across too many slots.
+  for (let chunkStart = 0; chunkStart < eligible.length; chunkStart += MAX_AI_COMPOSE_BATCH_SIZE) {
+    const chunk = eligible.slice(chunkStart, chunkStart + MAX_AI_COMPOSE_BATCH_SIZE);
+
+    const aggregateTarget = chunk.reduce<MacroTargets>(
       (sum, e) => ({
         calories: sum.calories + e.target.calories,
         proteinG: sum.proteinG + e.target.proteinG,
@@ -1282,7 +1327,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     let batchProposals: Awaited<ReturnType<typeof proposeMealsBatchViaClaude>> = null;
     try {
       batchProposals = await proposeMealsBatchViaClaude({
-        slots: eligible.map((e) => ({ mealType: e.slotId.mealType as "breakfast" | "lunch" | "dinner", target: e.target })),
+        slots: chunk.map((e) => ({ mealType: e.slotId.mealType as "breakfast" | "lunch" | "dinner", target: e.target })),
         aggregateTarget,
         dietaryStyles: input.dietaryStyles,
         allergies: input.allergies,
@@ -1293,9 +1338,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       console.error(`[mealplan] batch AI composition call failed, falling back to per-slot:`, err);
     }
 
-    if (batchProposals && batchProposals.length === eligible.length) {
-      for (let i = 0; i < eligible.length; i++) {
-        const entry = eligible[i];
+    if (batchProposals && batchProposals.length === chunk.length) {
+      for (let i = 0; i < chunk.length; i++) {
+        const entry = chunk[i];
         // Sizes against THIS dish's own rescaled target (Claude's
         // deliberate per-dish allocation, corrected to sum exactly to the
         // aggregate) rather than the flat per-slot share -- this is what
@@ -1313,9 +1358,9 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     } else {
       // Batch attempt didn't produce a usable result (network error,
       // malformed tool call, wrong count) -- fall back to the original
-      // one-call-per-slot path for every slot still in this batch, exactly
+      // one-call-per-slot path for every slot still in this chunk, exactly
       // as if batching had never been attempted.
-      for (const entry of eligible) {
+      for (const entry of chunk) {
         const candidate = await attemptSingleSlotAiCompose(entry.slotId, entry.target, entry.key);
         applyAiComposeResult(entry, candidate);
       }
@@ -1521,8 +1566,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const otherTitlesInPlan = claimResult.claimed.filter((_, i) => i !== idx).map((c) => c.candidate.title);
           // Excludes every recipe already used anywhere in the plan, not
           // just this slot's own — prevents the repair from accidentally
-          // trading one duplicate for a brand-new one elsewhere.
-          const excludeRecipeIds = claimResult.claimed.map((c) => c.candidate.id);
+          // trading one duplicate for a brand-new one elsewhere. Also
+          // excludes anything already removed elsewhere this generation for
+          // being a confirmed bad fit (excludedRecipeKeys) -- this is the
+          // exact site that live-confirmed a recipe correctly removed by
+          // the bad-fit-swap pass earlier could otherwise get pulled back
+          // in here, since diet_violation repairs bypass the macro check
+          // below by design and had no memory of what was already rejected.
+          const excludeRecipeIds = claimResult.claimed
+            .map((c) => c.candidate.id)
+            .concat(knownBadIdsFor(existing.slotId.mealType, excludedRecipeKeys));
           const slotTarget = mealTypeTargets[existing.slotId.mealType];
 
           let swapResult;
@@ -1560,6 +1613,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
               const composed = await tryAiComposeRepair(existing.slotId, slotTarget);
               if (composed) {
                 releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+                markKnownBad(excludedRecipeKeys, existing.candidate.id, existing.slotId.mealType);
                 claimResult.claimed[idx] = { slotId: existing.slotId, candidate: composed, tier: composed.actualTier ?? "p30" };
                 // AI-composed -- not scored against pantry, still
                 // committed so a later slot doesn't see stock as more
@@ -1595,6 +1649,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           if (accept) {
             const actualTier = swapResult.tier ?? existing.tier;
             releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existing.candidate.id, existing.slotId.mealType);
             claimResult.claimed[idx] = { slotId: existing.slotId, candidate: swapResult.candidate, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, swapResult.candidate.ingredients);
             // A swapped recipe invalidates any add-on sized for the meal

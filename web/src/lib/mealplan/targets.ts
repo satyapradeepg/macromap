@@ -72,6 +72,40 @@ export function mealTypeToSpoonacularType(mealType: MealType): string {
   return mealType === "breakfast" ? "breakfast" : "main course";
 }
 
+// Generation-scoped "known-bad" recipe tracking (2026-07-28) -- once a real
+// recipe is removed from a slot for being a confirmed bad fit (a low
+// macroDeviationScore-improvement swap, a null-classifyTier bad-fit-swap
+// repair, etc.), nothing previously stopped it from being silently pulled
+// back in for a DIFFERENT slot later in the same generation by a different
+// pass -- live-confirmed: a recipe correctly removed by orchestrate.ts's
+// bad-fit-swap pass got reintroduced minutes later by the separate plan-
+// repair pass, which (correctly, by design) bypasses the macro-fit check
+// for diet_violation reasons and had no memory of what was already rejected.
+//
+// Keyed by (id, mealTypeToSpoonacularType(mealType)), NOT id alone -- lunch
+// and dinner share "main course" (line 72 above), but breakfast is its own
+// Spoonacular type, so the same recipe id can legitimately be a bad fit for
+// one meal type's target and a genuinely fine fit for the other's later in
+// the same week. Excluding by bare id would lose that legitimate match.
+export function markKnownBad(knownBad: Set<string>, id: number, mealType: MealType): void {
+  // Synthetic AI-composed/composed-snack ids are negative by convention
+  // (see orchestrate.ts's syntheticAiMealId/syntheticSnackId) -- never a
+  // real Spoonacular recipe that could be reconsidered from the cache, so
+  // never worth tracking here.
+  if (id <= 0) return;
+  knownBad.add(`${id}:${mealTypeToSpoonacularType(mealType)}`);
+}
+
+export function knownBadIdsFor(mealType: MealType, knownBad: Set<string>): number[] {
+  const cls = mealTypeToSpoonacularType(mealType);
+  const ids: number[] = [];
+  for (const key of knownBad) {
+    const [idStr, keyClass] = key.split(":");
+    if (keyClass === cls) ids.push(Number(idStr));
+  }
+  return ids;
+}
+
 // Realistic per-meal-type share of the daily total (Epic E2 rework),
 // replacing an even 1/3-1/3-1/3 split. Not a dietitian-prescribed formula —
 // there isn't one; total daily macros and reasonably even protein
