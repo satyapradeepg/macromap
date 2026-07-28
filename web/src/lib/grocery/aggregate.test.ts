@@ -310,6 +310,50 @@ describe("aggregateGroceryList", () => {
       for (const line of merged) expect(line.needsManualCombine).toBe(true);
     });
 
+    // Bug fix 2026-07-27, found live via groceryCritic.ts's first real
+    // trial: a real generation had "clove"/"cloves" and "serving"/
+    // "servings" garlic/maple-syrup/garnish lines for the SAME ingredient
+    // id never merging -- singular/plural spelling of the identical unit,
+    // not a real size difference like "medium" vs "large" (still correctly
+    // unmerged just above) or a genuinely different word like "clove" vs
+    // "slice" (still correctly unmerged above too, since their stems differ).
+    it("merges singular/plural spelling of the same 'other' unit (e.g. clove vs cloves)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "garlic", totalAmount: 0.98, unit: "clove", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "garlic", totalAmount: 1.6, unit: "cloves", needsManualCombine: true, sourceCount: 1 },
+      ];
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 2.58, needsManualCombine: false });
+    });
+
+    it("merges singular/plural spelling the other way around too (e.g. servings vs serving)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "maple syrup", totalAmount: 1.1, unit: "servings", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "maple syrup", totalAmount: 0.77, unit: "serving", needsManualCombine: true, sourceCount: 1 },
+      ];
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 1.87, needsManualCombine: false });
+    });
+
+    it("deliberately narrow: a single trailing-s strip does not cover '-es' plurals (e.g. bunch vs bunches)", () => {
+      // Scoped to the actually-observed live bug (a simple trailing "s",
+      // e.g. "clove"/"cloves", "serving"/"servings") rather than a full
+      // English-pluralization rule set -- "bunches" stems to "bunche", not
+      // "bunch", so this stays unresolved just like "clove" vs "slice"
+      // does. A real but narrower gap than the one being fixed here; widen
+      // only if live data shows this specific shape actually recurring.
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "kale", totalAmount: 1, unit: "bunch", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "kale", totalAmount: 2, unit: "bunches", needsManualCombine: true, sourceCount: 1 },
+      ];
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
     it("passes single-unit lines through unchanged", () => {
       const lines = buildGroceryLines([[slotIngredient({ id: 1, metricAmount: 200 })]], []);
       expect(mergeConvertibleLines(lines, new Map())).toEqual(lines);

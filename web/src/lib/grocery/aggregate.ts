@@ -270,6 +270,16 @@ function normalizeUnit(unit: string): string {
   return unit.toLowerCase().trim();
 }
 
+// Strips a single trailing "s" so mergeConvertibleLines' "other"-category
+// reconciliation (below) can recognize "clove"/"cloves", "serving"/
+// "servings" etc. as the same real unit -- never applied to a blank unit
+// (already handled separately) or used to compare two DIFFERENT words
+// (e.g. "clove" vs "slice" still correctly stay distinct, since their
+// stems differ too).
+function stemOtherUnit(normalizedUnit: string): string {
+  return normalizedUnit.endsWith("s") && normalizedUnit.length > 1 ? normalizedUnit.slice(0, -1) : normalizedUnit;
+}
+
 // Spoonacular's own extendedIngredients[].id is passed through unfiltered
 // by spoonacular.ts's mapToCandidate -- and it returns a non-positive
 // placeholder (confirmed live 2026-07-25: id -1 for "mayonaisse", a
@@ -481,9 +491,22 @@ export function mergeConvertibleLines(
         // "large") are deliberately NOT assumed equivalent -- a real size
         // difference -- and fall through to unresolved, same as "clove"
         // vs "slice" always has.
-        const targetIsBlank = normalizeUnit(target.unit) === "";
-        const lineIsBlank = normalizeUnit(line.unit) === "";
+        const targetNorm = normalizeUnit(target.unit);
+        const lineNorm = normalizeUnit(line.unit);
+        const targetIsBlank = targetNorm === "";
+        const lineIsBlank = lineNorm === "";
         if (targetIsBlank !== lineIsBlank) {
+          convertedAmount = line.totalAmount;
+        } else if (!targetIsBlank && !lineIsBlank && stemOtherUnit(targetNorm) === stemOtherUnit(lineNorm)) {
+          // Singular/plural spelling of the identical unit word (e.g.
+          // "clove" vs "cloves", "serving" vs "servings") -- found live
+          // 2026-07-27 (groceryCritic.ts's first real trial): a genuine 1:1
+          // unit, not a size difference like "medium" vs "large" or a
+          // different word entirely like "clove" vs "slice" (both still
+          // correctly fall through to unresolved below, since their stems
+          // differ). Same singular/plural asymmetry class already fixed
+          // for the dislike/allergy word-boundary matcher this same
+          // session -- this is the grocery-aggregation sibling of that fix.
           convertedAmount = line.totalAmount;
         }
       } else if (lineCategory === targetCategory) {
