@@ -12,7 +12,16 @@ import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
 import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
-import { buildGroceryLines, type AddonEntry, type SlotIngredientEntry } from "@/lib/grocery/aggregate";
+import {
+  buildGroceryLines,
+  mergeConvertibleLines,
+  pendingCrossCategoryConversions,
+  conversionKey,
+  type AddonEntry,
+  type SlotIngredientEntry,
+  type ResolvedLineConversion,
+} from "@/lib/grocery/aggregate";
+import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
 import { checkGroceryList } from "@/lib/grocery/groceryCritic";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
@@ -116,7 +125,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
     });
 
     // One-shot grocery-list sanity check (groceryCritic.ts, 2026-07-27) —
-    // over the plan's OWN raw ingredient output (before pantry/pricing/aisle
+    // over the plan's OWN ingredient output (before pantry/pricing/aisle
     // resolution, which changes independently of the plan and doesn't need
     // a fresh check on every view — see that file's header comment for why
     // this only runs here, at generation time, never on the grocery list's
@@ -135,7 +144,29 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         ? [{ ingredientId: s.addon.spoonacularIngredientId, ingredientName: s.addon.ingredientName, amountG: s.addon.amountG }]
         : [],
     );
-    const rawGroceryLines = buildGroceryLines(slotIngredientLists, addonEntries);
+    const splitGroceryLines = buildGroceryLines(slotIngredientLists, addonEntries);
+    // Found live 2026-07-27 (this feature's own first real trial): checking
+    // buildGroceryLines' output directly, before reconciling the same-
+    // ingredient splits it deliberately leaves apart on a unit mismatch,
+    // produced a false positive -- e.g. flagging "1.36 small banana" /
+    // "1.54 whole banana" as an unmerged duplicate, when two DIFFERENT
+    // named "other"-category descriptors are a real, by-design non-merge
+    // (see aggregate.ts's mergeConvertibleLines, same precedent as "medium"
+    // vs "large" onion), and flagging a weight-vs-count split that would
+    // have resolved fine via a real cross-category conversion rate. Running
+    // the SAME reconciliation groceryData.ts's getGroceryList performs
+    // (minus pantry/pricing/aisle, irrelevant to this check) before the
+    // critique ever sees the list fixes this -- the critique now only ever
+    // sees what a real shopper would, not an intermediate aggregation step.
+    const pendingConversions = pendingCrossCategoryConversions(splitGroceryLines);
+    const crossCategoryRates = new Map<string, ResolvedLineConversion>();
+    await Promise.all(
+      pendingConversions.map(async ({ ingredientId, name, sourceUnit, targetUnit }) => {
+        const resolved = await resolveConversionRateWithSource(name, sourceUnit, targetUnit);
+        if (resolved) crossCategoryRates.set(conversionKey(ingredientId, sourceUnit, targetUnit), resolved);
+      }),
+    );
+    const rawGroceryLines = mergeConvertibleLines(splitGroceryLines, crossCategoryRates);
     const groceryNotes = await checkGroceryList(
       rawGroceryLines.map((l) => ({
         name: l.name,
