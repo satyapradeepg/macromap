@@ -1256,7 +1256,15 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // claimed (see the bad-fit pass below) -- distinguishes "genuinely
   // blocked, add a new claim" from "already claimed, only replace if
   // AI-compose demonstrably improves on it" in the result-handling below.
-  const aiComposeBudget = createAiComposeBudget();
+  // Real count of blocked recipe slots this generation (free to compute —
+  // no API cost), feeding the adaptive budget below. Computed upfront, not
+  // incremented inside the loop below, so a mid-loop break from budget
+  // exhaustion can't undercount the slots never even reached.
+  const blockedRecipeSlotCount = [...blockedHints.keys()].filter((key) => {
+    const slotId = allSlots.find((s) => slotKey(s) === key);
+    return slotId && slotMechanism(slotId.mealType) === "recipe";
+  }).length;
+  const aiComposeBudget = createAiComposeBudget(blockedRecipeSlotCount);
   const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number }> = [];
   // Genuinely blocked slots draw from their own existing, already-tuned
   // budget, unchanged from before this pass existed.

@@ -60,13 +60,23 @@ export function createRetryBudget(total = RECIPE_ACTION_COST * 3): RetryBudget {
 // A separate, whole-generation (not per-day) budget for the AI composition
 // fallback — it only ever applies to slots still genuinely blocked after
 // the entire existing recipe-search + reconciliation pipeline has already
-// run, which is rare (a handful of slots at most in real plans seen so
-// far), so it doesn't need day-scoping the way reconciliation does. Sized
-// to attempt up to 10 blocked slots in one generation — comfortably above
-// every real blocked-count observed live so far (max 10), not an
-// arbitrary round number.
-export function createAiComposeBudget(): RetryBudget {
-  return { remaining: AI_COMPOSE_ACTION_COST * 10 };
+// run, so it doesn't need day-scoping the way reconciliation does.
+//
+// Adaptive since 2026-07-28 (was a flat 10 slots, sized off "comfortably
+// above every real blocked-count observed live so far" — that assumption
+// broke for a diet-restricted profile, same bug class as
+// createBadFitSwapBudget below, fixed the same session on that sibling
+// budget but missed here). Live-confirmed on a vegan+nut+soy-allergy
+// profile: 16 real blocked recipe slots in one week, but the flat 10-slot
+// cap let only 10 of them even attempt AI-compose — the other 6 never got
+// a try, not because AI-compose failed for them, purely because the
+// budget ran out first. `count` is the REAL number of blocked recipe
+// slots found this generation (free to compute, no API cost), same
+// "scale to the actual problem" fix as the sibling budget. Clamped at
+// RECIPE_SLOTS_PER_WEEK as a defensive ceiling, not because that many is
+// expected in practice.
+export function createAiComposeBudget(count: number): RetryBudget {
+  return { remaining: AI_COMPOSE_ACTION_COST * Math.min(count, RECIPE_SLOTS_PER_WEEK) };
 }
 
 // Bad-fit-but-claimed swap pass (2026-07-21 spec, widened AI-compose

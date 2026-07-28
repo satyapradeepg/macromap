@@ -60,6 +60,33 @@ describe("createSelectionAddonBudget", () => {
   });
 });
 
+// Adaptive since 2026-07-28 (was a flat 10 slots) -- live-confirmed a
+// vegan+nut+soy-allergy profile had 16 real blocked recipe slots in one
+// week, and the old flat budget only let 10 of them even attempt
+// AI-compose; the other 6 never got a try purely because the budget ran
+// out first, not because AI-compose failed for them.
+describe("createAiComposeBudget", () => {
+  it("sizes to exactly cover the real count of blocked recipe slots found this generation", () => {
+    const budget = createAiComposeBudget(16);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(16);
+  });
+
+  it("allocates zero budget when nothing is blocked, rather than wasting a flat allowance", () => {
+    const budget = createAiComposeBudget(0);
+    expect(budget.remaining).toBe(0);
+    expect(trySpend(budget, AI_COMPOSE_ACTION_COST)).toBe(false);
+  });
+
+  it("clamps at RECIPE_SLOTS_PER_WEEK (21) even if an implausibly large count is passed", () => {
+    const budget = createAiComposeBudget(30);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(21);
+  });
+});
+
 // Found live 2026-07-21: sharing createAiComposeBudget between the
 // genuinely-blocked pass and the newer bad-fit-but-claimed pass let a
 // profile with many blocked slots exhaust the whole thing before the
@@ -73,7 +100,7 @@ describe("createSelectionAddonBudget", () => {
 // old flat budget only covered 2 of them.
 describe("createBadFitSwapBudget", () => {
   it("is a separate budget from createAiComposeBudget, not shared or carved out of it", () => {
-    const aiComposeBudget = createAiComposeBudget();
+    const aiComposeBudget = createAiComposeBudget(10);
     const badFitBudget = createBadFitSwapBudget(2);
     // Draining the blocked-slot budget entirely must not affect the
     // bad-fit budget at all -- they're independent objects.
