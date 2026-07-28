@@ -439,10 +439,10 @@ function MealCard({
             {slot.matchLabel && <p className="mt-0.5 text-xs text-muted">{slot.matchLabel}</p>}
 
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <MacroPill>{Math.round(slot.calories)} cal</MacroPill>
-              <MacroPill>{Math.round(slot.proteinG)}g protein</MacroPill>
-              <MacroPill>{Math.round(slot.carbsG)}g carbs</MacroPill>
-              <MacroPill>{Math.round(slot.fatG)}g fat</MacroPill>
+              <MacroPill>{Math.round(slot.calories + (slot.addon?.caloriesKcal ?? 0))} cal</MacroPill>
+              <MacroPill>{Math.round(slot.proteinG + (slot.addon?.proteinG ?? 0))}g protein</MacroPill>
+              <MacroPill>{Math.round(slot.carbsG + (slot.addon?.carbsG ?? 0))}g carbs</MacroPill>
+              <MacroPill>{Math.round(slot.fatG + (slot.addon?.fatG ?? 0))}g fat</MacroPill>
             </div>
 
             {slot.isComposed ? (
