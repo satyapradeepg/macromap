@@ -135,13 +135,37 @@ const MIN_INGREDIENT_AMOUNT_G = 10;
 // rounding down to the nearest 5g and skipping it entirely if that rounds
 // below a sensible minimum or above a realistic serving — same pattern as
 // addon.ts's buildAddonForSlot.
+//
+// fatBudgetG (2026-07-28): an optional secondary cap, passed only for the
+// PROTEIN and CARB roles (never the fat role's own call, which would be
+// circular) -- a role ingredient chosen purely for ITS macro can carry a
+// wildly disproportionate amount of fat as a side effect (e.g. hemp seeds,
+// a "protein" option, is 45g fat/100g vs 37g protein/100g -- worse than
+// every other protein-role option by 15-34x). Sizing that ingredient to
+// its own protein target alone could blow the whole slot's fat budget
+// before the fat role ever gets a turn, live-confirmed to collapse a
+// snack to one wildly fat-heavy ingredient. Deliberately NOT extended to
+// calories or protein: capping the FAT role itself by remaining calories
+// undershoots the fat target (verified against this file's own tests --
+// that's the fat role's whole job, not something to additionally cap),
+// and capping by remaining protein punishes the carb role for incidental
+// protein the protein role has already, correctly, mostly used up. Fat is
+// the one macro with no other safety net anywhere in the pipeline
+// (protein has orchestrate.ts's protein-floor enforcement; carbs are
+// cheaply fixed by the day-level addon system since they're an
+// "increase" gap) -- so fat is the one worth hard-capping here.
 function sizeIngredientForGap(
   lookup: IngredientMacroLookup,
   macroPer100g: number,
   gapNeeded: number,
+  fatBudgetG?: number,
 ): ComposedIngredient | null {
   if (macroPer100g <= 0 || gapNeeded <= 0) return null;
-  const amountG = Math.floor(((gapNeeded / macroPer100g) * 100) / 5) * 5;
+  let amountG = Math.floor(((gapNeeded / macroPer100g) * 100) / 5) * 5;
+  if (fatBudgetG !== undefined && lookup.fatGPer100g > 0) {
+    const maxByFat = Math.floor(((Math.max(fatBudgetG, 0) / lookup.fatGPer100g) * 100) / 5) * 5;
+    amountG = Math.min(amountG, maxByFat);
+  }
   if (amountG < MIN_INGREDIENT_AMOUNT_G) return null;
   const maxAmountG = MAX_REALISTIC_AMOUNT_G[lookup.name] ?? DEFAULT_MAX_REALISTIC_AMOUNT_G;
   if (amountG > maxAmountG) return null;
@@ -176,7 +200,7 @@ export function composeSnack(
   const proteinName = pickFromPool("protein", varietySeed, pool, ctx);
   const proteinLookup = proteinName ? pool[proteinName] : undefined;
   const proteinItem = proteinLookup
-    ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG)
+    ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG, remainingFat)
     : null;
   if (proteinItem) {
     ingredients.push(proteinItem);
@@ -186,7 +210,9 @@ export function composeSnack(
 
   const carbName = pickFromPool("carb", varietySeed, pool, ctx);
   const carbLookup = carbName ? pool[carbName] : undefined;
-  const carbItem = carbLookup ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs) : null;
+  const carbItem = carbLookup
+    ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs, remainingFat)
+    : null;
   if (carbItem) {
     ingredients.push(carbItem);
     remainingFat -= carbItem.fatG;

@@ -78,7 +78,13 @@ describe("composeSnack", () => {
 
     it("still sizes the same low-density ingredient normally when the gap is realistic", () => {
       const orangeOnlyPool = { orange: pool.orange };
-      const target = { calories: 0, proteinG: 0, carbsG: 20, fatG: 0 };
+      // fatG: 5, not 0 -- a real generation's snack target is never
+      // literally 0 fat (targets.ts's perMealTarget is always a positive
+      // share of the daily target); a hard 0 would now mean "zero fat
+      // tolerance" under the new fat-budget cap (2026-07-28) and reject
+      // this low-fat ingredient for the wrong reason. 5g is comfortably
+      // non-binding against orange's 0.12g fat/100g at this carb target.
+      const target = { calories: 0, proteinG: 0, carbsG: 20, fatG: 5 };
       const snack = composeSnack(target, orangeOnlyPool, 0);
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["orange"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(250);
@@ -91,17 +97,57 @@ describe("composeSnack", () => {
       // shape (this is the whole reason the bound is per-ingredient, not
       // per-role: 65g of protein powder is ~52g protein, an unrealistic
       // single-snack amount, unlike 65g of a low-density food).
-      const target = { calories: 0, proteinG: 55, carbsG: 0, fatG: 0 };
+      // fatG: 10, not 0 -- see the sibling test above for why a literal 0
+      // is unrealistic and would trip the new fat-budget cap instead of
+      // the realistic-serving cap this test means to isolate. 10g is
+      // comfortably non-binding against protein powder's 5g fat/100g here
+      // (would allow up to 200g before the fat cap binds, far above 65g).
+      const target = { calories: 0, proteinG: 55, carbsG: 0, fatG: 10 };
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients).toHaveLength(0);
     });
 
     it("still sizes protein powder normally within its own tighter cap", () => {
       const proteinPowderOnlyPool = { "protein powder": pool["protein powder"] };
-      const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 0 };
+      const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 10 };
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["protein powder"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
+    });
+  });
+
+  // Fat-budget cap (2026-07-28): live-found via a real "maintain" profile
+  // that hemp seeds -- a PROTEIN-role option -- has a far worse fat:protein
+  // ratio (1.22:1) than every other protein-role ingredient (0.036-0.39:1).
+  // Sizing it purely to its own protein target could blow the whole slot's
+  // fat budget before the fat role ever got a turn, collapsing a snack to
+  // one wildly fat-heavy ingredient (confirmed: 50g hemp seeds delivered
+  // 22.5g fat against a 12.3g slot fat budget).
+  describe("fat-budget cap on the protein/carb roles (2026-07-28)", () => {
+    const hempSeeds: IngredientMacroLookup = {
+      id: 93602,
+      name: "hemp seeds",
+      caloriesPer100g: 580,
+      proteinGPer100g: 37,
+      carbsGPer100g: 7,
+      fatGPer100g: 45,
+      estimatedCostCentsPer100g: 339.29,
+    };
+
+    it("caps a fat-disproportionate protein-role ingredient by the slot's fat budget instead of sizing to its own protein target alone", () => {
+      const hempSeedsOnlyPool = { "hemp seeds": hempSeeds };
+      // Real profile-1 snack1 target (16% share of 2304/116/287/77).
+      const target = { calories: 368.64, proteinG: 18.56, carbsG: 45.92, fatG: 12.32 };
+      const snack = composeSnack(target, hempSeedsOnlyPool, 4); // seed 4 -> hemp seeds (the live-found case)
+
+      expect(snack.ingredients).toHaveLength(1);
+      const hemp = snack.ingredients[0];
+      expect(hemp.ingredientName).toBe("hemp seeds");
+      // Capped by the 12.32g fat budget (25g, not the 50g the protein
+      // target alone would have sized it to), landing at or under target
+      // rather than nearly double it.
+      expect(hemp.amountG).toBe(25);
+      expect(hemp.fatG).toBeLessThanOrEqual(target.fatG);
     });
   });
 
