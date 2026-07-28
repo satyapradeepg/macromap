@@ -352,6 +352,15 @@ export function PlanBoard({
           </span>
         </summary>
         <div className="border-t border-border p-4 pt-3">
+          {plan?.groceryNotes && (
+            // groceryCritic.ts's one-shot sanity check, computed once at
+            // generation time -- won't reflect a pantry change or swap made
+            // since then (same accepted staleness tradeoff as the weekly
+            // assessment above).
+            <p className="mb-3 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted">
+              {plan.groceryNotes}
+            </p>
+          )}
           <GroceryList lines={groceryList} tier={tier} />
         </div>
       </details>

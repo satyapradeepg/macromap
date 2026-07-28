@@ -12,6 +12,8 @@ import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
 import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
+import { buildGroceryLines, type AddonEntry, type SlotIngredientEntry } from "@/lib/grocery/aggregate";
+import { checkGroceryList } from "@/lib/grocery/groceryCritic";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -113,6 +115,36 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       pantryItems,
     });
 
+    // One-shot grocery-list sanity check (groceryCritic.ts, 2026-07-27) —
+    // over the plan's OWN raw ingredient output (before pantry/pricing/aisle
+    // resolution, which changes independently of the plan and doesn't need
+    // a fresh check on every view — see that file's header comment for why
+    // this only runs here, at generation time, never on the grocery list's
+    // own hot read path). Best-effort: never throws, so a failure here
+    // never blocks the real plan/grocery-list this pass runs alongside.
+    const slotIngredientLists: SlotIngredientEntry[][] = result.slots.map((s) =>
+      s.candidate.ingredients.map((i) => ({
+        id: i.id,
+        name: i.name,
+        metricAmount: i.metricAmount,
+        metricUnit: i.metricUnit,
+      })),
+    );
+    const addonEntries: AddonEntry[] = result.slots.flatMap((s) =>
+      s.addon
+        ? [{ ingredientId: s.addon.spoonacularIngredientId, ingredientName: s.addon.ingredientName, amountG: s.addon.amountG }]
+        : [],
+    );
+    const rawGroceryLines = buildGroceryLines(slotIngredientLists, addonEntries);
+    const groceryNotes = await checkGroceryList(
+      rawGroceryLines.map((l) => ({
+        name: l.name,
+        totalAmount: l.totalAmount,
+        unit: l.unit,
+        needsManualCombine: l.needsManualCombine,
+      })),
+    );
+
     const { data: insertedPlan, error: planError } = await supabase
       .from("meal_plans")
       .insert({
@@ -128,6 +160,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         reconciliation_status: result.reconciliationStatus,
         retry_queries_used: result.retryQueriesUsed,
         weekly_assessment: result.weeklyAssessment,
+        grocery_notes: groceryNotes,
       })
       .select()
       .single();
@@ -219,6 +252,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       generatedAt: insertedPlan.generated_at,
       reconciliationStatus: result.reconciliationStatus,
       weeklyAssessment: result.weeklyAssessment,
+      groceryNotes,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
       slots: result.slots.map((s) => {

@@ -90,6 +90,13 @@ export interface PlanView {
   // field existed, or where the critique itself was skipped/failed (no
   // ANTHROPIC_API_KEY, or a recoverable API error) — absence isn't an error.
   weeklyAssessment: string | null;
+  // groceryCritic.ts's one-shot sanity check over this plan's OWN
+  // aggregated ingredient list, computed once at generation time (not
+  // refreshed by pantry changes/swaps afterward — a real, accepted
+  // staleness tradeoff, same as weeklyAssessment above). Null in the
+  // common case (nothing looked wrong), on any plan generated before this
+  // field existed, or wherever the check itself was skipped/failed.
+  groceryNotes: string | null;
   slots: PlanSlotView[];
   // Only populated on a freshly-generated plan (ephemeral, from the action's
   // return value) — blocked slots have no meal_plan_slots row, so a plan
@@ -128,6 +135,7 @@ export async function getMostRecentPlan(
     generatedAt: plan.generated_at,
     reconciliationStatus: plan.reconciliation_status,
     weeklyAssessment: plan.weekly_assessment,
+    groceryNotes: plan.grocery_notes,
     weeklyTarget: {
       calories: plan.weekly_target_calories,
       proteinG: plan.weekly_target_protein_g,
