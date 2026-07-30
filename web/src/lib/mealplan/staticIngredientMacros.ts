@@ -437,7 +437,13 @@ export type PrepNoteContext = "addon" | "snack";
 export function prepNoteFor(
   ingredientName: string,
   context: PrepNoteContext,
-  hasOtherTrackedIngredients: boolean,
+  // Names of the OTHER ingredients already in this same snack/addon slot
+  // (empty if this is the only one) -- used to name a concrete referent
+  // instead of a vague "the rest of this snack" (2026-07-30: with oats/
+  // edamame added to the pool, a snack can now have two ingredients that
+  // both carry a note, so "the rest" can mean exactly one other named
+  // ingredient, not an ambiguous remainder).
+  otherIngredientNames: string[],
 ): string | null {
   const name = ingredientName.toLowerCase().trim();
 
@@ -470,7 +476,9 @@ export function prepNoteFor(
     // An addon always sits next to a real recipe slot, so there's always
     // something already-tracked to sprinkle it over.
     if (context === "addon") return "sprinkle over your meal";
-    if (hasOtherTrackedIngredients) return "sprinkle over the rest of this snack";
+    if (otherIngredientNames.length > 0) {
+      return `sprinkle over the ${otherIngredientNames.join(" and ")}`;
+    }
     // Standalone in a composed snack (the other 2 roles didn't resolve) --
     // chia genuinely gels in plain water (real chia-pudding prep, still
     // zero extra macros); hemp seeds have no equivalent zero-macro

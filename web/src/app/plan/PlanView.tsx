@@ -43,20 +43,23 @@ function formatServings(n: number): string {
   return `${rounded} ${rounded === 1 ? "serving" : "servings"}`;
 }
 
-// Composed snacks default to "Combine and eat — no cooking", but a handful
-// of pool ingredients (protein powder, chia/hemp seeds) aren't realistically
-// eaten as a bowl of dry powder/seeds -- swap in the specific prep note for
-// whichever ingredient needs one instead. At most one ingredient per snack
-// ever carries a note (protein-powder variants and chia/hemp seeds each
-// occupy a different, mutually exclusive composeSnack role), so there's
-// never a conflict between two notes.
+// Each pool ingredient's own prep note (if any) is now rendered inline next
+// to that ingredient (see the composedIngredients list in MealCard), not
+// dumped into a single bottom-of-card line -- with oats/edamame added to the
+// pool (2026-07-30) a snack can have TWO ingredients that each carry a note
+// (e.g. "10g oats — cook with water as oatmeal" AND "15g hemp seeds —
+// sprinkle over the oats"), so a footer that could only surface one note
+// silently dropped the other. This footer is now only the true "nothing
+// needs prep" fallback -- and specifically must NOT fire when any ingredient
+// already has a note, since some of those notes (oats) mean cooking IS
+// involved, contradicting a blanket "no cooking" claim.
 function composedSnackFooter(ingredients: ComposedIngredientView[] | null): string {
-  const hasOtherTrackedIngredients = (ingredients?.length ?? 0) > 1;
-  for (const ingredient of ingredients ?? []) {
-    const note = prepNoteFor(ingredient.name, "snack", hasOtherTrackedIngredients);
-    if (note) return `${note} — no cooking`;
-  }
-  return "Combine and eat — no cooking";
+  const list = ingredients ?? [];
+  const anyNote = list.some((ingredient, i) => {
+    const otherNames = list.filter((_, j) => j !== i).map((o) => o.name);
+    return prepNoteFor(ingredient.name, "snack", otherNames) !== null;
+  });
+  return anyNote ? "" : "Combine and eat — no cooking";
 }
 
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
@@ -447,9 +450,24 @@ function MealCard({
 
             {slot.isComposed ? (
               slot.composedIngredients && (
-                <p className="mt-2 text-xs text-muted">
-                  {slot.composedIngredients.map((i) => `${Math.round(i.amountG)}g ${i.name}`).join(" + ")}
-                </p>
+                <div className="mt-2 space-y-0.5">
+                  {slot.composedIngredients.map((ingredient, i) => {
+                    const otherNames = slot.composedIngredients!
+                      .filter((_, j) => j !== i)
+                      .map((other) => other.name);
+                    // AI-composed dishes' ingredients (e.g. "diced russet
+                    // potatoes") never match the fixed pool list below, so
+                    // this is a no-op for them -- only real snack-pool
+                    // ingredients (oats, chia/hemp seeds, etc.) get a note.
+                    const note = prepNoteFor(ingredient.name, "snack", otherNames);
+                    return (
+                      <p key={`${ingredient.name}-${i}`} className="text-xs text-muted">
+                        {`${Math.round(ingredient.amountG)}g ${ingredient.name}`}
+                        {note ? ` — ${note}` : ""}
+                      </p>
+                    );
+                  })}
+                </div>
               )
             ) : (
               slot.servings > 1 && (
@@ -476,7 +494,7 @@ function MealCard({
               <p className="mt-1 text-xs text-accent-2">
                 {`+ ${Math.round(slot.addon.amountG)}g ${slot.addon.ingredientName} to help hit this week's targets (${Math.round(slot.addon.caloriesKcal)} cal)`}
                 {(() => {
-                  const note = prepNoteFor(slot.addon.ingredientName, "addon", false);
+                  const note = prepNoteFor(slot.addon.ingredientName, "addon", []);
                   return note ? ` — ${note}` : "";
                 })()}
               </p>
