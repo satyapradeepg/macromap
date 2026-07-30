@@ -249,6 +249,57 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsGluten: false,
     veganCompliant: true,
   },
+
+  // Added 2026-07-30 (15-profile comprehensive live audit, engine-comprehensive-
+  // test-2026-07-30.md): the carb role's original 3-option pool (banana/apple/
+  // orange) was never widened in the July 15 2026 audit round that widened
+  // protein/fat to 5 each -- found live that this is a real, structural gap,
+  // not just an oversight. Banana/apple/orange top out at 33-57g deliverable
+  // carbs within their own realistic-portion caps (MAX_REALISTIC_AMOUNT_G
+  // below), but a snack's own carb target regularly needs 68g+ for a
+  // higher-calorie profile (live-confirmed: a bulk-goal profile's snack1
+  // needed 68.1g carbs, and EVERY fruit option would have needed 300-580g to
+  // close it -- all three silently return null, since sizeIngredientForGap
+  // rejects any amount over its realistic cap). This is what actually drove
+  // the "fat looks like it's overshooting" appearance found in the audit: fat
+  // wasn't overshooting its own target, carbs (and therefore total calories)
+  // were undershooting far more severely, inflating fat's apparent share.
+  // Real data, fetched live the same way the original 9 and the July 15
+  // 5-widening were (search + information, amount=100/unit=grams).
+  oats: {
+    id: 8120,
+    name: "oats",
+    caloriesPer100g: 379,
+    proteinGPer100g: 13.2,
+    carbsGPer100g: 67.7,
+    fatGPer100g: 6.52,
+    estimatedCostCentsPer100g: 39.29,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    // Pure oats are naturally gluten-free, but commercial oats are routinely
+    // cross-contaminated with wheat during farming/milling unless explicitly
+    // "certified gluten-free" -- this app has no way to distinguish that at
+    // the ingredient-name level, so conservatively tagged true, same
+    // "ambiguous -> excluded" default this file already documents for
+    // protein powder's dairy/soy tagging above.
+    containsGluten: true,
+    veganCompliant: true,
+  },
+  dates: {
+    id: 9087,
+    name: "dates",
+    caloriesPer100g: 282,
+    proteinGPer100g: 2.45,
+    carbsGPer100g: 75.0,
+    fatGPer100g: 0.39,
+    estimatedCostCentsPer100g: 114.29,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
 };
 
 export function lookupIngredientMacrosStatic(query: string): StaticIngredientMacro | null {
@@ -256,7 +307,7 @@ export function lookupIngredientMacrosStatic(query: string): StaticIngredientMac
 }
 
 // Per-ingredient realistic-portion ceiling, shared by every path that sizes
-// one of this fixed 13-ingredient pool to close a macro gap (snackComposition.ts's
+// one of this fixed 15-ingredient pool to close a macro gap (snackComposition.ts's
 // composeSnack, addon.ts's buildAddonForSlot) -- moved here from
 // snackComposition.ts (2026-07-28) so both consumers read one table instead
 // of risking two definitions drifting apart.
@@ -268,7 +319,7 @@ export function lookupIngredientMacrosStatic(query: string): StaticIngredientMac
 // like aiMealComposition.ts's PORTION_BOUNDS_G -- that file has to use one
 // generic bound per role because it's grounding arbitrary LLM-proposed
 // ingredient names it can't enumerate in advance. This pool is the opposite
-// case: a small, fully known, fixed set of 13 real foods, and macro density
+// case: a small, fully known, fixed set of 15 real foods, and macro density
 // varies too widely WITHIN a role for one shared ceiling to work -- protein
 // powder (83g protein/100g) and greek yogurt (10g protein/100g) are both
 // "protein role," but a per-role max loose enough to allow a normal ~200g
@@ -299,13 +350,20 @@ export const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
   walnuts: 60,
   "sunflower seed butter": 50,
   "chia seeds": 40,
+  // Added with the 2026-07-30 carb-pool widening. 150g dry oats is a large
+  // but real single-serving bowl of oatmeal (delivers up to ~101g carbs --
+  // comfortably covers the ~68g gap that motivated adding it, without
+  // waving through an absurd amount). 120g dates is roughly 7-8 medjool
+  // dates, a generous but real handful (up to ~90g carbs).
+  oats: 150,
+  dates: 120,
 };
 // Safety net for a future pool addition someone forgets to add a bound for
 // above -- fails closed (a real, if conservative, cap) rather than silently
 // reproducing this exact gap for the new ingredient.
 export const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
 
-// Display-only realism note (2026-07-27): 4 of the 13 pool ingredients
+// Display-only realism note (2026-07-27, extended 2026-07-30 for oats): 5 of the 15 pool ingredients
 // aren't things a person actually eats standalone in the sized amount --
 // protein powder/pea protein powder need a liquid, chia/hemp seeds are
 // normally a topping/mix-in, not a bowl of dry seeds. The macros are real
@@ -331,6 +389,15 @@ export function prepNoteFor(
     // Water only, never offered alongside milk -- milk carries real
     // macros that aren't part of the sized/tracked amount.
     return "mix with water";
+  }
+
+  // Added alongside the 2026-07-30 carb-pool widening -- a sized amount of
+  // dry oats (e.g. 100g+) isn't eaten standalone any more than protein
+  // powder is; real prep is cooking it into oatmeal with water, same
+  // zero-extra-macro note pattern as protein powder above. Dates need no
+  // note -- eaten standalone like the existing banana/apple/orange options.
+  if (name === "oats") {
+    return "cook with water as oatmeal";
   }
 
   if (name === "chia seeds" || name === "hemp seeds") {

@@ -51,9 +51,27 @@ export interface IngredientMacroLookup {
 // 4). Added 2 per starved role, not 1 -- a single addition leaves exactly
 // 1 safe option for this profile, the same "collapses to 1, no rotation"
 // failure already found and fixed for pantry/budget preference.
+//
+// carb widened from 3 to 5 (2026-07-30, 15-profile comprehensive live
+// audit): this role was never widened in the July 15 pass above even
+// though it has the exact same shape of problem, just density-driven
+// instead of safety-driven -- banana/apple/orange can deliver at most
+// 33-57g carbs each within their own realistic-portion cap
+// (MAX_REALISTIC_AMOUNT_G), but a snack's own carb target regularly needs
+// 68g+ for a higher-calorie profile. Live-confirmed: a bulk-goal profile's
+// snack target needed 68.1g carbs, and all three fruits would have needed
+// 300-580g to close it -- every one silently returns null (see
+// sizeIngredientForGap's realistic-cap rejection below), so the carb role
+// (and the calories that would have come with it) just vanishes from the
+// snack. This is what actually produced the audit's "fat looks like it's
+// overshooting its target" finding: fat wasn't overshooting, carbs (and
+// total calories) were undershooting far more severely, inflating fat's
+// share of what little the snack actually delivered. oats/dates chosen for
+// being carb-dense (67.7g/75g per 100g respectively) real whole foods
+// genuinely eaten as snacks, not just theoretically carb-heavy.
 export const INGREDIENT_POOL: Record<MacroRole, string[]> = {
   protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds"],
-  carb: ["banana", "apple", "orange"],
+  carb: ["banana", "apple", "orange", "oats", "dates"],
   fat: ["almonds", "peanut butter", "walnuts", "sunflower seed butter", "chia seeds"],
 };
 

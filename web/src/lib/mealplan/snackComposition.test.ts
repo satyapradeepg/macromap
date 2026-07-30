@@ -20,6 +20,8 @@ const pool: Record<string, IngredientMacroLookup> = {
   almonds: { id: 12061, name: "almonds", caloriesPer100g: 579, proteinGPer100g: 21.2, carbsGPer100g: 21.6, fatGPer100g: 49.9, estimatedCostCentsPer100g: 178.57 },
   "peanut butter": { id: 16098, name: "peanut butter", caloriesPer100g: 588, proteinGPer100g: 25, carbsGPer100g: 20, fatGPer100g: 50, estimatedCostCentsPer100g: 35.71 },
   walnuts: { id: 12155, name: "walnuts", caloriesPer100g: 654, proteinGPer100g: 15.2, carbsGPer100g: 13.7, fatGPer100g: 65.2, estimatedCostCentsPer100g: 239.29 },
+  oats: { id: 8120, name: "oats", caloriesPer100g: 379, proteinGPer100g: 13.2, carbsGPer100g: 67.7, fatGPer100g: 6.52, estimatedCostCentsPer100g: 39.29 },
+  dates: { id: 9087, name: "dates", caloriesPer100g: 282, proteinGPer100g: 2.45, carbsGPer100g: 75.0, fatGPer100g: 0.39, estimatedCostCentsPer100g: 114.29 },
 };
 
 describe("composeSnack", () => {
@@ -106,13 +108,48 @@ describe("composeSnack", () => {
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients).toHaveLength(0);
     });
-
     it("still sizes protein powder normally within its own tighter cap", () => {
       const proteinPowderOnlyPool = { "protein powder": pool["protein powder"] };
       const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 10 };
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["protein powder"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
+    });
+  });
+
+  // 2026-07-30, 15-profile comprehensive live audit: live-confirmed a
+  // bulk-goal profile's snack needed 68.1g carbs -- banana/apple/orange
+  // would each need 300-580g to close that, all over their realistic caps,
+  // so the carb role (and its calories) silently vanished from the snack
+  // every time, for every profile whose snack carb target exceeded ~57g
+  // (banana's own best case). This is what actually produced the "fat
+  // looks like it's overshooting" appearance in that audit: fat wasn't
+  // overshooting, carbs were undershooting far more severely. oats/dates
+  // are dense enough to close a gap this size within a realistic portion.
+  describe("carb-pool widening for large gaps (2026-07-30)", () => {
+    it("the original 3-fruit carb pool cannot close a 68g gap within realistic portions", () => {
+      const fruitOnlyPool = { banana: pool.banana, apple: pool.apple, orange: pool.orange };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, fruitOnlyPool, 0);
+      expect(snack.ingredients).toHaveLength(0);
+    });
+
+    it("oats closes the same 68g gap the fruit-only pool couldn't", () => {
+      const oatsOnlyPool = { oats: pool.oats };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, oatsOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["oats"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(150);
+      expect(snack.totalCarbsG).toBeGreaterThan(68 * 0.85);
+    });
+
+    it("dates close the same 68g gap the fruit-only pool couldn't", () => {
+      const datesOnlyPool = { dates: pool.dates };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, datesOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["dates"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(120);
+      expect(snack.totalCarbsG).toBeGreaterThan(68 * 0.85);
     });
   });
 
@@ -267,11 +304,13 @@ describe("composedSnackTitle", () => {
 describe("allPoolIngredientNames / INGREDIENT_POOL", () => {
   // protein/fat widened 3->5 (audit round 2, July 15 2026) so a vegan +
   // nut allergy + soy allergy profile has 2 safe options left in each
-  // role instead of 0 -- see the source comment on INGREDIENT_POOL.
-  it("returns all 13 pool ingredient names across the 3 roles", () => {
-    expect(allPoolIngredientNames()).toHaveLength(13);
+  // role instead of 0; carb widened 3->5 (2026-07-30) so a higher-calorie
+  // profile's larger carb gaps can be closed by something denser than
+  // banana/apple/orange -- see the source comment on INGREDIENT_POOL.
+  it("returns all 15 pool ingredient names across the 3 roles", () => {
+    expect(allPoolIngredientNames()).toHaveLength(15);
     expect(INGREDIENT_POOL.protein).toHaveLength(5);
-    expect(INGREDIENT_POOL.carb).toHaveLength(3);
+    expect(INGREDIENT_POOL.carb).toHaveLength(5);
     expect(INGREDIENT_POOL.fat).toHaveLength(5);
   });
 });
