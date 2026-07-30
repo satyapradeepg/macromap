@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { composeMealFromProposal, type GroundedIngredientData, type MealProposal } from "./aiMealComposition";
+import {
+  composeMealFromProposal,
+  composeMealFromProposalDetailed,
+  describeRejectionForFeedback,
+  type CompositionRejection,
+  type GroundedIngredientData,
+  type MealProposal,
+} from "./aiMealComposition";
 import type { DietaryContext } from "./openEndedIngredientSafety";
 
 const NONE: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
@@ -321,5 +328,143 @@ describe("composeMealFromProposal", () => {
     const meal = await composeMealFromProposal(proposal, BREAKFAST_TARGET, NONE, fetcher);
     expect(meal).not.toBeNull();
     expect(meal!.ingredients.find((i) => i.ingredientName === "whole wheat bread")).toBeUndefined();
+  });
+});
+
+// Retry-with-feedback (2026-07-30): composeMealFromProposalDetailed tags
+// WHY a rejection happened instead of a bare null. These reuse the exact
+// same fixtures/scenarios as the toBeNull() cases above -- the null/
+// non-null pattern is unchanged (verified above), this only checks the
+// reason attached to each rejection is the right one.
+describe("composeMealFromProposalDetailed", () => {
+  it("tags an unrealistic protein portion as portion_out_of_bounds on the protein role (the tofu case)", async () => {
+    const proposal: MealProposal = {
+      dishName: "Tofu Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "firm tofu", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "firm tofu": tofu, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason.kind).toBe("portion_out_of_bounds");
+    expect(result.reason).toMatchObject({ role: "protein", ingredientName: "firm tofu" });
+  });
+
+  it("tags a missing role as missing_role, naming the specific missing role", async () => {
+    const proposal: MealProposal = {
+      dishName: "Incomplete Dish",
+      ingredients: [{ name: "seitan cutlets", role: "protein" }],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toEqual({ kind: "missing_role", role: "carb" });
+  });
+
+  it("tags a duplicate role as duplicate_role, naming the role", async () => {
+    const proposal: MealProposal = {
+      dishName: "Double Protein Bowl",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "grilled chicken breast", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "grilled chicken breast": chicken, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toEqual({ kind: "duplicate_role", role: "protein" });
+  });
+
+  it("tags an unsafe ingredient as unsafe_ingredient, carrying the real safety-gate reason string", async () => {
+    const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+    const proposal: MealProposal = {
+      dishName: "Chicken and Rice Bowl",
+      ingredients: [
+        { name: "grilled chicken breast", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "grilled chicken breast": chicken, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, ctx, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason.kind).toBe("unsafe_ingredient");
+    expect(result.reason).toMatchObject({ role: "protein", ingredientName: "grilled chicken breast" });
+  });
+
+  it("tags a failed grounding lookup as ingredient_not_found, naming the role and ingredient", async () => {
+    const proposal: MealProposal = {
+      dishName: "Mystery Dish",
+      ingredients: [
+        { name: "unobtainium protein", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toEqual({ kind: "ingredient_not_found", role: "protein", ingredientName: "unobtainium protein" });
+  });
+
+  it("still returns ok:true with the composed meal on success, wrapping the same result composeMealFromProposal returns", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed", fixedAmountG: 40 },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, spinach });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.meal.dishName).toBe("Seitan Scramble with Spinach and Whole Wheat Toast");
+  });
+});
+
+describe("describeRejectionForFeedback", () => {
+  const cases: CompositionRejection[] = [
+    { kind: "no_ingredients" },
+    { kind: "unsafe_ingredient", role: "protein", ingredientName: "tempeh", reason: "contains soy, an allergen" },
+    { kind: "duplicate_role", role: "protein" },
+    { kind: "missing_role", role: "fat" },
+    { kind: "fixed_item_unrealistic", ingredientName: "parsley", amountG: 0, min: 1, max: 150 },
+    { kind: "ingredient_not_found", role: "carb", ingredientName: "unobtainium grain" },
+    { kind: "portion_infeasible", role: "protein", ingredientName: "lentils", gapNeeded: 40 },
+    { kind: "portion_out_of_bounds", role: "protein", ingredientName: "firm tofu", amountG: 346, min: 20, max: 280, gapNeeded: 30.8 },
+  ];
+
+  it.each(cases)("returns a non-empty, specific sentence for kind=%s", (reason) => {
+    const sentence = describeRejectionForFeedback(reason);
+    expect(sentence.length).toBeGreaterThan(10);
+    if ("ingredientName" in reason) expect(sentence).toContain(reason.ingredientName);
+    if ("role" in reason) expect(sentence).toContain(reason.role);
+  });
+
+  it("names the over-cap direction and the cap value for a too-large portion", () => {
+    const sentence = describeRejectionForFeedback({
+      kind: "portion_out_of_bounds",
+      role: "protein",
+      ingredientName: "firm tofu",
+      amountG: 346,
+      min: 20,
+      max: 280,
+      gapNeeded: 30.8,
+    });
+    expect(sentence).toContain("280g");
+    expect(sentence).toContain("over");
   });
 });

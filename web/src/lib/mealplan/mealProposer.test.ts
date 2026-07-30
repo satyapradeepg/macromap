@@ -90,6 +90,36 @@ describe("buildPrompt", () => {
     expect(prompt.toLowerCase()).toContain("protein-dense");
   });
 
+  // Retry-with-feedback (2026-07-30): when a slot's first AI-compose
+  // attempt was rejected, the retry prompt must carry WHY, so the model
+  // doesn't just re-roll the same doomed proposal.
+  it("omits any retry-feedback paragraph when priorAttemptFeedback isn't set (first attempt)", () => {
+    const prompt = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt).not.toContain("your previous proposal");
+  });
+
+  it("includes the specific rejection feedback when priorAttemptFeedback is set (a retry)", () => {
+    const prompt = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      priorAttemptFeedback: "Your protein choice, \"firm tofu\", needed 346g -- over the realistic 280g cap. Pick a denser protein source.",
+    });
+    expect(prompt).toContain("your previous proposal for this exact slot was rejected");
+    expect(prompt).toContain("firm tofu");
+    expect(prompt).toContain("over the realistic 280g cap");
+  });
+
   // Comprehensive engine test, July 16 2026: live-confirmed that Claude
   // proposed tempeh (a soy product) as the protein source in 9 of 10 real
   // AI-composition attempts for a vegan+soy-allergic profile, because the

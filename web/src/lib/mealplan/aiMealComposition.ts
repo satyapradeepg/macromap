@@ -88,7 +88,7 @@ const MIN_INGREDIENT_AMOUNT_G = 10;
 // unrealistic). Deliberately generous, not tight -- these exist to catch
 // genuine outliers (300g+ of a lean protein, a stick of butter's worth of
 // oil), not to second-guess ordinary recipe variation.
-const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
+export const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   protein: { min: 20, max: 280 },
   carb: { min: 15, max: 250 },
   // max was 40 -- too tight for a less-concentrated fat source like
@@ -117,6 +117,28 @@ const PORTION_BOUNDS_G: Record<MealRole, { min: number; max: number }> = {
   // still catches a genuinely oversized garnish.
   fixed: { min: 1, max: 150 },
 };
+
+// Best-known realistic macro density (g per 100g) for the densest safe
+// fallback source per role -- used only to sanity-check whether a role's
+// ORIGINAL target is structurally reachable at all before orchestrate.ts's
+// retry-with-feedback spends a retry attempt on a portion rejection for it
+// (no real ingredient at any portion could have closed that gap, so
+// re-asking with the same target would just repeat the same rejection).
+// protein=73 is the one live-confirmed number here (pea protein powder,
+// see mealProposer.ts's PROTEIN_EXAMPLES); carb=66 (rolled oats) and
+// fat=100 (a pure oil, the practical ceiling for this role) are common
+// real whole-food values, not independently live-verified the same way --
+// good enough for a "was this even reachable" sanity check, not meant to
+// be exact.
+const BEST_KNOWN_DENSITY_PER_100G: Record<Exclude<MealRole, "fixed">, number> = {
+  protein: 73,
+  carb: 66,
+  fat: 100,
+};
+
+export function bestKnownDensity(role: Exclude<MealRole, "fixed">): number {
+  return BEST_KNOWN_DENSITY_PER_100G[role];
+}
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): fixedAmountG
 // is optional in both the tool schema and the prompt's own wording ("fixed
@@ -170,23 +192,51 @@ function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): 
   };
 }
 
-// Returns null on ANY failure -- malformed proposal, an unsafe ingredient,
-// a lookup that doesn't resolve, or a solved amount outside its portion
-// bound. Every failure mode falls through to the same "couldn't compose"
-// result; the caller (orchestrate.ts) treats that exactly like today's
-// existing blocked-slot state. Never partially composes, never forces an
-// out-of-bounds amount through with a caveat -- fails closed on both
-// safety and realism.
-export async function composeMealFromProposal(
+// Tagged reason for each way composeMealFromProposalDetailed can reject a
+// proposal -- lets a caller (orchestrate.ts's retry-with-feedback) tell
+// Claude concretely what to fix on its next attempt, instead of a bare
+// null. describeRejectionForFeedback below turns one of these into a
+// sentence for that prompt.
+export type CompositionRejection =
+  | { kind: "no_ingredients" }
+  | { kind: "unsafe_ingredient"; role: MealRole; ingredientName: string; reason: string }
+  | { kind: "duplicate_role"; role: MealRole }
+  | { kind: "missing_role"; role: MealRole }
+  | { kind: "fixed_item_unrealistic"; ingredientName: string; amountG: number; min: number; max: number }
+  | { kind: "ingredient_not_found"; role: MealRole; ingredientName: string }
+  | { kind: "portion_infeasible"; role: Exclude<MealRole, "fixed">; ingredientName: string; gapNeeded: number }
+  | {
+      kind: "portion_out_of_bounds";
+      role: Exclude<MealRole, "fixed">;
+      ingredientName: string;
+      amountG: number;
+      min: number;
+      max: number;
+      gapNeeded: number;
+    };
+
+export type ComposeMealResult = { ok: true; meal: ComposedMeal } | { ok: false; reason: CompositionRejection };
+
+// Rejects (ok: false) on ANY failure -- malformed proposal, an unsafe
+// ingredient, a lookup that doesn't resolve, or a solved amount outside its
+// portion bound. Every failure mode falls through to the same "couldn't
+// compose" result; the caller (orchestrate.ts) treats that exactly like
+// today's existing blocked-slot state. Never partially composes, never
+// forces an out-of-bounds amount through with a caveat -- fails closed on
+// both safety and realism.
+export async function composeMealFromProposalDetailed(
   proposal: MealProposal,
   target: MacroTargets,
   ctx: DietaryContext,
   fetchIngredientMacros: FetchIngredientMacrosFn,
-): Promise<ComposedMeal | null> {
-  if (proposal.ingredients.length === 0) return null;
+): Promise<ComposeMealResult> {
+  if (proposal.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
 
   for (const ing of proposal.ingredients) {
-    if (isOpenEndedIngredientUnsafeFor(ing.name, ctx) !== null) return null;
+    const unsafeReason = isOpenEndedIngredientUnsafeFor(ing.name, ctx);
+    if (unsafeReason !== null) {
+      return { ok: false, reason: { kind: "unsafe_ingredient", role: ing.role, ingredientName: ing.name, reason: unsafeReason } };
+    }
   }
 
   // A proposal listing more than one ingredient for the same core role
@@ -200,7 +250,9 @@ export async function composeMealFromProposal(
   // check below -- a duplicate role is exactly as malformed as a missing
   // one, just in the other direction.
   for (const role of ["protein", "carb", "fat"] as const) {
-    if (proposal.ingredients.filter((i) => i.role === role).length > 1) return null;
+    if (proposal.ingredients.filter((i) => i.role === role).length > 1) {
+      return { ok: false, reason: { kind: "duplicate_role", role } };
+    }
   }
 
   const proteinProposed = proposal.ingredients.find((i) => i.role === "protein");
@@ -210,7 +262,9 @@ export async function composeMealFromProposal(
 
   // A malformed proposal (missing a core role) isn't something to guess
   // around -- reject rather than compose an incomplete dish.
-  if (!proteinProposed || !carbProposed || !fatProposed) return null;
+  if (!proteinProposed) return { ok: false, reason: { kind: "missing_role", role: "protein" } };
+  if (!carbProposed) return { ok: false, reason: { kind: "missing_role", role: "carb" } };
+  if (!fatProposed) return { ok: false, reason: { kind: "missing_role", role: "fat" } };
 
   const composed: ComposedMealIngredient[] = [];
   let remainingProtein = target.proteinG;
@@ -219,7 +273,18 @@ export async function composeMealFromProposal(
 
   for (const fixedItem of fixedProposed) {
     const amountG = fixedItem.fixedAmountG ?? DEFAULT_FIXED_AMOUNT_G;
-    if (!isRealisticAmount(amountG, PORTION_BOUNDS_G.fixed)) return null;
+    if (!isRealisticAmount(amountG, PORTION_BOUNDS_G.fixed)) {
+      return {
+        ok: false,
+        reason: {
+          kind: "fixed_item_unrealistic",
+          ingredientName: fixedItem.name,
+          amountG,
+          min: PORTION_BOUNDS_G.fixed.min,
+          max: PORTION_BOUNDS_G.fixed.max,
+        },
+      };
+    }
     // Found live 2026-07-21 (same investigation as DEFAULT_FIXED_AMOUNT_G
     // above): a fixed item's name sometimes doesn't resolve via Spoonacular's
     // ingredient search at all -- e.g. "steamed broccoli florets" or "steamed
@@ -253,17 +318,39 @@ export async function composeMealFromProposal(
   // an overshoot, not a shortfall, and still a real improvement over
   // rejecting the slot outright.
   const proteinLookup = await fetchIngredientMacros(proteinProposed.name);
-  if (!proteinLookup) return null;
+  if (!proteinLookup) {
+    return { ok: false, reason: { kind: "ingredient_not_found", role: "protein", ingredientName: proteinProposed.name } };
+  }
   const proteinSized = sizeForGap(proteinLookup.proteinGPer100g, remainingProtein);
-  if (!proteinSized) return null;
-  if (!isRealisticAmount(proteinSized.amountG, PORTION_BOUNDS_G.protein)) return null;
+  if (!proteinSized) {
+    return {
+      ok: false,
+      reason: { kind: "portion_infeasible", role: "protein", ingredientName: proteinProposed.name, gapNeeded: remainingProtein },
+    };
+  }
+  if (!isRealisticAmount(proteinSized.amountG, PORTION_BOUNDS_G.protein)) {
+    return {
+      ok: false,
+      reason: {
+        kind: "portion_out_of_bounds",
+        role: "protein",
+        ingredientName: proteinProposed.name,
+        amountG: proteinSized.amountG,
+        min: PORTION_BOUNDS_G.protein.min,
+        max: PORTION_BOUNDS_G.protein.max,
+        gapNeeded: remainingProtein,
+      },
+    };
+  }
   const proteinItem = toComposedIngredient(proteinLookup, proteinSized.amountG);
   composed.push(proteinItem);
   remainingCarbs -= proteinItem.carbsG;
   remainingFat -= proteinItem.fatG;
 
   const carbLookup = await fetchIngredientMacros(carbProposed.name);
-  if (!carbLookup) return null;
+  if (!carbLookup) {
+    return { ok: false, reason: { kind: "ingredient_not_found", role: "carb", ingredientName: carbProposed.name } };
+  }
   const carbSized = sizeForGap(carbLookup.carbsGPer100g, remainingCarbs);
   // Live-confirmed (2026-07-21, stacked-safety investigation): a carb-heavy
   // protein source (lentils, chickpeas, black beans -- common go-tos once
@@ -277,32 +364,106 @@ export async function composeMealFromProposal(
   // the dish; an absent one (for any reason sizeForGap returns null)
   // doesn't.
   if (carbSized) {
-    if (!isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) return null;
+    if (!isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) {
+      return {
+        ok: false,
+        reason: {
+          kind: "portion_out_of_bounds",
+          role: "carb",
+          ingredientName: carbProposed.name,
+          amountG: carbSized.amountG,
+          min: PORTION_BOUNDS_G.carb.min,
+          max: PORTION_BOUNDS_G.carb.max,
+          gapNeeded: remainingCarbs,
+        },
+      };
+    }
     const carbItem = toComposedIngredient(carbLookup, carbSized.amountG);
     composed.push(carbItem);
     remainingFat -= carbItem.fatG;
   }
 
   const fatLookup = await fetchIngredientMacros(fatProposed.name);
-  if (!fatLookup) return null;
+  if (!fatLookup) {
+    return { ok: false, reason: { kind: "ingredient_not_found", role: "fat", ingredientName: fatProposed.name } };
+  }
   const fatSized = sizeForGap(fatLookup.fatGPer100g, remainingFat);
   // Unlike protein/carb, the fat role is allowed to contribute NOTHING --
   // remainingFat can already be <=0 once protein/carb's own fat is
   // counted (same as composeSnack's existing behavior). Only an
   // out-of-bounds amount rejects the whole dish; an absent one doesn't.
   if (fatSized) {
-    if (!isRealisticAmount(fatSized.amountG, PORTION_BOUNDS_G.fat)) return null;
+    if (!isRealisticAmount(fatSized.amountG, PORTION_BOUNDS_G.fat)) {
+      return {
+        ok: false,
+        reason: {
+          kind: "portion_out_of_bounds",
+          role: "fat",
+          ingredientName: fatProposed.name,
+          amountG: fatSized.amountG,
+          min: PORTION_BOUNDS_G.fat.min,
+          max: PORTION_BOUNDS_G.fat.max,
+          gapNeeded: remainingFat,
+        },
+      };
+    }
     composed.push(toComposedIngredient(fatLookup, fatSized.amountG));
   }
 
   const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
   return {
-    dishName: proposal.dishName,
-    ingredients: composed,
-    totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
-    totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
-    totalCarbsG: composed.reduce((s, i) => s + i.carbsG, 0),
-    totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
-    totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
+    ok: true,
+    meal: {
+      dishName: proposal.dishName,
+      ingredients: composed,
+      totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
+      totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
+      totalCarbsG: composed.reduce((s, i) => s + i.carbsG, 0),
+      totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
+      totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
+    },
   };
+}
+
+// Thin wrapper kept for existing callers/tests that only care whether
+// composition succeeded, not why it didn't.
+export async function composeMealFromProposal(
+  proposal: MealProposal,
+  target: MacroTargets,
+  ctx: DietaryContext,
+  fetchIngredientMacros: FetchIngredientMacrosFn,
+): Promise<ComposedMeal | null> {
+  const result = await composeMealFromProposalDetailed(proposal, target, ctx, fetchIngredientMacros);
+  return result.ok ? result.meal : null;
+}
+
+// One plain-English sentence per rejection kind, meant to be fed straight
+// back to Claude as "here's why your last attempt for this slot was
+// rejected" -- generic and specific enough to act on without knowing the
+// real rejection-kind breakdown ahead of time (that breakdown is exactly
+// what Step D's live counters exist to measure).
+export function describeRejectionForFeedback(reason: CompositionRejection): string {
+  switch (reason.kind) {
+    case "no_ingredients":
+      return "Your proposal had no ingredients at all. List one protein, one carb, and one fat ingredient (plus optional fixed garnishes/sides).";
+    case "unsafe_ingredient":
+      return `"${reason.ingredientName}" (${reason.role}) isn't safe for this person: ${reason.reason}. Pick a different ${reason.role} ingredient that fits their diet, allergies, and dislikes.`;
+    case "duplicate_role":
+      return `You listed more than one ingredient for the "${reason.role}" role. Pick exactly one ingredient per core role.`;
+    case "missing_role":
+      return `Your proposal is missing a "${reason.role}" ingredient. Every dish needs exactly one protein, one carb, and one fat ingredient.`;
+    case "fixed_item_unrealistic":
+      return `The fixed item "${reason.ingredientName}" at ${Math.round(reason.amountG)}g isn't a realistic garnish/side amount (needs to be ${reason.min}-${reason.max}g). Give it a normal serving size or drop it.`;
+    case "ingredient_not_found":
+      return `"${reason.ingredientName}" (${reason.role}) couldn't be matched to a real ingredient. Use a more common, specific grocery-store name for the ${reason.role} ingredient.`;
+    case "portion_infeasible":
+      return `"${reason.ingredientName}" (${reason.role}) can't realistically close the remaining ~${Math.round(reason.gapNeeded)}g gap for this role. Pick a more macro-dense ${reason.role} source.`;
+    case "portion_out_of_bounds": {
+      const over = reason.amountG > reason.max;
+      const bound = over ? reason.max : reason.min;
+      return `Your ${reason.role} choice, "${reason.ingredientName}", needed ${Math.round(reason.amountG)}g -- ${
+        over ? "over" : "under"
+      } the realistic ${bound}g ${over ? "cap" : "floor"}. Pick a ${over ? "denser" : "less concentrated"} ${reason.role} source.`;
+    }
+  }
 }

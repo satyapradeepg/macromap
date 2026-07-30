@@ -8,6 +8,7 @@ import {
   RECIPE_ACTION_COST,
   ADDON_ATTEMPT_COST,
   AI_COMPOSE_ACTION_COST,
+  MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT,
 } from "./retryBudget";
 
 describe("retryBudget", () => {
@@ -66,11 +67,16 @@ describe("createSelectionAddonBudget", () => {
 // AI-compose; the other 6 never got a try purely because the budget ran
 // out first, not because AI-compose failed for them.
 describe("createAiComposeBudget", () => {
-  it("sizes to exactly cover the real count of blocked recipe slots found this generation", () => {
+  // Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count (2026-07-30,
+  // retry-with-feedback): a count-sized budget left zero headroom for any
+  // slot's retry, since the eligibility loop's own first-attempt trySpend
+  // already exhausted it -- live-confirmed 0 retry attempts despite 2 real
+  // composition rejections in the same generation.
+  it("sizes to cover every slot's first attempt AND one retry each", () => {
     const budget = createAiComposeBudget(16);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(16);
+    expect(attempts).toBe(16 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
   });
 
   it("allocates zero budget when nothing is blocked, rather than wasting a flat allowance", () => {
@@ -83,7 +89,7 @@ describe("createAiComposeBudget", () => {
     const budget = createAiComposeBudget(30);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(21);
+    expect(attempts).toBe(21 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
   });
 });
 
@@ -108,14 +114,16 @@ describe("createBadFitSwapBudget", () => {
       /* drain */
     }
     expect(aiComposeBudget.remaining).toBe(0);
-    expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * 2);
+    expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT * 2);
   });
 
-  it("sizes to exactly cover the real count of null-tier slots found this generation", () => {
+  // Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count for the same reason
+  // as createAiComposeBudget above (2026-07-30, retry-with-feedback).
+  it("sizes to cover every slot's first attempt AND one retry each", () => {
     const budget = createBadFitSwapBudget(6);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(6);
+    expect(attempts).toBe(6 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
   });
 
   it("allocates zero budget when nothing needs repair, rather than wasting a flat allowance", () => {
@@ -128,6 +136,6 @@ describe("createBadFitSwapBudget", () => {
     const budget = createBadFitSwapBudget(30);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(21);
+    expect(attempts).toBe(21 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
   });
 });
