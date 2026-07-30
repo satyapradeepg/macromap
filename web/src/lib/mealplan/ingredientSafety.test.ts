@@ -130,12 +130,23 @@ describe("isKnownIngredientUnsafeFor", () => {
       expect(isKnownIngredientUnsafeFor("oats", { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] })).toBeNull();
     });
 
-    it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
+    it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds, dates, pumpkin seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] };
       expect(isKnownIngredientUnsafeFor("pea protein powder", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("hemp seeds", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("sunflower seed butter", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("chia seeds", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("dates", ctx)).toBeNull();
+      // pumpkin seeds (2026-07-30, variety/repetition follow-up): a seed,
+      // not tagged containsNut, same reasoning as chia/hemp/sunflower
+      // above -- the widest-safety protein-pool addition available,
+      // closing the gap for this exact worst-case profile.
+      expect(isKnownIngredientUnsafeFor("pumpkin seeds", ctx)).toBeNull();
+    });
+
+    it("edamame (2026-07-30 protein-pool widening) is correctly excluded for a soy allergy but safe for vegan alone", () => {
+      expect(isKnownIngredientUnsafeFor("edamame", { dietaryStyles: [], allergies: ["soy"], dislikes: [] })).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("edamame", { dietaryStyles: ["vegan"], allergies: [], dislikes: [] })).toBeNull();
     });
 
     it("regression: dairy_free + gluten_free with no vegan style still blocks dairy pool items -- the exact combination that served cottage cheese/greek yogurt live on July 15 2026", () => {

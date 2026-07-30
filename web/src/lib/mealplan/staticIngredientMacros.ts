@@ -300,6 +300,56 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsGluten: false,
     veganCompliant: true,
   },
+
+  // Added 2026-07-30 (variety/repetition follow-up to the same comprehensive
+  // audit): the protein role bottlenecks to just 2 safe options
+  // (pea protein powder, hemp seeds) under a vegan restriction alone --
+  // greek yogurt/cottage cheese/protein powder are all dairy-tagged, and a
+  // stacked soy allergy (the exact H1 test profile) also removes protein
+  // powder's soy tag, still leaving 2. With only 2 real rotation options
+  // across 14 weekly snack slots, even perfect rotation guarantees each one
+  // appears ~7 times -- live-confirmed in the audit ("Hemp Seeds + Orange"
+  // appearing 7x for a dairy-free profile, "Pea Protein Powder + Sunflower
+  // Seed Butter" 7x for vegan+nut). Real data, fetched live the same way as
+  // every other pool addition (search + information, amount=100/unit=grams).
+  "pumpkin seeds": {
+    id: 12014,
+    name: "pumpkin seeds",
+    caloriesPer100g: 559,
+    proteinGPer100g: 30.23,
+    carbsGPer100g: 10.71,
+    fatGPer100g: 49.05,
+    estimatedCostCentsPer100g: 178.57,
+    containsDairy: false,
+    // A seed, not a tree nut or peanut -- same classification as the
+    // already-present hemp/chia/sunflower seed entries, none of which are
+    // tagged containsNut. Safe for a nut allergy, safe for soy allergy,
+    // gluten-free, vegan -- the widest-safety addition available, closing
+    // the gap for the SAME worst-case profile (vegan + soy, H1) the carb
+    // pool was widened for two commits ago.
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+  edamame: {
+    id: 99296,
+    name: "edamame",
+    caloriesPer100g: 121.62,
+    proteinGPer100g: 9.46,
+    carbsGPer100g: 13.51,
+    fatGPer100g: 3.34,
+    estimatedCostCentsPer100g: 75.0,
+    containsDairy: false,
+    containsNut: false,
+    // Real soybeans -- unlike pumpkin seeds above, does NOT help a soy-
+    // allergic profile (correctly excluded there), but adds real rotation
+    // headroom for the more common case of vegan-without-soy-allergy,
+    // where the pool would otherwise still bottleneck to 3.
+    containsSoy: true,
+    containsGluten: false,
+    veganCompliant: true,
+  },
 };
 
 export function lookupIngredientMacrosStatic(query: string): StaticIngredientMacro | null {
@@ -307,7 +357,7 @@ export function lookupIngredientMacrosStatic(query: string): StaticIngredientMac
 }
 
 // Per-ingredient realistic-portion ceiling, shared by every path that sizes
-// one of this fixed 15-ingredient pool to close a macro gap (snackComposition.ts's
+// one of this fixed 17-ingredient pool to close a macro gap (snackComposition.ts's
 // composeSnack, addon.ts's buildAddonForSlot) -- moved here from
 // snackComposition.ts (2026-07-28) so both consumers read one table instead
 // of risking two definitions drifting apart.
@@ -319,7 +369,7 @@ export function lookupIngredientMacrosStatic(query: string): StaticIngredientMac
 // like aiMealComposition.ts's PORTION_BOUNDS_G -- that file has to use one
 // generic bound per role because it's grounding arbitrary LLM-proposed
 // ingredient names it can't enumerate in advance. This pool is the opposite
-// case: a small, fully known, fixed set of 15 real foods, and macro density
+// case: a small, fully known, fixed set of 17 real foods, and macro density
 // varies too widely WITHIN a role for one shared ceiling to work -- protein
 // powder (83g protein/100g) and greek yogurt (10g protein/100g) are both
 // "protein role," but a per-role max loose enough to allow a normal ~200g
@@ -357,13 +407,19 @@ export const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
   // dates, a generous but real handful (up to ~90g carbs).
   oats: 150,
   dates: 120,
+  // Added with the 2026-07-30 protein-pool widening (variety/repetition
+  // follow-up). Pumpkin seeds are as dense as almonds/walnuts -- same 60g
+  // cap. Edamame is far less dense; 150g is a real, generous "bowl of
+  // edamame pods" snack portion (delivers up to ~14g protein).
+  "pumpkin seeds": 60,
+  edamame: 150,
 };
 // Safety net for a future pool addition someone forgets to add a bound for
 // above -- fails closed (a real, if conservative, cap) rather than silently
 // reproducing this exact gap for the new ingredient.
 export const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
 
-// Display-only realism note (2026-07-27, extended 2026-07-30 for oats): 5 of the 15 pool ingredients
+// Display-only realism note (2026-07-27, extended 2026-07-30 for oats): 5 of the 17 pool ingredients
 // aren't things a person actually eats standalone in the sized amount --
 // protein powder/pea protein powder need a liquid, chia/hemp seeds are
 // normally a topping/mix-in, not a bowl of dry seeds. The macros are real

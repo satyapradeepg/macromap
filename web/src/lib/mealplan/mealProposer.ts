@@ -26,6 +26,15 @@ export interface ProposeMealInput {
   // Claude concretely what went wrong last time, so the retry isn't just a
   // blind re-roll of the same doomed proposal.
   priorAttemptFeedback?: string;
+  // Variety/repetition follow-up (2026-07-30, same comprehensive audit
+  // that found the carb-pool/protein-pool gaps): dish titles already
+  // claimed elsewhere in THIS generation (real recipes and earlier
+  // AI-composed picks alike) -- live-confirmed the AI-compose path has no
+  // memory across separate propose calls, so the same obvious dish (e.g.
+  // "Seitan Stir-Fry with Rice and Broccoli") gets proposed repeatedly for
+  // similar targets even on an UNRESTRICTED profile, not just a
+  // corpus-scarce one.
+  avoidDishNames?: string[];
 }
 
 // constraintCheck (added 2026-07-22, stacked-safety investigation):
@@ -156,7 +165,7 @@ export function safeProteinExamples(ctx: { dietaryStyles: string[]; allergies: s
 }
 
 export function buildPrompt(input: ProposeMealInput): string {
-  const { mealType, target, dietaryStyles, allergies, dislikes, pantryItemNames, priorAttemptFeedback } = input;
+  const { mealType, target, dietaryStyles, allergies, dislikes, pantryItemNames, priorAttemptFeedback, avoidDishNames } = input;
   return `Propose a realistic ${mealType} to hit these targets as closely as a normal-sized portion reasonably can:
 - ${Math.round(target.calories)} calories
 - ${Math.round(target.proteinG)}g protein
@@ -169,6 +178,8 @@ Hard constraints -- never violate these, including hidden/derived forms (e.g. ma
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
 
 ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuinely fit the dish, but never at the expense of the constraints above or of realism): ${pantryItemNames.join(", ")}` : ""}
+
+${avoidDishNames && avoidDishNames.length ? `Dishes already used elsewhere in this week's plan -- propose something meaningfully different, not another close variant of one of these: ${avoidDishNames.join(", ")}` : ""}
 
 Requirements for your proposal:
 1. Name a REAL, coherent, recognizable dish for ${mealType} -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
@@ -231,6 +242,9 @@ export interface ProposeMealsBatchInput {
   allergies: string[];
   dislikes: string[];
   pantryItemNames: string[];
+  // Variety/repetition follow-up (2026-07-30) -- same field/rationale as
+  // ProposeMealInput.avoidDishNames above, for the batch path.
+  avoidDishNames?: string[];
 }
 
 const PROPOSE_MEALS_BATCH_TOOL = {
@@ -273,7 +287,7 @@ const PROPOSE_MEALS_BATCH_TOOL = {
 };
 
 export function buildBatchPrompt(input: ProposeMealsBatchInput): string {
-  const { slots, aggregateTarget, dietaryStyles, allergies, dislikes, pantryItemNames } = input;
+  const { slots, aggregateTarget, dietaryStyles, allergies, dislikes, pantryItemNames, avoidDishNames } = input;
   const slotLines = slots
     .map(
       (s, i) =>
@@ -321,6 +335,8 @@ Hard constraints -- never violate these, including hidden/derived forms (e.g. ma
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
 
 ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuinely fit a dish, but never at the expense of the constraints above or of realism): ${pantryItemNames.join(", ")}` : ""}
+
+${avoidDishNames && avoidDishNames.length ? `Dishes already used elsewhere in this week's plan -- every dish in this batch should be meaningfully different from these, and different from each other too: ${avoidDishNames.join(", ")}` : ""}
 
 Requirements for EACH proposal:
 1. Name a REAL, coherent, recognizable dish for its meal type -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.

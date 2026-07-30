@@ -120,6 +120,49 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("over the realistic 280g cap");
   });
 
+  // Variety/repetition follow-up (2026-07-30): the plan critic independently
+  // flagged real dish-level repetition on an unrestricted profile ("Seitan
+  // Stir-Fry with Rice and Broccoli", 4 of 7 days) -- separate AI-compose
+  // calls have no memory of each other, so this feeds back what's already
+  // been used elsewhere in the week.
+  it("omits any avoid-repeats paragraph when avoidDishNames isn't set or empty", () => {
+    const withoutField = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(withoutField).not.toContain("already used elsewhere");
+
+    const withEmptyArray = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: [],
+    });
+    expect(withEmptyArray).not.toContain("already used elsewhere");
+  });
+
+  it("includes already-used dish titles when avoidDishNames is set", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 500, proteinG: 40, carbsG: 45, fatG: 12 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: ["Seitan Stir-Fry with Rice and Broccoli", "Chicken Enchiladas"],
+    });
+    expect(prompt).toContain("already used elsewhere in this week's plan");
+    expect(prompt).toContain("Seitan Stir-Fry with Rice and Broccoli");
+    expect(prompt).toContain("Chicken Enchiladas");
+  });
+
   // Comprehensive engine test, July 16 2026: live-confirmed that Claude
   // proposed tempeh (a soy product) as the protein source in 9 of 10 real
   // AI-composition attempts for a vegan+soy-allergic profile, because the
@@ -317,6 +360,32 @@ describe("buildBatchPrompt", () => {
     expect(prompt).toContain("79");
     expect(prompt).toContain("Propose 3 realistic meals");
     expect(prompt).toContain("exactly 3 meals");
+  });
+
+  // Variety/repetition follow-up (2026-07-30) -- same rationale as
+  // buildPrompt's equivalent test above, for the batch path.
+  it("includes already-used dish titles when avoidDishNames is set, omits the paragraph when not", () => {
+    const withoutField = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(withoutField).not.toContain("already used elsewhere");
+
+    const withField = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: ["Seitan Stir-Fry with Rice and Broccoli"],
+    });
+    expect(withField).toContain("already used elsewhere in this week's plan");
+    expect(withField).toContain("Seitan Stir-Fry with Rice and Broccoli");
   });
 
   it("explicitly grants freedom to redistribute macros across the batch rather than matching each slot exactly", () => {

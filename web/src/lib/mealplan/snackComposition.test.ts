@@ -22,6 +22,9 @@ const pool: Record<string, IngredientMacroLookup> = {
   walnuts: { id: 12155, name: "walnuts", caloriesPer100g: 654, proteinGPer100g: 15.2, carbsGPer100g: 13.7, fatGPer100g: 65.2, estimatedCostCentsPer100g: 239.29 },
   oats: { id: 8120, name: "oats", caloriesPer100g: 379, proteinGPer100g: 13.2, carbsGPer100g: 67.7, fatGPer100g: 6.52, estimatedCostCentsPer100g: 39.29 },
   dates: { id: 9087, name: "dates", caloriesPer100g: 282, proteinGPer100g: 2.45, carbsGPer100g: 75.0, fatGPer100g: 0.39, estimatedCostCentsPer100g: 114.29 },
+  "pea protein powder": { id: 98890, name: "pea protein powder", caloriesPer100g: 363.63, proteinGPer100g: 72.72, carbsGPer100g: 3.03, fatGPer100g: 6.06, estimatedCostCentsPer100g: 240.0 },
+  "hemp seeds": { id: 93602, name: "hemp seeds", caloriesPer100g: 580, proteinGPer100g: 37, carbsGPer100g: 7, fatGPer100g: 45, estimatedCostCentsPer100g: 339.29 },
+  "pumpkin seeds": { id: 12014, name: "pumpkin seeds", caloriesPer100g: 559, proteinGPer100g: 30.23, carbsGPer100g: 10.71, fatGPer100g: 49.05, estimatedCostCentsPer100g: 178.57 },
 };
 
 describe("composeSnack", () => {
@@ -150,6 +153,37 @@ describe("composeSnack", () => {
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["dates"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(120);
       expect(snack.totalCarbsG).toBeGreaterThan(68 * 0.85);
+    });
+  });
+
+  // Variety/repetition follow-up (2026-07-30): a vegan + soy allergy
+  // profile (the same H1 test profile from the comprehensive audit) only
+  // had 2 safe protein-role options before this fix (pea protein powder,
+  // hemp seeds) -- with only 2 real rotation options across 14 weekly
+  // snack slots, perfect rotation still guarantees each appears ~7 times.
+  // pumpkin seeds (a seed, not tagged containsNut) is safe even under this
+  // exact stack, giving a 3rd option. This simulates orchestrate.ts's own
+  // pre-filtering (only the safe subset is ever passed as `pool`).
+  describe("protein-pool widening for heavily-restricted profiles (2026-07-30)", () => {
+    const veganSoyProteinPool = {
+      "pea protein powder": pool["pea protein powder"],
+      "hemp seeds": pool["hemp seeds"],
+      "pumpkin seeds": pool["pumpkin seeds"],
+    };
+
+    it("rotates across all 3 safe options rather than just the original 2", () => {
+      const target = { calories: 0, proteinG: 20, carbsG: 0, fatG: 15 };
+      const picks = [0, 1, 2].map((seed) => composeSnack(target, veganSoyProteinPool, seed).ingredients[0]?.ingredientName);
+      expect(new Set(picks).size).toBe(3);
+      expect(picks).toContain("pumpkin seeds");
+    });
+
+    it("sizes pumpkin seeds normally within its own realistic cap", () => {
+      const pumpkinOnlyPool = { "pumpkin seeds": pool["pumpkin seeds"] };
+      const target = { calories: 0, proteinG: 15, carbsG: 0, fatG: 30 };
+      const snack = composeSnack(target, pumpkinOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["pumpkin seeds"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
     });
   });
 
@@ -306,10 +340,12 @@ describe("allPoolIngredientNames / INGREDIENT_POOL", () => {
   // nut allergy + soy allergy profile has 2 safe options left in each
   // role instead of 0; carb widened 3->5 (2026-07-30) so a higher-calorie
   // profile's larger carb gaps can be closed by something denser than
-  // banana/apple/orange -- see the source comment on INGREDIENT_POOL.
-  it("returns all 15 pool ingredient names across the 3 roles", () => {
-    expect(allPoolIngredientNames()).toHaveLength(15);
-    expect(INGREDIENT_POOL.protein).toHaveLength(5);
+  // banana/apple/orange; protein widened again 5->7 (2026-07-30, variety/
+  // repetition follow-up) since a vegan restriction alone still drops it
+  // to 2 -- see the source comment on INGREDIENT_POOL.
+  it("returns all 17 pool ingredient names across the 3 roles", () => {
+    expect(allPoolIngredientNames()).toHaveLength(17);
+    expect(INGREDIENT_POOL.protein).toHaveLength(7);
     expect(INGREDIENT_POOL.carb).toHaveLength(5);
     expect(INGREDIENT_POOL.fat).toHaveLength(5);
   });

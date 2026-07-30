@@ -1234,6 +1234,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         dislikes: input.dislikes,
         pantryItemNames,
         priorAttemptFeedback,
+        avoidDishNames: usedDishTitles,
       });
     } catch (err) {
       console.error(
@@ -1318,6 +1319,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       // see pantry stock as more available than it truly is if this
       // AI-composed pick happens to use some of it too.
       commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
+      // Variety/repetition follow-up (2026-07-30): grows the avoid-list so
+      // a LATER AI-compose call in this same generation also steers away
+      // from what this one just picked.
+      usedDishTitles.push(candidate.title);
       return;
     }
     const existing = claimResult.claimed[entry.claimedIndex];
@@ -1328,6 +1333,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       markKnownBad(excludedRecipeKeys, existing.candidate.id, entry.slotId.mealType);
       claimResult.claimed[entry.claimedIndex] = { slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" };
       commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
+      usedDishTitles.push(candidate.title);
     }
   }
 
@@ -1354,6 +1360,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     const slotId = allSlots.find((s) => slotKey(s) === key);
     return slotId && slotMechanism(slotId.mealType) === "recipe";
   }).length;
+
+  // Variety/repetition follow-up (2026-07-30, same comprehensive audit that
+  // found the carb/protein-pool gaps): the plan critic independently
+  // flagged real dish-level repetition even on an UNRESTRICTED profile
+  // ("heavy repetition of the Seitan Stir-Fry with Rice and Broccoli
+  // lunch, 4 of 7 days") -- real recipes can't literally repeat (claim.ts
+  // already dedupes by id across the whole generation), so this has to be
+  // the AI-compose path proposing the same obvious dish repeatedly, since
+  // separate propose calls have no memory of each other. Seeded from every
+  // title already claimed by the time AI-compose starts (real recipes AND
+  // composed snacks), then grown as AI-compose itself claims more, so a
+  // LATER call in this same generation also avoids what an EARLIER
+  // AI-compose call already picked, not just what real-recipe search found.
+  const usedDishTitles: string[] = claimResult.claimed.map((c) => c.candidate.title);
   const aiComposeBudget = createAiComposeBudget(blockedRecipeSlotCount);
   const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number; budget: RetryBudget }> = [];
   // Genuinely blocked slots draw from their own existing, already-tuned
@@ -1443,6 +1463,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         allergies: input.allergies,
         dislikes: input.dislikes,
         pantryItemNames,
+        avoidDishNames: usedDishTitles,
       });
     } catch (err) {
       console.error(`[mealplan] batch AI composition call failed, falling back to per-slot:`, err);
@@ -1713,6 +1734,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
                 // available than it truly is (same rationale as
                 // applyAiComposeResult above).
                 commitPantryConsumption(rankOpts.pantryTracker, composed.ingredients);
+                usedDishTitles.push(composed.title);
                 addons.delete(slotKey(existing.slotId));
                 console.log(
                   `[mealplan] repair accepted (diet_violation, AI-composed) for day ${flag.dayIndex} ${flag.mealType}: ` +

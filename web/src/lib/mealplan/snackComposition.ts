@@ -69,8 +69,20 @@ export interface IngredientMacroLookup {
 // share of what little the snack actually delivered. oats/dates chosen for
 // being carb-dense (67.7g/75g per 100g respectively) real whole foods
 // genuinely eaten as snacks, not just theoretically carb-heavy.
+//
+// protein widened again, 5 to 7 (2026-07-30, variety/repetition follow-up
+// to the same audit): a vegan restriction alone drops this role to just 2
+// safe options (pea protein powder, hemp seeds -- every dairy-tagged
+// option is out), and with only 2 real choices across 14 weekly snack
+// slots, even perfect rotation guarantees each appears ~7 times. Live-
+// confirmed exactly this: "Hemp Seeds + Orange" 7x for a dairy-free
+// profile, "Pea Protein Powder + Sunflower Seed Butter" 7x for vegan+nut.
+// pumpkin seeds (a seed, not tagged containsNut, same classification as
+// the existing hemp/chia/sunflower-seed entries) is safe even under the
+// worst-case vegan+soy stack; edamame adds a 4th option for the more
+// common vegan-without-soy-allergy case.
 export const INGREDIENT_POOL: Record<MacroRole, string[]> = {
-  protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds"],
+  protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds", "pumpkin seeds", "edamame"],
   carb: ["banana", "apple", "orange", "oats", "dates"],
   fat: ["almonds", "peanut butter", "walnuts", "sunflower seed butter", "chia seeds"],
 };
