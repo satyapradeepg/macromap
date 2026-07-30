@@ -419,7 +419,7 @@ export const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
 // reproducing this exact gap for the new ingredient.
 export const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
 
-// Display-only realism note (2026-07-27, extended 2026-07-30 for oats): 5 of the 17 pool ingredients
+// Display-only realism note (2026-07-27, extended 2026-07-30 for oats and edamame): 6 of the 17 pool ingredients
 // aren't things a person actually eats standalone in the sized amount --
 // protein powder/pea protein powder need a liquid, chia/hemp seeds are
 // normally a topping/mix-in, not a bowl of dry seeds. The macros are real
@@ -454,6 +454,16 @@ export function prepNoteFor(
   // note -- eaten standalone like the existing banana/apple/orange options.
   if (name === "oats") {
     return "cook with water as oatmeal";
+  }
+
+  // Added alongside the 2026-07-30 protein-pool widening -- same "isn't
+  // eaten standalone in the sized raw amount" gap as oats above, missed
+  // when edamame was first added and only caught when asked directly
+  // whether people actually snack on it: yes, but on the STEAMED beans,
+  // not raw/frozen ones. Real prep is a few minutes in water, zero extra
+  // macros, same pattern as oats/protein powder.
+  if (name === "edamame") {
+    return "steam or boil a few minutes";
   }
 
   if (name === "chia seeds" || name === "hemp seeds") {

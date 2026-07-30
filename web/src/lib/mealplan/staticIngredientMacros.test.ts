@@ -40,10 +40,19 @@ describe("staticIngredientMacros", () => {
 
 describe("prepNoteFor", () => {
   it("returns null for ingredients that are fine eaten as-is", () => {
-    for (const name of ["greek yogurt", "cottage cheese", "banana", "apple", "orange", "almonds", "peanut butter", "walnuts", "sunflower seed butter"]) {
+    for (const name of ["greek yogurt", "cottage cheese", "banana", "apple", "orange", "almonds", "peanut butter", "walnuts", "sunflower seed butter", "dates", "pumpkin seeds"]) {
       expect(prepNoteFor(name, "snack", true)).toBeNull();
       expect(prepNoteFor(name, "addon", false)).toBeNull();
     }
+  });
+
+  // 2026-07-30: oats/edamame both need real prep (cooking) before they're
+  // actually eaten in the sized raw amount -- same "isn't standalone" gap
+  // as protein powder above, missed for edamame until asked directly
+  // whether people actually snack on it.
+  it("tells oats to cook as oatmeal and edamame to steam/boil, both zero extra macros", () => {
+    expect(prepNoteFor("oats", "snack", true)).toBe("cook with water as oatmeal");
+    expect(prepNoteFor("edamame", "snack", true)).toBe("steam or boil a few minutes");
   });
 
   it("tells protein powders to mix with water only, never milk (milk carries untracked macros)", () => {
