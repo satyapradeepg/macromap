@@ -531,7 +531,13 @@ function MealCard({
           <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
         )}
       </div>
-      {showRecipe && slot && <RecipeModal slot={slot} onClose={() => setShowRecipe(false)} />}
+      {showRecipe && slot && (
+        <RecipeModal
+          key={`${slot.dayIndex}-${slot.mealType}-${slot.recipeId}-${slot.aiComposed}`}
+          slot={slot}
+          onClose={() => setShowRecipe(false)}
+        />
+      )}
     </div>
   );
 }
@@ -550,8 +556,6 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
   useEffect(() => {
     if (slot.recipeId === null) return;
     let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
     getRecipeInstructions(slot.recipeId).then((result) => {
       if (cancelled) return;
       setLoading(false);
