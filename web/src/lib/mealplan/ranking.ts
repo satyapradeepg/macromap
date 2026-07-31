@@ -59,6 +59,16 @@ export interface RankedCandidate extends RecipeCandidate {
   // 'ai_composed') from a plain composed SNACK (recipe_source
   // 'composed') even though both use a synthetic negative id.
   aiComposed?: boolean;
+  // Set only by aiMealComposition.ts's composeMealFromProposalBestEffort
+  // (2026-07-30, "fill with the closest meal rather than leaving it open")
+  // -- true when this candidate only exists because the strict composer's
+  // realism/completeness checks were relaxed as a last resort (a role got
+  // dropped, clamped, or defaulted). Never set for a safety rejection --
+  // that one has no relaxed path, see that function's own comment.
+  // cascade.ts's matchLabelFor reads this to disclose the compromise
+  // rather than presenting an approximate meal as an exact match.
+  isApproximate?: boolean;
+  approximationNotes?: string[];
   // Portion scaling (Epic E2 follow-up, July 20 2026 spec): the multiplier
   // applied to the candidate's native per-serving macros/price/servings to
   // better fit `target`. 1 means unscaled. Every other field on this

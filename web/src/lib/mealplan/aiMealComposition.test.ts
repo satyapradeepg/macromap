@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   composeMealFromProposal,
   composeMealFromProposalDetailed,
+  composeMealFromProposalBestEffort,
   describeRejectionForFeedback,
   type CompositionRejection,
   type GroundedIngredientData,
@@ -466,5 +467,193 @@ describe("describeRejectionForFeedback", () => {
     });
     expect(sentence).toContain("280g");
     expect(sentence).toContain("over");
+  });
+});
+
+// "Fill with the closest meal rather than leaving it open" (2026-07-30,
+// Satya's explicit request). The one non-negotiable constraint carried
+// over from the strict composer: an unsafe ingredient must NEVER be
+// relaxed into a shown result, under any circumstance. Every other
+// rejection kind should degrade to an approximate-but-shown result
+// instead of failing.
+describe("composeMealFromProposalBestEffort", () => {
+  it("CRITICAL: still rejects an unsafe ingredient -- safety is never relaxed, even as a last resort", async () => {
+    const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+    const proposal: MealProposal = {
+      dishName: "Chicken and Rice Bowl",
+      ingredients: [
+        { name: "grilled chicken breast", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "grilled chicken breast": chicken, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, ctx, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason.kind).toBe("unsafe_ingredient");
+    // Confirms the safety check runs BEFORE any ingredient is looked up,
+    // same as the strict composer -- no grounding call for the unsafe item.
+    expect(fetcher).not.toHaveBeenCalledWith("grilled chicken breast");
+  });
+
+  it("still rejects when there is genuinely nothing to build from (no ingredients at all)", async () => {
+    const proposal: MealProposal = { dishName: "Empty Dish", ingredients: [] };
+    const fetcher = lookupFrom({});
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason.kind).toBe("no_ingredients");
+  });
+
+  it("succeeds with isApproximate:false when the proposal is actually fine -- never falsely discloses a compromise", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed", fixedAmountG: 40 },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, spinach });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(false);
+    expect(result.result.approximationNotes).toEqual([]);
+  });
+
+  it("relaxes a duplicate role by keeping only the first ingredient, instead of rejecting", async () => {
+    const proposal: MealProposal = {
+      dishName: "Double Protein Bowl",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "grilled chicken breast", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "grilled chicken breast": chicken, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    expect(result.result.meal.ingredients.find((i) => i.ingredientName === "seitan cutlets")).toBeDefined();
+    expect(result.result.meal.ingredients.find((i) => i.ingredientName === "grilled chicken breast")).toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalledWith("grilled chicken breast");
+  });
+
+  it("relaxes a missing role to a lighter-on-that-macro meal, instead of rejecting", async () => {
+    const proposal: MealProposal = {
+      dishName: "Incomplete Dish",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    expect(result.result.meal.ingredients).toHaveLength(2);
+  });
+
+  it("relaxes a fixed item's unrealistic amount by clamping it, instead of rejecting the whole dish", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed", fixedAmountG: 500 }, // way over the 150g cap
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "whole wheat bread": bread, "olive oil": oil, spinach });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    const spinachItem = result.result.meal.ingredients.find((i) => i.ingredientName === "spinach")!;
+    expect(spinachItem.amountG).toBe(150); // clamped to the realistic max, not rejected
+  });
+
+  it("drops a role whose ingredient can't be grounded, instead of rejecting the whole dish (the tofu-style unobtainium case)", async () => {
+    const proposal: MealProposal = {
+      dishName: "Mystery Dish",
+      ingredients: [
+        { name: "unobtainium protein", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    expect(result.result.meal.ingredients.find((i) => i.ingredientName === "unobtainium protein")).toBeUndefined();
+    // Carb (bread) succeeds; fat (oil) rounds to 5g against the now-larger
+    // remaining fat gap (protein contributed nothing) -- below the 10g
+    // floor, so it's correctly skipped too (fat is optional, same as the
+    // strict composer's own "allowed to contribute nothing" exception,
+    // not a second compromise to report). Just the one real ingredient.
+    expect(result.result.meal.ingredients.find((i) => i.ingredientName === "whole wheat bread")).toBeDefined();
+  });
+
+  it("clamps an out-of-bounds portion (the tofu case) to a realistic amount, instead of rejecting", async () => {
+    // Same fixture as the strict composer's rejection test: 346g tofu
+    // needed to close the full protein gap, over the 280g cap.
+    const proposal: MealProposal = {
+      dishName: "Tofu Scramble with Spinach and Whole Wheat Toast",
+      ingredients: [
+        { name: "firm tofu", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "firm tofu": tofu, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    const tofuItem = result.result.meal.ingredients.find((i) => i.ingredientName === "firm tofu")!;
+    expect(tofuItem.amountG).toBe(280); // clamped to the realistic max, not rejected
+  });
+
+  it("falls back to a realistic minimum portion when a role can't be sized at all (zero-density or non-positive gap)", async () => {
+    const zeroProteinDensity: GroundedIngredientData = { id: 99, name: "zero density protein", caloriesPer100g: 50, proteinGPer100g: 0, carbsGPer100g: 5, fatGPer100g: 1, estimatedCostCentsPer100g: null };
+    const proposal: MealProposal = {
+      dishName: "Odd Dish",
+      ingredients: [
+        { name: "zero density protein", role: "protein" },
+        { name: "whole wheat bread", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "zero density protein": zeroProteinDensity, "whole wheat bread": bread, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    const item = result.result.meal.ingredients.find((i) => i.ingredientName === "zero density protein")!;
+    expect(item.amountG).toBe(20); // PORTION_BOUNDS_G.protein.min
+  });
+
+  it("still rejects when every single ingredient fails to resolve -- nothing real to show", async () => {
+    const proposal: MealProposal = {
+      dishName: "All Unobtainium Dish",
+      ingredients: [
+        { name: "unobtainium protein", role: "protein" },
+        { name: "unobtainium carb", role: "carb" },
+        { name: "unobtainium fat", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({});
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection despite best-effort mode");
+    expect(result.reason.kind).toBe("ingredient_not_found");
   });
 });

@@ -12,13 +12,14 @@ import {
 import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { prepNoteFor } from "@/lib/mealplan/staticIngredientMacros";
-import { generatePlan, swapMeal, getRecipeInstructions } from "./actions";
+import { generatePlan, swapMeal, getRecipeInstructions, getAiComposedRecipeInstructions } from "./actions";
 import type { BlockedSlotView, ComposedIngredientView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
 import type { PantryItemView } from "./pantryData";
 import { GroceryList } from "./GroceryList";
 import type { GroceryLineView } from "./groceryData";
 import { fetchGroceryList } from "./groceryActions";
+import { pluralizeUnit } from "./unitFormatting";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -325,6 +326,7 @@ export function PlanBoard({
                   key={key}
                   mealType={mealType}
                   slot={slot}
+                  mealPlanId={plan.id}
                   blockingHint={blocked?.blockingHint ?? null}
                   swapping={swappingKey === key}
                   onSwap={() => handleSwap(selectedDay, mealType)}
@@ -406,32 +408,66 @@ function MacroPill({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Placeholder for an AI-composed dish, which never has a real photo (2026-
+// 07-30 UI pass -- these cards used to render nothing at all in the image
+// slot, reading as noticeably plainer than every real-recipe card next to
+// them). A plain stroke icon, not a color emoji, to stay monochrome/
+// muted-toned like this app's other glyphs (✕/●/↗ below) rather than
+// introducing a jarring colorful element.
+function ComposedDishPlaceholder() {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-background text-muted">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="15" r="6" />
+        <path d="M9 4c0 1-1 1.2-1 2.2S9 7.4 9 8.4M12 3c0 1-1 1.2-1 2.2s1 1.2 1 2.2M15 4c0 1-1 1.2-1 2.2s1 1.2 1 2.2" />
+      </svg>
+    </div>
+  );
+}
+
 function MealCard({
   mealType,
   slot,
+  mealPlanId,
   blockingHint,
   swapping,
   onSwap,
 }: {
   mealType: MealType;
   slot: PlanSlotView | undefined;
+  mealPlanId: string;
   blockingHint: string | null;
   swapping: boolean;
   onSwap: () => void;
 }) {
   const [showRecipe, setShowRecipe] = useState(false);
-  // Only a real, non-composed recipe has ingredients/instructions worth a
-  // separate detail view — composed snacks/AI-composed meals already show
-  // everything they have (their flat ingredient list) directly on the card.
-  const hasRecipeDetail = !!slot && !slot.isComposed && slot.recipeId !== null;
+  // A real, non-composed recipe has ingredients/instructions worth a
+  // separate detail view via Spoonacular; an AI-composed MEAL now gets the
+  // same detail view too (2026-07-30), with instructions generated on
+  // demand instead of fetched -- see RecipeModal. A plain composed SNACK
+  // still doesn't: it already shows everything it has (its flat ingredient
+  // list + "no cooking" footer) directly on the card, nothing to expand.
+  const hasRecipeDetail = !!slot && ((!slot.isComposed && slot.recipeId !== null) || slot.aiComposed);
+  // AI-composed meals never have a real photo (nothing was ever fetched or
+  // matched) -- shown with a placeholder instead of an empty slot, so the
+  // card doesn't read as noticeably plainer than a real-recipe card next
+  // to it. Composed snacks intentionally stay photo-free (they're not
+  // "a dish," just a quick assembled snack).
+  const showPlaceholderImage = !!slot && slot.aiComposed && !slot.imageUrl;
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface">
-      {slot?.imageUrl && (
+      {slot?.imageUrl ? (
         <div className="aspect-4/3 w-full shrink-0 bg-background">
           {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, not worth a next.config remotePatterns entry for a thumbnail */}
           <img src={slot.imageUrl} alt={slot.recipeTitle} loading="lazy" className="h-full w-full object-cover" />
         </div>
+      ) : (
+        showPlaceholderImage && (
+          <div className="aspect-4/3 w-full shrink-0">
+            <ComposedDishPlaceholder />
+          </div>
+        )
       )}
       <div className="flex flex-1 flex-col p-3">
         <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
@@ -491,7 +527,11 @@ function MealCard({
               // as-is -- see staticIngredientMacros.ts's prepNoteFor for why
               // the note only ever points at water or the meal this addon is
               // already attached to, never an untracked outside food.
-              <p className="mt-1 text-xs text-accent-2">
+              // Neutral (text-muted), not accent-2 (2026-07-30 UI pass) --
+              // this is a normal helpful note, same tone as the rest of the
+              // card's small text; the accent color read as a warning/error
+              // next to everything else, which it isn't.
+              <p className="mt-1 text-xs text-muted">
                 {`+ ${Math.round(slot.addon.amountG)}g ${slot.addon.ingredientName} to help hit this week's targets (${Math.round(slot.addon.caloriesKcal)} cal)`}
                 {(() => {
                   const note = prepNoteFor(slot.addon.ingredientName, "addon", []);
@@ -533,8 +573,9 @@ function MealCard({
       </div>
       {showRecipe && slot && (
         <RecipeModal
-          key={`${slot.dayIndex}-${slot.mealType}-${slot.recipeId}-${slot.aiComposed}`}
+          key={`${mealPlanId}-${slot.dayIndex}-${slot.mealType}-${slot.recipeId}-${slot.aiComposed}`}
           slot={slot}
+          mealPlanId={mealPlanId}
           onClose={() => setShowRecipe(false)}
         />
       )}
@@ -548,15 +589,26 @@ function MealCard({
 // every recipe in its corpus does). A modal (not inline expansion) keeps the
 // card grid's height uniform — an inline expansion would shove every other
 // card in the row down whenever one recipe's step list is long.
-function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => void }) {
+function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPlanId: string; onClose: () => void }) {
   const [instructions, setInstructions] = useState<{ steps: string[]; sourceUrl: string | null } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (slot.recipeId === null) return;
+    if (slot.recipeId === null && !slot.aiComposed) return;
     let cancelled = false;
-    getRecipeInstructions(slot.recipeId).then((result) => {
+    // AI-composed meals get generated instructions (2026-07-30, on demand,
+    // cached server-side after the first open) instead of a Spoonacular
+    // fetch -- same {steps, error} shape either way, so the render logic
+    // below doesn't need to know which path produced it.
+    const fetchInstructions =
+      slot.aiComposed
+        ? getAiComposedRecipeInstructions({ mealPlanId, dayIndex: slot.dayIndex, mealType: slot.mealType }).then((result) => ({
+            ...result,
+            sourceUrl: null as string | null,
+          }))
+        : getRecipeInstructions(slot.recipeId!);
+    fetchInstructions.then((result) => {
       if (cancelled) return;
       setLoading(false);
       if (result.error) {
@@ -568,7 +620,7 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
     return () => {
       cancelled = true;
     };
-  }, [slot.recipeId]);
+  }, [slot.recipeId, slot.aiComposed, slot.dayIndex, slot.mealType, mealPlanId]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -587,11 +639,17 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
         className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
-        {slot.imageUrl && (
+        {slot.imageUrl ? (
           <div className="aspect-16/9 w-full shrink-0 bg-background">
             {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, same as the card thumbnail above */}
             <img src={slot.imageUrl} alt={slot.recipeTitle} className="h-full w-full object-cover" />
           </div>
+        ) : (
+          slot.aiComposed && (
+            <div className="aspect-16/9 w-full shrink-0">
+              <ComposedDishPlaceholder />
+            </div>
+          )
         )}
         <div className="overflow-y-auto p-4">
           <div className="flex items-start justify-between gap-3">
@@ -621,6 +679,24 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
                 {slot.recipeIngredients.map((ing, i) => (
                   <li key={i}>
                     {formatIngredientAmount(ing.amount, ing.unit)} {ing.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* AI-composed meals have no recipeIngredients (no real recipe
+              was ever fetched) -- same layout as the block above, reusing
+              the composedIngredients data already shown on the card
+              itself, just styled to match a real recipe's Ingredients
+              section (2026-07-30, "similar UI to real Spoonacular meals"). */}
+          {slot.aiComposed && slot.composedIngredients && slot.composedIngredients.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Ingredients</h3>
+              <ul className="mt-2 flex flex-col gap-1 text-sm text-foreground">
+                {slot.composedIngredients.map((ing, i) => (
+                  <li key={i}>
+                    {Math.round(ing.amountG)}g {ing.name}
                   </li>
                 ))}
               </ul>
@@ -668,5 +744,5 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
 // cook would ever actually measure.
 function formatIngredientAmount(amount: number, unit: string): string {
   const rounded = Math.round(amount * 10) / 10;
-  return unit ? `${rounded} ${unit}` : `${rounded}`;
+  return unit ? `${rounded} ${pluralizeUnit(unit, rounded)}` : `${rounded}`;
 }

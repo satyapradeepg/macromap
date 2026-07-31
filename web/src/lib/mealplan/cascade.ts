@@ -60,6 +60,17 @@ export function matchLabelFor(
   candidate: RankedCandidate,
   target: { proteinG: number; calories: number },
 ): string | null {
+  // Checked first, ahead of budget/tier -- an approximate AI-composed
+  // fallback (2026-07-30) is a bigger compromise than either of those and
+  // must never be silently presented as a normal close match. See
+  // ranking.ts's isApproximate for what can and can't set this (never a
+  // safety rejection).
+  if (candidate.isApproximate) {
+    const notes = candidate.approximationNotes?.length
+      ? ` (${candidate.approximationNotes.join("; ")})`
+      : "";
+    return `Approximate — couldn't fully match your targets${notes}`;
+  }
   if (!candidate.budgetCompliant && candidate.pricePerServingCents !== null) {
     const overCents = candidate.pricePerServingCents; // caller compares to budget if it wants a delta
     return `Closest to your budget — $${(overCents / 100).toFixed(2)}/serving`;

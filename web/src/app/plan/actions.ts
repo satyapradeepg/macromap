@@ -12,6 +12,7 @@ import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
 import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
+import { generateAiComposedRecipeSteps } from "@/lib/mealplan/aiComposedRecipeInstructions";
 import {
   buildGroceryLines,
   mergeConvertibleLines,
@@ -602,4 +603,76 @@ export async function getRecipeInstructions(recipeId: number): Promise<GetRecipe
     return { steps: [], sourceUrl: null, error: "Recipe details unavailable right now — try again shortly." };
   }
   return { steps: result.steps, sourceUrl: result.sourceUrl, error: null };
+}
+
+export interface GetAiComposedRecipeInstructionsInput {
+  mealPlanId: string;
+  dayIndex: number;
+  mealType: MealType;
+}
+
+export interface GetAiComposedRecipeInstructionsResult {
+  steps: string[];
+  error: string | null;
+}
+
+// Backs the "Recipe" detail for an AI-composed dish (2026-07-30, "AI meals
+// should have a similar recipe experience to real Spoonacular meals" --
+// Satya's explicit request), same lazy-on-open trigger as
+// getRecipeInstructions above. UNLIKE that function, this reads/writes a
+// specific user's specific slot (the ingredient list to write instructions
+// FOR, and the cache column to persist them TO) -- not a public
+// Spoonacular id -- so it uses the cookie-scoped, RLS-enforced client
+// (same as swapMeal) rather than the admin client, and ownership is
+// enforced by Postgres RLS on meal_plan_slots, not a manual check here.
+export async function getAiComposedRecipeInstructions(
+  input: GetAiComposedRecipeInstructionsInput,
+): Promise<GetAiComposedRecipeInstructionsResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { steps: [], error: "No active session — refresh the page and try again." };
+  }
+
+  const { data: slot } = await supabase
+    .from("meal_plan_slots")
+    .select("id, recipe_title, recipe_source, ingredients, ai_recipe_instructions")
+    .eq("meal_plan_id", input.mealPlanId)
+    .eq("day_index", input.dayIndex)
+    .eq("meal_type", input.mealType)
+    .maybeSingle();
+
+  if (!slot) {
+    return { steps: [], error: "Meal not found — refresh the page and try again." };
+  }
+  // Defensive, not expected to trigger from the UI (the "Recipe" button is
+  // only ever shown for an ai_composed slot) -- but this reads/writes a
+  // slot by caller-supplied coordinates, so it shouldn't silently generate
+  // instructions for a real Spoonacular recipe if ever called wrong.
+  if (slot.recipe_source !== "ai_composed") {
+    return { steps: [], error: "Instructions unavailable for this meal." };
+  }
+
+  if (slot.ai_recipe_instructions) {
+    return { steps: slot.ai_recipe_instructions as string[], error: null };
+  }
+
+  const ingredients = (slot.ingredients as Array<{ name: string; amount: number }> | null ?? []).map((i) => ({
+    name: i.name,
+    amountG: i.amount,
+  }));
+  const steps = await generateAiComposedRecipeSteps(slot.recipe_title, ingredients);
+  if (!steps) {
+    return { steps: [], error: "Recipe details unavailable right now — try again shortly." };
+  }
+
+  // Best-effort persistence -- a failed write just means the next open
+  // regenerates instead of hitting the cache; never blocks returning the
+  // steps the user is waiting on right now.
+  await supabase.from("meal_plan_slots").update({ ai_recipe_instructions: steps }).eq("id", slot.id);
+
+  return { steps, error: null };
 }

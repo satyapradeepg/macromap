@@ -8,10 +8,15 @@ import { useState } from "react";
 import type { GroceryLineView } from "./groceryData";
 import { overrideGroceryPrice } from "./groceryActions";
 import { UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
+import { pluralizeUnit } from "./unitFormatting";
 
 function formatAmount(amount: number, unit: string): string {
   const rounded = Math.round(amount * 10) / 10;
-  return unit.length <= 2 ? `${rounded}${unit}` : `${rounded} ${unit}`;
+  // unit.length <= 2 is this function's own existing "metric abbreviation,
+  // never pluralizes, glue it directly to the number" heuristic --
+  // pluralizeUnit shares the exact same threshold, so word-length units
+  // (which DO space-separate here) get pluralized, short ones don't.
+  return unit.length <= 2 ? `${rounded}${unit}` : `${rounded} ${pluralizeUnit(unit, rounded)}`;
 }
 
 function formatCents(cents: number): string {

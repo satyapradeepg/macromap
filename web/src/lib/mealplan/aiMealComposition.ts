@@ -425,6 +425,210 @@ export async function composeMealFromProposalDetailed(
   };
 }
 
+export interface BestEffortComposeResult {
+  meal: ComposedMeal;
+  // True whenever ANY relaxation actually fired (a role got dropped,
+  // clamped, or defaulted). False means this call succeeded via the exact
+  // same rules as the strict composer -- callers should only disclose
+  // "approximate" to a user when this is true, not unconditionally.
+  isApproximate: boolean;
+  approximationNotes: string[];
+}
+
+// Last-resort relaxed composer (2026-07-30, per Satya's explicit request:
+// "fill with the closest meal rather than leaving it open"). Used ONLY
+// after composeMealFromProposalDetailed has already failed on the SAME
+// proposal (first attempt + retry, per orchestrate.ts's retry-with-
+// feedback) -- never a replacement for the strict composer, only a final
+// fallback so a slot doesn't stay blocked over a fixable-in-hindsight
+// realism nitpick.
+//
+// SAFETY IS NEVER RELAXED. The unsafe-ingredient check below is byte-for-
+// byte the same unconditional hard block as composeMealFromProposalDetailed
+// -- there is no flag, no override, no path through this function that can
+// return ok:true for a proposal containing an unsafe ingredient. Every
+// OTHER rejection kind degrades gracefully instead of failing:
+// - duplicate_role: keep the first ingredient for that role, drop the rest.
+// - missing_role: proceed without that role's contribution (the meal comes
+//   in light on that macro, disclosed, rather than not existing at all).
+// - fixed_item_unrealistic: clamp the amount into bounds instead of
+//   rejecting (matches the existing "just drop the whole fixed item on a
+//   failed lookup" leniency already given to this non-critical role).
+// - ingredient_not_found: drop that role's contribution (no real macro
+//   data exists to build from, so there is nothing to size -- honest
+//   omission, not a guess).
+// - portion_infeasible / density too low to size anything: fall back to
+//   this role's own realistic MINIMUM portion rather than omitting a
+//   load-bearing (protein/carb) role entirely.
+// - portion_out_of_bounds: clamp the computed amount to the nearest bound
+//   instead of rejecting -- the amount was already real and computed, just
+//   outside the realistic window, so clamping (not omitting) is the
+//   honest "closest we can get" move.
+export async function composeMealFromProposalBestEffort(
+  proposal: MealProposal,
+  target: MacroTargets,
+  ctx: DietaryContext,
+  fetchIngredientMacros: FetchIngredientMacrosFn,
+): Promise<{ ok: true; result: BestEffortComposeResult } | { ok: false; reason: CompositionRejection }> {
+  if (proposal.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
+
+  // Unconditional, same as the strict composer -- see the function-level
+  // comment above for why this can never be bypassed.
+  for (const ing of proposal.ingredients) {
+    const unsafeReason = isOpenEndedIngredientUnsafeFor(ing.name, ctx);
+    if (unsafeReason !== null) {
+      return { ok: false, reason: { kind: "unsafe_ingredient", role: ing.role, ingredientName: ing.name, reason: unsafeReason } };
+    }
+  }
+
+  const notes: string[] = [];
+
+  // Duplicate role relaxed to "keep the first, drop the rest" instead of
+  // rejecting the whole proposal.
+  const seenCoreRoles = new Set<MealRole>();
+  const dedupedIngredients: ProposedIngredient[] = [];
+  for (const ing of proposal.ingredients) {
+    if (ing.role !== "fixed") {
+      if (seenCoreRoles.has(ing.role)) {
+        notes.push(`used only the first proposed ${ing.role} ingredient (a duplicate was dropped)`);
+        continue;
+      }
+      seenCoreRoles.add(ing.role);
+    }
+    dedupedIngredients.push(ing);
+  }
+
+  const proteinProposed = dedupedIngredients.find((i) => i.role === "protein");
+  const carbProposed = dedupedIngredients.find((i) => i.role === "carb");
+  const fatProposed = dedupedIngredients.find((i) => i.role === "fat");
+  const fixedProposed = dedupedIngredients.filter((i) => i.role === "fixed");
+
+  if (!proteinProposed && !carbProposed && !fatProposed) {
+    // Nothing at all to build a real meal from -- genuinely nothing to
+    // salvage, not a relaxable case.
+    return { ok: false, reason: { kind: "missing_role", role: "protein" } };
+  }
+  if (!proteinProposed) notes.push(`no protein ingredient was proposed -- this meal will be light on protein`);
+  if (!carbProposed) notes.push(`no carb ingredient was proposed -- this meal will be light on carbs`);
+  if (!fatProposed) notes.push(`no fat ingredient was proposed -- this meal will be light on fat`);
+
+  const composed: ComposedMealIngredient[] = [];
+  let remainingProtein = target.proteinG;
+  let remainingCarbs = target.carbsG;
+  let remainingFat = target.fatG;
+
+  for (const fixedItem of fixedProposed) {
+    let amountG = fixedItem.fixedAmountG ?? DEFAULT_FIXED_AMOUNT_G;
+    if (!Number.isFinite(amountG)) continue; // nothing sensible to clamp a NaN/Infinity to -- drop it, same as a failed lookup
+    if (!isRealisticAmount(amountG, PORTION_BOUNDS_G.fixed)) {
+      const clamped = Math.min(Math.max(amountG, PORTION_BOUNDS_G.fixed.min), PORTION_BOUNDS_G.fixed.max);
+      notes.push(`adjusted "${fixedItem.name}" from ${amountG}g to a more realistic ${clamped}g`);
+      amountG = clamped;
+    }
+    const lookup = await fetchIngredientMacros(fixedItem.name);
+    if (!lookup) continue; // fixed items are non-critical -- same silent drop as the strict composer
+    const item = toComposedIngredient(lookup, amountG);
+    composed.push(item);
+    remainingProtein -= item.proteinG;
+    remainingCarbs -= item.carbsG;
+    remainingFat -= item.fatG;
+  }
+
+  // Shared relaxed handling for a single core (protein/carb/fat) role --
+  // grounds the ingredient, then sizes it with every failure mode
+  // degrading instead of rejecting. Returns null only when there's
+  // nothing at all to add (no ingredient proposed, or the gap is already
+  // closed) -- an honest omission, not a failure.
+  async function relaxedRoleItem(
+    proposed: ProposedIngredient | undefined,
+    role: Exclude<MealRole, "fixed">,
+    remaining: number,
+    // Matches the strict composer's own carb/fat exception exactly: those
+    // two roles are legitimately allowed to contribute NOTHING (already
+    // covered by an earlier role, or genuinely zero gap left) -- that's
+    // not a compromise to relax, it's already-correct behavior in the
+    // strict composer today. Only protein is mandatory there. Getting
+    // this wrong would falsely disclose "approximate" on a proposal the
+    // strict composer would have accepted outright.
+    optional: boolean,
+  ): Promise<ComposedMealIngredient | null> {
+    if (!proposed) return null; // already noted above
+    const lookup = await fetchIngredientMacros(proposed.name);
+    if (!lookup) {
+      notes.push(`"${proposed.name}" (${role}) couldn't be matched to real ingredient data and was dropped`);
+      return null;
+    }
+    if (remaining <= 0) return null; // nothing needed -- correct omission, not a compromise, for every role
+
+    const densityKey = role === "protein" ? "proteinGPer100g" : role === "carb" ? "carbsGPer100g" : "fatGPer100g";
+    const density = lookup[densityKey];
+    const bounds = PORTION_BOUNDS_G[role];
+
+    if (density <= 0) {
+      if (optional) return null; // same as the strict composer: sizeForGap would return null too, and this role may contribute nothing
+      // Can't size ANY amount of this ingredient toward this macro at all
+      // (e.g. proposed as "protein" but is macro-zero) -- fall back to a
+      // realistic minimum portion rather than omitting a load-bearing role.
+      notes.push(`"${proposed.name}" (${role}) can't meaningfully close the gap -- included at a normal minimum ${bounds.min}g portion instead`);
+      return toComposedIngredient(lookup, bounds.min);
+    }
+
+    const sized = sizeForGap(density, remaining);
+    if (!sized) {
+      if (optional) return null; // matches the strict composer's "allowed to contribute nothing" exception exactly -- not a compromise
+      notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
+      return toComposedIngredient(lookup, bounds.min);
+    }
+    let amountG = sized.amountG;
+    if (!isRealisticAmount(amountG, bounds)) {
+      const clamped = Math.min(Math.max(amountG, bounds.min), bounds.max);
+      notes.push(`"${proposed.name}" (${role}) needed ${amountG}g to fully close the gap -- capped at a realistic ${clamped}g instead`);
+      amountG = clamped;
+    }
+    return toComposedIngredient(lookup, amountG);
+  }
+
+  const proteinItem = await relaxedRoleItem(proteinProposed, "protein", remainingProtein, false);
+  if (proteinItem) {
+    composed.push(proteinItem);
+    remainingCarbs -= proteinItem.carbsG;
+    remainingFat -= proteinItem.fatG;
+  }
+
+  const carbItem = await relaxedRoleItem(carbProposed, "carb", remainingCarbs, true);
+  if (carbItem) {
+    composed.push(carbItem);
+    remainingFat -= carbItem.fatG;
+  }
+
+  const fatItem = await relaxedRoleItem(fatProposed, "fat", remainingFat, true);
+  if (fatItem) composed.push(fatItem);
+
+  if (composed.length === 0) {
+    // Every single ingredient failed to resolve -- genuinely nothing real
+    // to show, still fails closed here rather than presenting an empty dish.
+    return { ok: false, reason: { kind: "ingredient_not_found", role: "protein", ingredientName: proteinProposed?.name ?? carbProposed?.name ?? fatProposed?.name ?? "unknown" } };
+  }
+
+  const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
+  return {
+    ok: true,
+    result: {
+      meal: {
+        dishName: proposal.dishName,
+        ingredients: composed,
+        totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
+        totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
+        totalCarbsG: composed.reduce((s, i) => s + i.carbsG, 0),
+        totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
+        totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
+      },
+      isApproximate: notes.length > 0,
+      approximationNotes: notes,
+    },
+  };
+}
+
 // Thin wrapper kept for existing callers/tests that only care whether
 // composition succeeded, not why it didn't.
 export async function composeMealFromProposal(
