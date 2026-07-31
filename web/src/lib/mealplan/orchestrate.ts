@@ -75,7 +75,7 @@ import {
   type MealProposal,
 } from "./aiMealComposition";
 import { proposeMealViaClaude, proposeMealsBatchViaClaude } from "./mealProposer";
-import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor } from "./openEndedIngredientSafety";
+import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, dietaryStyleExcludeKeywords } from "./openEndedIngredientSafety";
 import { critiquePlan, type PlanSlotSummary } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
@@ -345,7 +345,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
-  const excludeIngredients = [...input.allergies, ...input.dislikes];
+  const excludeIngredients = [...input.allergies, ...input.dislikes, ...dietaryStyleExcludeKeywords(input.dietaryStyles)];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
   // Quantity-aware pantry depletion (pantryRemaining.ts) starts as an
   // UNRESOLVED tracker (no identity-match/unit-conversion data yet) --
@@ -2206,7 +2206,7 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
 
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
-  const excludeIngredients = [...input.allergies, ...input.dislikes];
+  const excludeIngredients = [...input.allergies, ...input.dislikes, ...dietaryStyleExcludeKeywords(input.dietaryStyles)];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
 
   const admin = createAdminClient();

@@ -172,7 +172,7 @@ export function buildPrompt(input: ProposeMealInput): string {
 - ${Math.round(target.carbsG)}g carbs
 - ${Math.round(target.fatG)}g fat
 
-Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
+Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free; if halal or kosher is listed below, that means no pork/bacon/ham and no alcohol/wine/beer/rum as an ingredient -- gelatin and marshmallows are frequently pork-derived, and a wine/beer-based sauce or marinade still counts even if it's "cooked off"; kosher additionally means no shellfish):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
 - Allergies (absolute, safety-critical -- think about hidden forms, not just the literal word): ${allergies.length ? allergies.join(", ") : "none"}
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
@@ -329,7 +329,7 @@ The individual numbers above are each slot's own even share, but what actually m
 
 You do NOT need every single dish to hit its own individual share exactly -- each meal you propose has its OWN target fields (targetCalories/targetProteinG/targetCarbsG/targetFatG) that you set yourself, and THOSE are what actually get used, not the even share shown above. If a slot's own protein share is demanding for a normal single-meal portion (roughly above 50g), the most reliable strategy is to CONCENTRATE rather than spread evenly: pick the single densest protein source that's still safe for this profile (see the constraints below and the filtered options in requirement 4: ${proteinExamples.join(", ")}) for 1-2 of these dishes, set THEIR targetProteinG notably higher than that slot's even share, and set the REMAINING dishes' targetProteinG lower (leaning more on carbs/fat instead) -- their targetCalories should still add up sensibly with the lower protein. This is much more likely to produce realistic portions across the whole batch than asking every dish to independently hit a demanding number. Only aim for near-even targets across dishes if every slot's own share is already easily achievable. Every dish's targets, added together, should land close to the combined total above -- exact precision isn't required (it will be auto-corrected), but a genuinely deliberate allocation is.
 
-Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
+Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free; if halal or kosher is listed below, that means no pork/bacon/ham and no alcohol/wine/beer/rum as an ingredient -- gelatin and marshmallows are frequently pork-derived, and a wine/beer-based sauce or marinade still counts even if it's "cooked off"; kosher additionally means no shellfish):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
 - Allergies (absolute, safety-critical -- think about hidden forms, not just the literal word): ${allergies.length ? allergies.join(", ") : "none"}
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}

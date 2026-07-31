@@ -112,6 +112,31 @@ const NON_VEGAN_EXTRA_KEYWORDS = [
   "honey",
 ];
 
+// Live-confirmed 2026-07-31 (persona audit): a "halal" profile got pork
+// (ham hocks, salt pork) and white wine served across a real generated
+// week -- neither halal nor kosher had ANY keyword coverage anywhere in
+// this codebase; the word "pork" existed only inside NON_VEGETARIAN_
+// KEYWORDS above, which is never consulted for a halal/kosher profile.
+// This is a deliberately narrow, CHECKABLE subset of each religious
+// dietary law -- pork and alcohol for halal, pork and shellfish for
+// kosher -- not a certified/zabiha-verified guarantee (slaughter method
+// can't be verified from ingredient text at all, and kosher's meat/dairy
+// separation rule is a per-DISH cross-ingredient check, structurally
+// different from everything else in this file, and deliberately left
+// out: too much real ambiguity -- chicken broth in a cream sauce? a
+// "non-dairy" creamer? -- for a keyword scan to resolve safely).
+const PORK_SYNONYMS = [
+  "pork", "bacon", "ham", "ham hock", "ham hocks", "salt pork", "prosciutto", "pepperoni",
+  "salami", "chorizo", "lard", "pancetta", "guanciale", "spam",
+];
+// Zero coverage anywhere in this codebase before this -- confirmed via
+// grep. Common cooking-wine forms included since they're still real wine.
+const ALCOHOL_SYNONYMS = [
+  "wine", "beer", "rum", "whiskey", "whisky", "bourbon", "vodka", "brandy", "sherry", "sake",
+  "liqueur", "marsala", "mirin", "champagne", "cognac", "kirsch", "amaretto", "vermouth",
+  "triple sec", "schnapps",
+];
+
 function normalize(s: string): string {
   return s.toLowerCase().trim();
 }
@@ -215,6 +240,21 @@ function hasGlutenFreeQualifier(haystack: string, word: string): boolean {
   return word === "gluten" && /\bgluten[-\s]free\b/.test(haystack);
 }
 
+// Mirror of hasSafePlantCompound's shape: a handful of common ingredient
+// names contain an ALCOHOL_SYNONYMS word as a real, space-separated
+// substring but carry no meaningful alcohol themselves -- "wine vinegar"
+// is vinegar (fermentation converts the alcohol away, none remains in the
+// product), and "root beer"/"ginger beer" are ordinary non-alcoholic
+// sodas despite the name. Deliberately short and specific, same
+// philosophy as PLANT_MODIFIERS -- add to this list only when a real
+// collision is confirmed, not speculatively.
+const SAFE_ALCOHOL_COMPOUNDS = ["wine vinegar", "root beer", "ginger beer"];
+
+function hasSafeAlcoholCompound(haystack: string, word: string): boolean {
+  if (word !== "wine" && word !== "beer") return false;
+  return SAFE_ALCOHOL_COMPOUNDS.some((c) => wordBoundaryIncludes(haystack, c));
+}
+
 function containsAny(haystack: string, needles: string[]): string | null {
   return (
     needles.find(
@@ -222,7 +262,8 @@ function containsAny(haystack: string, needles: string[]): string | null {
         wordBoundaryIncludes(haystack, n) &&
         !hasSafePlantCompound(haystack, n) &&
         !hasGlutenFreeQualifier(haystack, n) &&
-        !hasAnimalDairySourceCompound(haystack, n),
+        !hasAnimalDairySourceCompound(haystack, n) &&
+        !hasSafeAlcoholCompound(haystack, n),
     ) ?? null
   );
 }
@@ -238,6 +279,19 @@ function vegetarianOrVeganViolation(name: string, dietaryStyles: string[]): stri
     return containsAny(name, NON_VEGETARIAN_KEYWORDS);
   }
   return null;
+}
+
+// Checkable subset only -- see the PORK_SYNONYMS/ALCOHOL_SYNONYMS comment
+// above for what's deliberately out of scope (slaughter method, kosher
+// meat/dairy separation).
+function halalViolation(name: string, dietaryStyles: string[]): string | null {
+  if (!dietaryStyles.includes("halal")) return null;
+  return containsAny(name, [...PORK_SYNONYMS, ...ALCOHOL_SYNONYMS]);
+}
+
+function kosherViolation(name: string, dietaryStyles: string[]): string | null {
+  if (!dietaryStyles.includes("kosher")) return null;
+  return containsAny(name, [...PORK_SYNONYMS, ...SHELLFISH_SYNONYMS]);
 }
 
 // Returns a human-readable reason the ingredient is unsafe/should be
@@ -300,6 +354,16 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     return `"${ingredientName}" contains "${dietHit}", not ${style}-compliant`;
   }
 
+  const halalHit = halalViolation(name, ctx.dietaryStyles);
+  if (halalHit) {
+    return `"${ingredientName}" contains "${halalHit}", not halal-compliant`;
+  }
+
+  const kosherHit = kosherViolation(name, ctx.dietaryStyles);
+  if (kosherHit) {
+    return `"${ingredientName}" contains "${kosherHit}", not kosher-compliant`;
+  }
+
   return null;
 }
 
@@ -359,5 +423,35 @@ export function isRecipeTitleUnsafeFor(title: string, ctx: DietaryContext): stri
     return `title "${title}" contains "${dietHit}", not ${style}-compliant`;
   }
 
+  const halalHit = halalViolation(name, ctx.dietaryStyles);
+  if (halalHit) {
+    return `title "${title}" contains "${halalHit}", not halal-compliant`;
+  }
+
+  const kosherHit = kosherViolation(name, ctx.dietaryStyles);
+  if (kosherHit) {
+    return `title "${title}" contains "${kosherHit}", not kosher-compliant`;
+  }
+
   return null;
+}
+
+// Exported for orchestrate.ts's excludeIngredients construction -- merges
+// pork/alcohol/shellfish keywords into the SAME free-text-exclusion list a
+// user's own allergies/dislikes already flow through (see orchestrate.ts's
+// excludeIngredients), so Spoonacular's own search also avoids obviously-
+// tagged candidates. Deliberately reuses these exact lists rather than a
+// second hand-maintained copy in dietaryMapping.ts, to avoid the two
+// drifting out of sync (and dietaryMapping.ts importing this module would
+// create a circular import, since this module already imports
+// resolveIntolerances from dietaryMapping.ts).
+export function dietaryStyleExcludeKeywords(dietaryStyles: string[]): string[] {
+  const keywords = new Set<string>();
+  if (dietaryStyles.includes("halal")) {
+    for (const w of [...PORK_SYNONYMS, ...ALCOHOL_SYNONYMS]) keywords.add(w);
+  }
+  if (dietaryStyles.includes("kosher")) {
+    for (const w of [...PORK_SYNONYMS, ...SHELLFISH_SYNONYMS]) keywords.add(w);
+  }
+  return [...keywords];
 }

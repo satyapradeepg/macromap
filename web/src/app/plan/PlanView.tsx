@@ -272,8 +272,19 @@ export function PlanBoard({
 
       {unsupportedStyles.length > 0 && (
         <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
-          {unsupportedStyles.map((s) => s.replace("_", " ")).join(" / ")} aren&apos;t enforced by our
-          recipe filters yet — please double-check ingredients.
+          {/* A single template literal, not JSX text wrapped across lines --
+              line-wrapped JSX text immediately after an expression silently
+              drops the leading space on compile (see MealCard's addon note
+              above for the same incident), rendering "halalaren't enforced"
+              with no space at all -- live-confirmed 2026-07-31.
+
+              Reworded the same day once openEndedIngredientSafety.ts's
+              halalViolation/kosherViolation shipped real pork/alcohol/
+              shellfish keyword exclusion -- "aren't enforced at all" was
+              no longer accurate, but neither is silently dropping the
+              disclaimer: it's a keyword check, not a certified/zabiha-
+              verified guarantee, so the caveat stays, just corrected. */}
+          {`${unsupportedStyles.map((s) => s.replace("_", " ")).join(" / ")}: recognized pork, alcohol, and shellfish are excluded automatically, but this is a keyword-based check, not a certified or zabiha-verified guarantee — please still double-check ingredients.`}
         </p>
       )}
 

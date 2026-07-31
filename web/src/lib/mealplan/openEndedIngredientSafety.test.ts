@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { isOpenEndedIngredientUnsafeFor, anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, type DietaryContext } from "./openEndedIngredientSafety";
+import {
+  isOpenEndedIngredientUnsafeFor,
+  anyIngredientUnsafeFor,
+  isRecipeTitleUnsafeFor,
+  dietaryStyleExcludeKeywords,
+  type DietaryContext,
+} from "./openEndedIngredientSafety";
 
 const NONE: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
 
@@ -354,6 +360,74 @@ describe("synonym and vegetarian/vegan keyword completeness (audit round 3, July
   });
 });
 
+// Live-confirmed 2026-07-31 (persona audit): a "halal" profile got pork
+// (ham hocks, salt pork) and white wine served across a real generated
+// week -- halal/kosher had zero keyword coverage anywhere before this.
+describe("halal/kosher keyword enforcement (persona audit, 2026-07-31)", () => {
+  const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+  const KOSHER: DietaryContext = { dietaryStyles: ["kosher"], allergies: [], dislikes: [] };
+
+  it("catches the exact real violations found live: ham hocks, salt pork, white wine", () => {
+    expect(isOpenEndedIngredientUnsafeFor("ham hocks", HALAL)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("salt pork", HALAL)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("white wine", HALAL)).not.toBeNull();
+  });
+
+  it("catches pork and shellfish for kosher", () => {
+    expect(isOpenEndedIngredientUnsafeFor("bacon", KOSHER)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("shrimp", KOSHER)).not.toBeNull();
+  });
+
+  it("does not flag alcohol for kosher (not part of the checkable subset) or shellfish for halal", () => {
+    expect(isOpenEndedIngredientUnsafeFor("white wine", KOSHER)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("shrimp", HALAL)).toBeNull();
+  });
+
+  it("does not flag anything when neither style is set", () => {
+    expect(isOpenEndedIngredientUnsafeFor("ham hocks", NONE)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("white wine", NONE)).toBeNull();
+  });
+
+  it("does not false-positive on non-alcoholic 'beer' and 'wine' compounds", () => {
+    expect(isOpenEndedIngredientUnsafeFor("root beer", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("ginger beer", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("red wine vinegar", HALAL)).toBeNull();
+  });
+
+  it("does not false-positive on an unrelated ordinary ingredient", () => {
+    expect(isOpenEndedIngredientUnsafeFor("chickpeas", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("chickpeas", KOSHER)).toBeNull();
+  });
+});
+
+describe("dietaryStyleExcludeKeywords", () => {
+  it("returns pork + alcohol words for halal", () => {
+    const words = dietaryStyleExcludeKeywords(["halal"]);
+    expect(words).toContain("pork");
+    expect(words).toContain("wine");
+    expect(words).not.toContain("shrimp");
+  });
+
+  it("returns pork + shellfish words for kosher", () => {
+    const words = dietaryStyleExcludeKeywords(["kosher"]);
+    expect(words).toContain("pork");
+    expect(words).toContain("shrimp");
+    expect(words).not.toContain("wine");
+  });
+
+  it("de-duplicates pork appearing in both when both styles are set", () => {
+    const words = dietaryStyleExcludeKeywords(["halal", "kosher"]);
+    expect(words.filter((w) => w === "pork")).toHaveLength(1);
+    expect(words).toContain("wine");
+    expect(words).toContain("shrimp");
+  });
+
+  it("returns an empty list when neither style is set", () => {
+    expect(dietaryStyleExcludeKeywords(["vegetarian"])).toEqual([]);
+    expect(dietaryStyleExcludeKeywords([])).toEqual([]);
+  });
+});
+
 describe("anyIngredientUnsafeFor", () => {
   it("returns a reason if any ingredient in the list is unsafe", () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
@@ -426,5 +500,19 @@ describe("isRecipeTitleUnsafeFor", () => {
   it("is case-insensitive", () => {
     expect(isRecipeTitleUnsafeFor("HAM AND SWISS PANINI", VEGETARIAN)).not.toBeNull();
     expect(isRecipeTitleUnsafeFor("vegan CHICKEN nuggets", VEGETARIAN)).toBeNull();
+  });
+
+  it("catches the exact real recipe title that slipped through live (2026-07-31 persona audit)", () => {
+    const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+    expect(isRecipeTitleUnsafeFor("Cassoulet for 10", HALAL)).toBeNull(); // title alone names nothing unsafe -- confirms this needs the ingredient-level check, not a title-only gap
+    expect(isRecipeTitleUnsafeFor("Chicken Farfalle with Low-Fat Alfredo Sauce", HALAL)).toBeNull(); // same -- "white wine" was in the ingredient list, not the title
+  });
+
+  it("catches pork/alcohol named directly in a title for halal, and pork/shellfish for kosher", () => {
+    const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+    const KOSHER: DietaryContext = { dietaryStyles: ["kosher"], allergies: [], dislikes: [] };
+    expect(isRecipeTitleUnsafeFor("Braised Pork Belly Ramen", HALAL)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Red Wine Braised Short Ribs", HALAL)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Bacon Wrapped Shrimp Skewers", KOSHER)).not.toBeNull();
   });
 });
