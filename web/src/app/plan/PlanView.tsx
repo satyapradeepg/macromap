@@ -458,7 +458,7 @@ function MealCard({
   // demand instead of fetched -- see RecipeModal. A plain composed SNACK
   // still doesn't: it already shows everything it has (its flat ingredient
   // list + "no cooking" footer) directly on the card, nothing to expand.
-  const hasRecipeDetail = !!slot && ((!slot.isComposed && slot.recipeId !== null) || slot.aiComposed);
+  const hasRecipeDetail = !!slot && !slot.isUnfilled && ((!slot.isComposed && slot.recipeId !== null) || slot.aiComposed);
   // AI-composed meals never have a real photo (nothing was ever fetched or
   // matched) -- shown with a placeholder instead of an empty slot, so the
   // card doesn't read as noticeably plainer than a real-recipe card next
@@ -483,7 +483,7 @@ function MealCard({
       <div className="flex flex-1 flex-col p-3">
         <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
 
-        {slot ? (
+        {slot && !slot.isUnfilled ? (
           <>
             <p className="mt-1 text-sm font-semibold text-foreground">{slot.recipeTitle}</p>
             {slot.matchLabel && <p className="mt-0.5 text-xs text-muted">{slot.matchLabel}</p>}
@@ -579,7 +579,15 @@ function MealCard({
             </div>
           </>
         ) : (
-          <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
+          // Persona audit 2026-07-31, finding #3 (Phase 4): a persisted
+          // 'unfilled' slot (slot.isUnfilled) carries the honest reason
+          // directly in recipeTitle (see data.ts) -- takes priority over
+          // the ephemeral blockingHint prop, which only exists for the
+          // immediate post-generation render before this slot had a real
+          // row (both describe the same thing once persisted).
+          <p className="mt-2 text-xs text-muted">
+            {slot?.isUnfilled ? slot.recipeTitle : (blockingHint ?? "No recipe matched this meal yet.")}
+          </p>
         )}
       </div>
       {showRecipe && slot && (

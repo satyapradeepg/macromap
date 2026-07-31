@@ -298,12 +298,25 @@ function kosherViolation(name: string, dietaryStyles: string[]): string | null {
 // excluded, or null if it passes every check this module knows about.
 // null does NOT mean "verified safe" in an absolute sense -- it means
 // "nothing here flagged it," same caveat as any keyword-based check.
+// Shared by isOpenEndedIngredientUnsafeFor's category loop below and
+// condimentRiskWarnings further down (extracted 2026-07-31 when the
+// latter was added) -- "does this profile's allergies/dietary styles
+// activate this synonym group at all," same word-boundary-and-plant-
+// modifier-aware check either caller needs.
+function userMentionsCategory(ctx: DietaryContext, group: { words: string[]; dietaryIntolerance?: string }): boolean {
+  const allergyWords = ctx.allergies.map(normalize).filter(Boolean);
+  const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
+  return (
+    allergyWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
+    (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance))
+  );
+}
+
 export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: DietaryContext): string | null {
   const name = normalize(ingredientName);
   const allergyWords = ctx.allergies.map(normalize).filter(Boolean);
   const dislikeWords = ctx.dislikes.map(normalize).filter(Boolean);
   const userWords = [...allergyWords, ...dislikeWords];
-  const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
 
   for (const word of userWords) {
     if (wordBoundaryIncludes(name, word)) {
@@ -338,10 +351,7 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     // with no actual dairy restriction. Same COMPOUND_SAFE_WORDS/
     // PLANT_MODIFIERS exception, just applied to the user's own word
     // instead of the ingredient name.
-    const userMentionedThisCategory =
-      allergyWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
-      (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance));
-    if (!userMentionedThisCategory) continue;
+    if (!userMentionsCategory(ctx, group)) continue;
     const hit = containsAny(name, group.alsoMatches);
     if (hit) {
       return `"${ingredientName}" contains "${hit}", matching an excluded category`;
@@ -454,4 +464,41 @@ export function dietaryStyleExcludeKeywords(dietaryStyles: string[]): string[] {
     for (const w of [...PORK_SYNONYMS, ...SHELLFISH_SYNONYMS]) keywords.add(w);
   }
   return [...keywords];
+}
+
+// Persona audit 2026-07-31, finding #3: mealProposer.ts's safeProteinExamples
+// steers the "protein" role away from allergen-conflicting suggestions, but
+// nothing does the same for the "fixed" role (0-2 small garnish/condiment
+// items) -- a stacked-restriction profile whose blocked slots lean on one
+// cuisine (e.g. seitan stir-fry/gyro/fajita for vegan+soy) can keep reaching
+// for the exact condiment that's a natural flavoring for that cuisine (soy
+// sauce/tamari/miso) with only the general constraint text + self-check to
+// stop it -- the same "follows the concrete dish pattern over an abstract
+// constraint" failure mode already fixed for the protein role. Advisory
+// prompt-hinting only, same as safeProteinExamples -- the real gate remains
+// isOpenEndedIngredientUnsafeFor above; this can only reduce how often that
+// gate has to reject something, never substitute for it.
+const CONDIMENT_RISKS: Array<{ label: string; appliesTo: (ctx: DietaryContext) => boolean }> = [
+  { label: "soy sauce, tamari, or miso (contain soy)", appliesTo: (ctx) => userMentionsCategory(ctx, { words: SOY_SYNONYMS }) },
+  { label: "honey (not vegan)", appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") },
+  {
+    label: "Worcestershire sauce, fish sauce, or oyster sauce (contain fish/shellfish)",
+    appliesTo: (ctx) =>
+      ctx.dietaryStyles.includes("vegan") ||
+      ctx.dietaryStyles.includes("vegetarian") ||
+      userMentionsCategory(ctx, { words: FISH_SYNONYMS }) ||
+      userMentionsCategory(ctx, { words: SHELLFISH_SYNONYMS }),
+  },
+  {
+    label: "mayonnaise, aioli, or hollandaise (contain egg)",
+    appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") || userMentionsCategory(ctx, { words: EGG_SYNONYMS }),
+  },
+  {
+    label: "butter, cream, or parmesan (contain dairy)",
+    appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") || userMentionsCategory(ctx, { words: DAIRY_SYNONYMS, dietaryIntolerance: "dairy" }),
+  },
+];
+
+export function condimentRiskWarnings(ctx: DietaryContext): string[] {
+  return CONDIMENT_RISKS.filter((r) => r.appliesTo(ctx)).map((r) => r.label);
 }

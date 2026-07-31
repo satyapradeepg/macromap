@@ -4,6 +4,7 @@ import {
   anyIngredientUnsafeFor,
   isRecipeTitleUnsafeFor,
   dietaryStyleExcludeKeywords,
+  condimentRiskWarnings,
   type DietaryContext,
 } from "./openEndedIngredientSafety";
 
@@ -514,5 +515,56 @@ describe("isRecipeTitleUnsafeFor", () => {
     expect(isRecipeTitleUnsafeFor("Braised Pork Belly Ramen", HALAL)).not.toBeNull();
     expect(isRecipeTitleUnsafeFor("Red Wine Braised Short Ribs", HALAL)).not.toBeNull();
     expect(isRecipeTitleUnsafeFor("Bacon Wrapped Shrimp Skewers", KOSHER)).not.toBeNull();
+  });
+});
+
+// Persona audit 2026-07-31, finding #3: mealProposer.ts's "fixed" role
+// (garnishes/condiments) had zero safe-suggestion steering, unlike the
+// "protein" role's safeProteinExamples -- these warnings are advisory
+// prompt hints only, gated on the same synonym groups this file's real
+// safety gate already trusts, never a substitute for it.
+describe("condimentRiskWarnings", () => {
+  it("warns about soy sauce/tamari/miso for a soy allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["soy"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("soy sauce");
+    expect(warnings).toContain("tamari");
+    expect(warnings).toContain("miso");
+  });
+
+  it("warns about honey for a vegan profile but not a merely vegetarian one", () => {
+    const VEGAN: DietaryContext = { ...NONE, dietaryStyles: ["vegan"] };
+    const VEGETARIAN: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"] };
+    expect(condimentRiskWarnings(VEGAN).join(" ").toLowerCase()).toContain("honey");
+    expect(condimentRiskWarnings(VEGETARIAN).join(" ").toLowerCase()).not.toContain("honey");
+  });
+
+  it("warns about fish/oyster sauce for a vegetarian profile even with no explicit fish allergy", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("fish sauce");
+    expect(warnings).toContain("oyster sauce");
+  });
+
+  it("warns about mayonnaise/aioli for an egg allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["eggs"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("mayonnaise");
+    expect(warnings).toContain("aioli");
+  });
+
+  it("warns about butter/cream/parmesan for a dairy_free dietary style, not just a literal dairy allergy", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["dairy_free"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("parmesan");
+  });
+
+  it("returns nothing for an unrestricted profile", () => {
+    expect(condimentRiskWarnings(NONE)).toEqual([]);
+  });
+
+  it("does not warn about soy for a profile with no soy restriction", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"], allergies: ["nuts"] };
+    expect(condimentRiskWarnings(ctx).join(" ").toLowerCase()).not.toContain("soy sauce");
   });
 });

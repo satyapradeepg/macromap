@@ -47,6 +47,14 @@ export interface PlanSlotView {
   // composed SNACK, so the UI can show a video-search link and different
   // copy for the former (see PlanView.tsx's MealCard).
   aiComposed: boolean;
+  // Persona audit 2026-07-31, finding #3 (Phase 4): true only for a
+  // placeholder row (recipe_source: 'unfilled') persisted when every
+  // fallback failed to fill this slot -- recipeTitle carries the honest
+  // reason (orchestrate.ts's blockingHint) rather than a real dish name.
+  // Every other field on this slot is a zeroed/null placeholder value, not
+  // real data -- callers must check this FIRST and render the hint state,
+  // never the normal meal-card fields, when it's true.
+  isUnfilled: boolean;
   composedIngredients: ComposedIngredientView[] | null;
   // null for composed/AI-composed slots (no single recipe backs them — see
   // composedIngredients above instead). Populated from the same persisted
@@ -152,6 +160,7 @@ export async function getMostRecentPlan(
       const addonRow = addonsBySlotId.get(s.id);
       const aiComposed = s.recipe_source === "ai_composed";
       const isComposed = s.recipe_source === "composed" || aiComposed;
+      const isUnfilled = s.recipe_source === "unfilled";
       return {
         dayIndex: s.day_index,
         mealType: s.meal_type,
@@ -159,6 +168,7 @@ export async function getMostRecentPlan(
         recipeTitle: s.recipe_title,
         isComposed,
         aiComposed,
+        isUnfilled,
         composedIngredients: isComposed
           ? (s.ingredients as Array<{ name: string; amount: number }>).map((i) => ({
               name: i.name,

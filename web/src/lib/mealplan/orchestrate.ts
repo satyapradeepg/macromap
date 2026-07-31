@@ -23,7 +23,7 @@ import {
   type MealType,
 } from "./targets";
 import { resolveDiet, resolveIntolerances, unsupportedDietaryStyles } from "./dietaryMapping";
-import { classifyTier, TOLERANCE_PCT, type MacroBounds, type ToleranceTier } from "./tolerance";
+import { classifyTier, TOLERANCE_PCT, wideOpenBounds, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import {
   buildPantryRemainingTracker,
@@ -1534,6 +1534,19 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     proposal: MealProposal;
   }> = [];
 
+  // Persona audit 2026-07-31, finding #3: pass 3 below used to call
+  // proposeAndComposeForSlot with no priorAttemptFeedback -- a blind
+  // re-roll even for a slot that already failed passes 1 and 2 for a
+  // known, specific reason. Tracks the freshest known CompositionRejection
+  // per slot key so pass 3's one remaining independent attempt is informed
+  // (same describeRejectionForFeedback plumbing pass 2 already uses), not
+  // a repeat of whatever doomed the earlier attempts. Only ever has an
+  // entry for a slot that actually reached pass 1/2 and got a REAL
+  // rejection reason -- a slot that never got an attempt at all (budget
+  // exhausted before eligible was even built) has no entry, and pass 3
+  // below falls back to today's blind-attempt behavior for it, unchanged.
+  const lastRejectionByKey = new Map<string, CompositionRejection>();
+
   // Chunked into groups of MAX_AI_COMPOSE_BATCH_SIZE (2026-07-28) -- each
   // chunk gets its own batch call/aggregateTarget/fallback, exactly as if
   // it were the only group this generation, so a wider `eligible` (now
@@ -1590,6 +1603,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // queue it for a fed-back retry (see pendingRetries above) instead
           // of leaving the slot blocked outright or blindly re-rolling.
           pendingRetries.push({ entry, reason, usedTarget: ownTarget, proposal });
+          lastRejectionByKey.set(entry.key, reason);
         }
         // reason === null (infra-level failure) -- nothing useful to retry
         // with, slot stays honestly blocked, same as before this pass.
@@ -1605,6 +1619,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           applyAiComposeResult(entry, candidate);
         } else if (reason && proposal) {
           pendingRetries.push({ entry, reason, usedTarget: entry.target, proposal });
+          lastRejectionByKey.set(entry.key, reason);
         }
       }
     }
@@ -1634,6 +1649,13 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       if (retry.reason !== null) lastReason = retry.reason;
       if (retry.proposal) lastProposal = retry.proposal;
     }
+
+    // Keep the freshest known reason for this slot regardless of whether
+    // the retry above actually fired -- feeds pass 3's informed attempt
+    // below (lastRejectionByKey's own comment). lastReason is always
+    // non-null here: it starts as pendingRetries' own reason and is only
+    // ever reassigned to another non-null CompositionRejection.
+    lastRejectionByKey.set(entry.key, lastReason);
 
     // Last resort (2026-07-30, "fill with the closest meal rather than
     // leaving it open"): the retry either didn't fire (budget exhausted)
@@ -1672,12 +1694,66 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       const key = slotKey(slotId);
       if (!trySpend(lastResortBudget, AI_COMPOSE_ACTION_COST)) break;
       const slotTarget = mealTypeTargets[slotId.mealType];
-      const attempt = await proposeAndComposeForSlot(slotId, slotTarget, key);
+      // Informed, not blind, when a prior rejection reason is known for
+      // this slot (see lastRejectionByKey's own comment above) -- a slot
+      // that never got a pass-1 attempt at all (budget exhaustion, not a
+      // rejection) has no entry, so this is undefined and the call below
+      // behaves exactly as before for that case.
+      const priorReason = lastRejectionByKey.get(key);
+      const priorFeedback = priorReason ? describeRejectionForFeedback(priorReason) : undefined;
+      const attempt = await proposeAndComposeForSlot(slotId, slotTarget, key, priorFeedback);
       let candidate = attempt.candidate;
       if (!candidate && attempt.proposal && canAttemptBestEffort(attempt.reason)) {
         candidate = await composeProposalToCandidateBestEffort(attempt.proposal, slotTarget, key);
       }
       applyAiComposeResult({ key, slotId, target: slotTarget }, candidate);
+    }
+  }
+
+  // Pass 4 (persona audit 2026-07-31, finding #3 -- "closest real recipe
+  // instead of an odd AI fallback"): any recipe-mechanism slot STILL
+  // blocked after every AI-compose attempt above. Live-tested before
+  // building this: for a real vegetarian+nut-allergy profile, Spoonacular
+  // genuinely has ZERO matches at the normal p30 (±30%) macro band for
+  // some meal types -- but 100+ real, genuinely-safe matches once ONLY the
+  // macro-band requirement is dropped (diet/intolerances/excludeIngredients
+  // stay exactly as they are -- confirmed live those are correct, not the
+  // problem; see this session's plan notes). So: one more real-recipe
+  // query, same safety-filtered fetchCandidatesWithCache path everything
+  // else already trusts, with macro bounds widened far past p30 instead of
+  // relaxing any safety filter. Ranked the same way as every other
+  // candidate (rankCandidates against the SLOT'S REAL target, not the
+  // widened bounds), so the closest-fitting real match wins regardless of
+  // how wide the fetch had to be. A candidate landing outside p30 already
+  // gets actualTier: null -> matchLabelFor already renders "Closest match
+  // -- slightly outside your targets (+Xg protein, +Y cal)" (cascade.ts),
+  // so this needs no new UI/disclosure work, just like the AI-compose
+  // best-effort path's isApproximate disclosure above.
+  const stillBlockedAfterAiCompose = [...blockedHints.keys()]
+    .map((key) => allSlots.find((s) => slotKey(s) === key))
+    .filter((slotId): slotId is MealSlotId => !!slotId && slotMechanism(slotId.mealType) === "recipe");
+
+  if (stillBlockedAfterAiCompose.length > 0) {
+    const relaxedBoundsBudget = createRetryBudget(RECIPE_ACTION_COST * stillBlockedAfterAiCompose.length);
+    for (const slotId of stillBlockedAfterAiCompose) {
+      const key = slotKey(slotId);
+      if (!trySpend(relaxedBoundsBudget, RECIPE_ACTION_COST)) break;
+      const slotTarget = mealTypeTargets[slotId.mealType];
+      // Effectively open -- no meaningful macro-band requirement left,
+      // only diet/intolerances/excludeIngredients/type (baked into the
+      // fetcher below) still gate what comes back.
+      const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
+      const fetcher = makeFetcher(claimedIds, mealTypeToSpoonacularType(slotId.mealType));
+      let candidates: RecipeCandidate[];
+      try {
+        candidates = await fetcher(wideOpenBounds(slotTarget), "p30");
+      } catch (err) {
+        if (!isRecoverableSpoonacularError(err)) throw err;
+        console.error(`[mealplan] relaxed-bounds fallback fetch failed for ${key} (quota/outage), leaving slot blocked:`, err);
+        continue;
+      }
+      const ranked = rankCandidates(candidates, slotTarget, rankOpts);
+      applyAiComposeResult({ key, slotId, target: slotTarget }, ranked[0] ?? null);
     }
   }
 

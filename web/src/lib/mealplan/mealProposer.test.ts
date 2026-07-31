@@ -236,6 +236,67 @@ describe("buildPrompt", () => {
     });
   });
 
+  // Persona audit 2026-07-31, finding #3: the same "concrete suggestion
+  // overrides an abstract constraint" failure mode as the tempeh/soy fix
+  // above, but for the "fixed" (garnish/condiment) role, which had zero
+  // steering at all -- only the general constraint text + self-check. A
+  // vegan+soy profile whose blocked slots are seitan-based Asian-style
+  // dishes (stir-fry, gyro, fajita bowl) can naturally reach for soy sauce/
+  // tamari/miso as a "fixed" flavoring with nothing warning against it
+  // specifically.
+  describe("fixed-role condiment steering in the built prompt", () => {
+    it("warns against soy sauce/tamari/miso for a soy allergy", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: ["vegan"],
+        allergies: ["soy"],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      const lower = prompt.toLowerCase();
+      expect(lower).toContain("soy sauce");
+      expect(lower).toContain("tamari");
+      expect(lower).toContain("miso");
+    });
+
+    it("warns against honey for a vegan profile", () => {
+      const prompt = buildPrompt({
+        mealType: "breakfast",
+        target: { calories: 400, proteinG: 25, carbsG: 45, fatG: 12 },
+        dietaryStyles: ["vegan"],
+        allergies: [],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt.toLowerCase()).toContain("honey");
+    });
+
+    it("omits the condiment-warning sentence entirely for an unrestricted profile", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: [],
+        allergies: [],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt).not.toContain("do NOT reach for");
+    });
+
+    it("does not warn about soy condiments for a profile with no soy restriction", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: ["vegetarian"],
+        allergies: ["nuts"],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt.toLowerCase()).not.toContain("soy sauce");
+    });
+  });
+
   it("includes the filtered protein examples in the built prompt", () => {
     const prompt = buildPrompt({
       mealType: "breakfast",
@@ -360,6 +421,36 @@ describe("buildBatchPrompt", () => {
     expect(prompt).toContain("79");
     expect(prompt).toContain("Propose 3 realistic meals");
     expect(prompt).toContain("exactly 3 meals");
+  });
+
+  // Persona audit 2026-07-31, finding #3 -- same rationale/test shape as
+  // buildPrompt's "fixed-role condiment steering" describe block above,
+  // for the batch path.
+  it("warns against soy sauce/tamari/miso for a soy allergy, gated on the whole profile not any one slot", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 } }],
+      aggregateTarget: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+      dietaryStyles: ["vegan"],
+      allergies: ["soy"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("soy sauce");
+    expect(lower).toContain("tamari");
+    expect(lower).toContain("miso");
+  });
+
+  it("omits the condiment-warning sentence entirely for an unrestricted profile", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 } }],
+      aggregateTarget: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt).not.toContain("do NOT reach for");
   });
 
   // Variety/repetition follow-up (2026-07-30) -- same rationale as

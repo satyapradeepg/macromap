@@ -45,6 +45,35 @@ export function boundsForTier(
   };
 }
 
+// Persona audit 2026-07-31, finding #3: orchestrate.ts's pass-4 "closest
+// real recipe" last resort (any recipe-mechanism slot still blocked after
+// every AI-compose attempt) needs a macro-band requirement wide enough to
+// never itself be the reason nothing comes back -- live-confirmed a real
+// vegetarian+nut-allergy profile genuinely has ZERO Spoonacular matches at
+// even p30 (+/-30%) for some meal types, but 100+ once the macro band is
+// effectively dropped, with diet/intolerances/excludeIngredients unchanged.
+// Not literally 0/Infinity -- Spoonacular's own minProtein/maxProtein/
+// minCalories/maxCalories params still need finite numbers, and a flat
+// multiplier alone breaks down for a near-zero target (e.g. a light snack
+// slot), hence the flat-amount floor added to the percentage-based one.
+export function wideOpenBounds(target: {
+  proteinG: number;
+  calories: number;
+  carbsG: number;
+  fatG: number;
+}): MacroBounds {
+  return {
+    minProtein: 0,
+    maxProtein: target.proteinG * 10 + 100,
+    minCalories: 0,
+    maxCalories: target.calories * 10 + 1000,
+    minCarbs: 0,
+    maxCarbs: target.carbsG * 10 + 200,
+    minFat: 0,
+    maxFat: target.fatG * 10 + 100,
+  };
+}
+
 // Which tier a candidate's actual macros truly fall into against a target —
 // null if outside even p30. Needed because weekly reconciliation searches
 // with intentionally nudged bounds (see reconciliation.ts's nudgedBounds),

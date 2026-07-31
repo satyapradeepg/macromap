@@ -279,6 +279,48 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       }
     }
 
+    // Persona audit 2026-07-31, finding #3 (Phase 4): a slot that survives
+    // every fallback (real-recipe cascade, all AI-compose attempts, pass
+    // 4's relaxed-bounds last resort) had NO meal_plan_slots row at all --
+    // only the ephemeral blockedSlots array below, which vanishes on the
+    // next page load (see data.ts's getMostRecentPlan, which always
+    // returns blockedSlots: []). Persists a real, honest placeholder row
+    // instead so a reload can still show WHY this meal is missing, not
+    // just silently omit it. recipe_source: 'unfilled' (migration
+    // 0030_unfilled_slots.sql) keeps this distinct from every real
+    // mechanism; blockingHint (always a real, non-empty string --
+    // orchestrate.ts's blockedHints map) is stored directly as
+    // recipe_title since there's no separate hint column and recipe_title
+    // is NOT NULL. tolerance_tier is a neutral placeholder ('p30', the
+    // column's NOT NULL check constraint requires a valid value) -- never
+    // read as a real match quality for this recipe_source.
+    if (result.blockedSlots.length > 0) {
+      const { error: unfilledError } = await supabase.from("meal_plan_slots").insert(
+        result.blockedSlots.map((b) => ({
+          meal_plan_id: insertedPlan.id,
+          day_index: b.slotId.dayIndex,
+          meal_type: b.slotId.mealType,
+          recipe_id: null,
+          recipe_source: "unfilled",
+          recipe_title: b.blockingHint,
+          image_url: null,
+          servings: 0,
+          calories: 0,
+          protein_g: 0,
+          carbs_g: 0,
+          fat_g: 0,
+          price_per_serving_cents: null,
+          scale_factor: 1,
+          tolerance_tier: "p30",
+          match_label: null,
+          ingredients: [],
+        })),
+      );
+      if (unfilledError) {
+        return { plan: null, usingCachedFallback: false, error: unfilledError.message };
+      }
+    }
+
     const plan: PlanView = {
       id: insertedPlan.id,
       generatedAt: insertedPlan.generated_at,
@@ -287,43 +329,72 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       groceryNotes,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
-      slots: result.slots.map((s) => {
-        const isComposed = s.candidate.id < 0;
-        return {
-          dayIndex: s.slotId.dayIndex,
-          mealType: s.slotId.mealType,
-          recipeId: isComposed ? null : s.candidate.id,
-          recipeTitle: s.candidate.title,
-          isComposed,
-          aiComposed: !!s.candidate.aiComposed,
-          composedIngredients: isComposed
-            ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
-            : null,
-          recipeIngredients: isComposed
-            ? null
-            : s.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
-          imageUrl: s.candidate.imageUrl,
-          servings: s.candidate.servings,
-          calories: s.candidate.caloriesKcal,
-          proteinG: s.candidate.proteinG,
-          carbsG: s.candidate.carbsG,
-          fatG: s.candidate.fatG,
-          pricePerServingCents: s.candidate.pricePerServingCents,
-          scaleFactor: s.candidate.scaleFactor,
-          toleranceTier: s.tier,
-          matchLabel: s.matchLabel,
-          addon: s.addon
-            ? {
-                ingredientName: s.addon.ingredientName,
-                amountG: s.addon.amountG,
-                caloriesKcal: s.addon.caloriesKcal,
-                proteinG: s.addon.proteinG,
-                carbsG: s.addon.carbsG,
-                fatG: s.addon.fatG,
-              }
-            : null,
-        };
-      }),
+      slots: [
+        ...result.slots.map((s) => {
+          const isComposed = s.candidate.id < 0;
+          return {
+            dayIndex: s.slotId.dayIndex,
+            mealType: s.slotId.mealType,
+            recipeId: isComposed ? null : s.candidate.id,
+            recipeTitle: s.candidate.title,
+            isComposed,
+            aiComposed: !!s.candidate.aiComposed,
+            isUnfilled: false,
+            composedIngredients: isComposed
+              ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
+              : null,
+            recipeIngredients: isComposed
+              ? null
+              : s.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
+            imageUrl: s.candidate.imageUrl,
+            servings: s.candidate.servings,
+            calories: s.candidate.caloriesKcal,
+            proteinG: s.candidate.proteinG,
+            carbsG: s.candidate.carbsG,
+            fatG: s.candidate.fatG,
+            pricePerServingCents: s.candidate.pricePerServingCents,
+            scaleFactor: s.candidate.scaleFactor,
+            toleranceTier: s.tier,
+            matchLabel: s.matchLabel,
+            addon: s.addon
+              ? {
+                  ingredientName: s.addon.ingredientName,
+                  amountG: s.addon.amountG,
+                  caloriesKcal: s.addon.caloriesKcal,
+                  proteinG: s.addon.proteinG,
+                  carbsG: s.addon.carbsG,
+                  fatG: s.addon.fatG,
+                }
+              : null,
+          };
+        }),
+        // Mirrors the placeholder rows just persisted above -- so the
+        // immediate post-generation render already matches what a reload
+        // will show via data.ts's getMostRecentPlan, instead of relying on
+        // the separate ephemeral blockedSlots array below.
+        ...result.blockedSlots.map((b) => ({
+          dayIndex: b.slotId.dayIndex,
+          mealType: b.slotId.mealType,
+          recipeId: null,
+          recipeTitle: b.blockingHint,
+          isComposed: false,
+          aiComposed: false,
+          isUnfilled: true,
+          composedIngredients: null,
+          recipeIngredients: null,
+          imageUrl: null,
+          servings: 0,
+          calories: 0,
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+          pricePerServingCents: null,
+          scaleFactor: 1,
+          toleranceTier: "p30" as const,
+          matchLabel: null,
+          addon: null,
+        })),
+      ],
       blockedSlots: result.blockedSlots.map((b) => ({
         dayIndex: b.slotId.dayIndex,
         mealType: b.slotId.mealType,
@@ -553,6 +624,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     recipeTitle: swapResult.candidate.title,
     isComposed,
     aiComposed: !!swapResult.candidate.aiComposed,
+    isUnfilled: false,
     composedIngredients: isComposed
       ? swapResult.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
       : null,
