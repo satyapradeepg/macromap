@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { LogoutBar } from "../LogoutBar";
 import { getMostRecentPlan } from "./data";
 import { getPantryItems } from "./pantryData";
 import { getGroceryList } from "./groceryData";
@@ -37,13 +38,16 @@ export default async function PlanPage() {
   const initialGroceryList = initialPlan ? await getGroceryList(supabase, initialPlan.id, user.id, tier) : [];
 
   return (
-    <PlanBoard
-      initialPlan={initialPlan}
-      dietaryStyles={profile.dietary_styles ?? []}
-      dailyCalories={profile.daily_calories}
-      initialPantryItems={initialPantryItems}
-      initialGroceryList={initialGroceryList}
-      tier={tier}
-    />
+    <>
+      <LogoutBar />
+      <PlanBoard
+        initialPlan={initialPlan}
+        dietaryStyles={profile.dietary_styles ?? []}
+        dailyCalories={profile.daily_calories}
+        initialPantryItems={initialPantryItems}
+        initialGroceryList={initialGroceryList}
+        tier={tier}
+      />
+    </>
   );
 }

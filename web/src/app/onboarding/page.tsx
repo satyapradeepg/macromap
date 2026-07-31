@@ -1,5 +1,11 @@
+import { LogoutBar } from "../LogoutBar";
 import { OnboardingWizard } from "./OnboardingWizard";
 
 export default function OnboardingPage() {
-  return <OnboardingWizard />;
+  return (
+    <>
+      <LogoutBar />
+      <OnboardingWizard />
+    </>
+  );
 }

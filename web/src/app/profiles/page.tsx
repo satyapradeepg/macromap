@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { LogoutBar } from "../LogoutBar";
 import { requireGateCookie } from "./gate";
 import { Dashboard } from "./Dashboard";
 
@@ -15,5 +16,10 @@ export default async function DevProfilesPage() {
     throw new Error(error.message);
   }
 
-  return <Dashboard personas={personas ?? []} />;
+  return (
+    <>
+      <LogoutBar />
+      <Dashboard personas={personas ?? []} />
+    </>
+  );
 }
