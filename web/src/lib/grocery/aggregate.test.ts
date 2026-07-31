@@ -95,6 +95,42 @@ describe("aggregateGroceryList", () => {
     expect(lines).toHaveLength(2);
   });
 
+  // Live-confirmed 2026-07-31: a real generated grocery list rendered
+  // "122 Tbsps gluten". Root cause -- Spoonacular's own ingredient-text
+  // parser resolved "gluten" (a bread recipe's small additive, 1.6 Tbsp)
+  // to id 93654, which Spoonacular's own /information endpoint confirms
+  // is canonically "seitan cutlets" (a real recipe's protein, measured in
+  // grams, category "meat substitute"). Grouping purely by a VALID id
+  // (unlike the placeholder-id cases above) blindly summed these into one
+  // absurd, mislabeled line.
+  it("does not merge a valid-id entry with another sharing the same id if their names share no word overlap", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 93654, name: "gluten", metricAmount: 1.6, metricUnit: "Tbsp" })],
+        [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 170, metricUnit: "g" })],
+        [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 215, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.name === "gluten")).toMatchObject({ totalAmount: 1.6, unit: "Tbsp" });
+    expect(lines.find((l) => l.name === "seitan cutlets")).toMatchObject({ totalAmount: 385, unit: "g" });
+  });
+
+  it("still merges same-id entries with genuinely overlapping names (e.g. minor naming variants)", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 11282, name: "onion", metricAmount: 100, metricUnit: "g" })],
+        [slotIngredient({ id: 11282, name: "an onion", metricAmount: 150, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ totalAmount: 250, unit: "g" });
+  });
+
   it("does not merge same-id entries with mismatched units, and flags both for manual combine", () => {
     const lines = aggregateGroceryList(
       [
@@ -265,6 +301,39 @@ describe("aggregateGroceryList", () => {
       const merged = mergeConvertibleLines(lines, new Map());
       expect(merged).toHaveLength(2);
       for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
+    // Live-confirmed 2026-07-31: buildGroceryLines' name-overlap gate alone
+    // was NOT enough -- it correctly split gluten/seitan cutlets into two
+    // separate GroceryLines (same id, no name overlap), but
+    // mergeConvertibleLines groups its OWN input by ingredientId again from
+    // scratch, saw the same id 93654 on both, and merged them right back
+    // together via the cross-category path -- rendering as "122 Tbsps
+    // gluten" even with the buildGroceryLines-only fix in place. This test
+    // exercises mergeConvertibleLines directly (not just aggregateGroceryList,
+    // which never calls it) so a regression here can't hide again.
+    it("does not re-merge a same-id pair with no name overlap even when a cross-category rate IS available", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 93654, name: "gluten", metricAmount: 1.6, metricUnit: "Tbsp" })],
+          [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 170, metricUnit: "g" })],
+          [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 215, metricUnit: "g" })],
+        ],
+        [],
+      );
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+
+      // A resolved rate for this id is available (as it would be live) --
+      // the fix must still refuse to use it, since gluten and seitan
+      // cutlets were never candidates to merge with each other at all.
+      const rates = new Map<string, ResolvedLineConversion>([
+        [conversionKey(93654, "g", "Tbsp"), { rate: 0.11, source: "ai_estimate" }],
+      ]);
+      const merged = mergeConvertibleLines(lines, rates);
+
+      expect(merged).toHaveLength(2);
+      expect(merged.find((l) => l.name === "gluten")).toMatchObject({ totalAmount: 1.6, unit: "Tbsp" });
+      expect(merged.find((l) => l.name === "seitan cutlets")).toMatchObject({ totalAmount: 385, unit: "g" });
     });
 
     it("does not attempt to convert between two different 'other' descriptors (e.g. clove vs slice)", () => {
