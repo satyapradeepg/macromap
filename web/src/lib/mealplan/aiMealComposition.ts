@@ -178,6 +178,17 @@ function sizeForGap(
   return { amountG };
 }
 
+// Used only by composeMealFromProposalBestEffort's relaxedRoleItem below --
+// how far over a role's realistic portion ceiling a sized amount can be
+// before it's treated as "this ingredient's density is the wrong shape
+// for this role" rather than "a reasonable amount that's merely a bit
+// oversized." 1.5x is comfortably above the existing tofu-protein
+// regression test's 1.24x (346g needed / 280g cap, correctly still a
+// clamp) and comfortably below both real cheese-as-carb cases found live
+// (1.64x and 1.86x), so it separates the two without disturbing the
+// already-established near-miss behavior.
+const IMPLAUSIBLE_OVERAGE_MULTIPLIER = 1.5;
+
 function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): ComposedMealIngredient {
   const scale = amountG / 100;
   return {
@@ -576,6 +587,24 @@ export async function composeMealFromProposalBestEffort(
     const sized = sizeForGap(density, remaining);
     if (!sized) {
       if (optional) return null; // matches the strict composer's "allowed to contribute nothing" exception exactly -- not a compromise
+      notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
+      return toComposedIngredient(lookup, bounds.min);
+    }
+    // Persona audit 2026-07-31, finding #5 follow-up: needing drastically
+    // more than the realistic ceiling (found live: parmesan cheese at
+    // 3.22g carb/100g needed 410g against the 250g carb cap, 1.64x over --
+    // clamping to 250g still delivered ~980 incidental kcal / 89g protein
+    // / 65g fat from "the carb ingredient" alone, the exact shape of the
+    // observed 1308-cal outlier) is a DIFFERENT failure mode than a
+    // reasonable near-miss (the tofu-protein test below clamps a
+    // 346g/280g-cap case, 1.24x over, and that's correctly left as a
+    // clamp -- a genuinely close call, not a role-mismatched ingredient).
+    // Deliberately NOT gated by `optional` the way the !sized branch above
+    // is: sizeForGap succeeding here means a REAL, non-negligible gap
+    // exists (unlike !sized's zero/negligible-need cases) -- this
+    // ingredient just can't meaningfully close it, so it should still
+    // contribute the honest minimum rather than silently nothing.
+    if (sized.amountG > bounds.max * IMPLAUSIBLE_OVERAGE_MULTIPLIER) {
       notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
       return toComposedIngredient(lookup, bounds.min);
     }

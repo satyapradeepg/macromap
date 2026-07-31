@@ -25,6 +25,10 @@ const paprika: GroundedIngredientData = { id: 1032040, name: "smoked paprika", c
 // Real USDA per-100g values (not live-fetched this session) -- used for
 // the fat-role realism-bound regression test below.
 const avocado: GroundedIngredientData = { id: 9038, name: "avocado", caloriesPer100g: 160, proteinGPer100g: 2.0, carbsGPer100g: 8.5, fatGPer100g: 14.7, estimatedCostCentsPer100g: null };
+// Live-fetched via Spoonacular's own ingredient database (2026-07-31,
+// finding #5 follow-up) -- id 1033. Real carb density (3.22g/100g) is
+// near-zero; protein/fat are what actually dominate this food.
+const parmesan: GroundedIngredientData = { id: 1033, name: "parmesan cheese", caloriesPer100g: 392, proteinGPer100g: 35.75, carbsGPer100g: 3.22, fatGPer100g: 25.83, estimatedCostCentsPer100g: null };
 
 // Real target from the July 15 2026 nut-allergy live test's blocked breakfast slot.
 const BREAKFAST_TARGET = { calories: 354.8, proteinG: 30.8, carbsG: 35.8, fatG: 9.8 };
@@ -620,6 +624,37 @@ describe("composeMealFromProposalBestEffort", () => {
     expect(result.result.isApproximate).toBe(true);
     const tofuItem = result.result.meal.ingredients.find((i) => i.ingredientName === "firm tofu")!;
     expect(tofuItem.amountG).toBe(280); // clamped to the realistic max, not rejected
+  });
+
+  // Persona audit 2026-07-31, finding #5 follow-up: live-confirmed a real
+  // generation produced a 1308-cal/68g-fat outlier lunch from Claude
+  // proposing parmesan cheese (3.22g carb/100g -- essentially a
+  // protein/fat food, not a carb source) as the "carb" role ingredient.
+  // Unlike the tofu case just above (a genuinely close 1.24x-over near
+  // miss, correctly still a clamp), this needs 1111g against the 250g
+  // carb cap -- 4.4x over -- which should now route to the same "not
+  // dense enough" honest degradation the zero-density case uses, not a
+  // clamp that silently drags in ~980 incidental kcal from "the carb
+  // ingredient" alone.
+  it("falls back to a realistic minimum portion (not a clamp to max) when the proposed ingredient's density is drastically the wrong shape for its role", async () => {
+    const proposal: MealProposal = {
+      dishName: "Seitan and Parmesan Bowl",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "parmesan cheese", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "parmesan cheese": parmesan, "olive oil": oil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.isApproximate).toBe(true);
+    const parmesanItem = result.result.meal.ingredients.find((i) => i.ingredientName === "parmesan cheese")!;
+    expect(parmesanItem.amountG).toBe(15); // the carb role's realistic MINIMUM, not the 250g max
+    // Confirms the outlier is actually gone: parmesan's own contribution
+    // stays small instead of delivering ~980 incidental kcal at 250g.
+    expect(parmesanItem.caloriesKcal).toBeLessThan(100);
   });
 
   it("falls back to a realistic minimum portion when a role can't be sized at all (zero-density or non-positive gap)", async () => {
