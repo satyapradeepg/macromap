@@ -5,6 +5,7 @@ import {
   glutenFreeQualifierStripFallback,
   parseRecipeInformation,
   parsePrimaryAisle,
+  repairOrRejectIngredientName,
 } from "./spoonacular";
 
 // Found live 2026-07-21 (thin-corpus AI-compose investigation): Spoonacular's
@@ -34,6 +35,60 @@ describe("commaSwapFallback", () => {
   it("returns null if either clause is empty after trimming", () => {
     expect(commaSwapFallback("jasmine rice, ")).toBeNull();
     expect(commaSwapFallback(", cooked")).toBeNull();
+  });
+});
+
+// Live-audited 2026-07-31 against ~750 distinct real ingredient names that
+// had passed through this pipeline (turned up on real generated grocery
+// lists) -- three distinct failure shapes, ~2.6% of all names.
+describe("repairOrRejectIngredientName", () => {
+  it("rejects a bare connector word with nothing else -- live-confirmed rendering as '101.2g to'", () => {
+    expect(repairOrRejectIngredientName("to")).toBeNull();
+    expect(repairOrRejectIngredientName("or")).toBeNull();
+    expect(repairOrRejectIngredientName("and")).toBeNull();
+  });
+
+  it("is case- and whitespace-insensitive for the bare-word check", () => {
+    expect(repairOrRejectIngredientName(" To ")).toBeNull();
+    expect(repairOrRejectIngredientName("OR")).toBeNull();
+  });
+
+  it("accepts real ingredient names unchanged, including ones that merely contain a stopword as a substring or word", () => {
+    expect(repairOrRejectIngredientName("chicken breast")).toBe("chicken breast");
+    expect(repairOrRejectIngredientName("mandarin oranges")).toBe("mandarin oranges");
+    // A real ingredient name that happens to START with a stopword-shaped
+    // word but ISN'T one of the exact connector words this strips (e.g.
+    // "a"/"an" are bare-word-only, not leading-connector candidates) is
+    // never at risk.
+    expect(repairOrRejectIngredientName("a la carte seasoning")).toBe("a la carte seasoning");
+  });
+
+  it("strips a leading connector word glued on by a mis-split quantity range, keeping the real ingredient", () => {
+    expect(repairOrRejectIngredientName("of basil")).toBe("basil");
+    expect(repairOrRejectIngredientName("to 5 chicken broth")).toBe("5 chicken broth");
+    expect(repairOrRejectIngredientName("from 1 bunch basil")).toBe("1 bunch basil");
+  });
+
+  it("strips a leading instruction verb glued on by leaked instruction text, keeping the real ingredient", () => {
+    expect(repairOrRejectIngredientName("fry 2 strips bacon")).toBe("2 strips bacon");
+  });
+
+  it("rejects when stripping the leading word leaves nothing or another bare stopword", () => {
+    expect(repairOrRejectIngredientName("of a")).toBeNull();
+  });
+
+  it("rejects a run-on name with 2+ separate embedded quantities as unsalvageable", () => {
+    expect(repairOrRejectIngredientName("swiss cheese 8 ounces cheddar 2 eggs")).toBeNull();
+    expect(
+      repairOrRejectIngredientName(
+        "baby carrots 4 stalks celery 1 can mushrooms 1 piece pepper 1 cup flour and 3 tbsp 2 tablespoons bee",
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps a real single-quantity descriptor with only one embedded digit group", () => {
+    expect(repairOrRejectIngredientName('corn tortillas 4"')).toBe('corn tortillas 4"');
+    expect(repairOrRejectIngredientName("ginger long 2 inch")).toBe("ginger long 2 inch");
   });
 });
 

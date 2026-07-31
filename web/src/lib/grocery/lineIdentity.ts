@@ -154,6 +154,68 @@ export function isFullClique(names: string[], confirmedMatchKeys: Set<string>): 
   return true;
 }
 
+// Exported, pure -- generalizes isFullClique so ONE non-matching pair
+// doesn't poison an entire candidate component (live-confirmed 2026-07-31:
+// a real plan's "chicken"/"chicken breast"/"chicken breasts"/"cooked
+// chicken breast"/"chicken breast halves boned and skinned" component
+// failed to merge AT ALL, even though "chicken breast"/"chicken breasts"/
+// "...boned and skinned" are obviously the same raw product -- "cooked
+// chicken breast" is correctly rejected as a genuinely different physical
+// quantity (cooking drives off moisture; this codebase has no raw<->cooked
+// yield-factor conversion anywhere), and under the old all-or-nothing gate
+// that one correct rejection blocked the other three from merging too).
+//
+// Finds every maximal clique (size >= 2) in the confirmed-match graph via
+// Bron-Kerbosch (components here are always tiny -- a handful of names --
+// so no pivoting/optimization is needed), then excludes any name that
+// belongs to MORE than one maximal clique. Such a name is an ambiguous
+// hub (this module's own "chicken broth"/"broth"/"vegetable broth" risk,
+// tested below) -- which of its candidate groups it "really" belongs to is
+// exactly the judgment isFullClique was designed to refuse to make, so it's
+// left out of every group rather than arbitrarily assigned to one. A
+// clique that drops below 2 members after hub-exclusion contributes no
+// merge at all, matching the original safe default.
+export function partitionConfirmedCliques(names: string[], confirmedMatchKeys: Set<string>): string[][] {
+  const n = names.length;
+  const adjacent = (i: number, j: number) => confirmedMatchKeys.has(pairKey(names[i], names[j]));
+
+  const maximalCliques: number[][] = [];
+  function bronKerbosch(r: number[], p: number[], x: number[]) {
+    if (p.length === 0 && x.length === 0) {
+      if (r.length >= 2) maximalCliques.push(r);
+      return;
+    }
+    let remainingP = [...p];
+    const seenX = [...x];
+    for (const v of [...remainingP]) {
+      bronKerbosch(
+        [...r, v],
+        remainingP.filter((i) => adjacent(v, i)),
+        seenX.filter((i) => adjacent(v, i)),
+      );
+      remainingP = remainingP.filter((i) => i !== v);
+      seenX.push(v);
+    }
+  }
+  bronKerbosch(
+    [],
+    Array.from({ length: n }, (_, i) => i),
+    [],
+  );
+
+  const membershipCount = new Map<number, number>();
+  for (const clique of maximalCliques) {
+    for (const i of clique) membershipCount.set(i, (membershipCount.get(i) ?? 0) + 1);
+  }
+
+  const result: string[][] = [];
+  for (const clique of maximalCliques) {
+    const unambiguous = clique.filter((i) => membershipCount.get(i) === 1);
+    if (unambiguous.length >= 2) result.push(unambiguous.map((i) => names[i]));
+  }
+  return result;
+}
+
 // Exported, pure -- builds the final id -> canonical-id map from a
 // NameComponents result plus the caller-resolved list of components that
 // passed the full-clique check. Canonical id per merging group is its
@@ -209,13 +271,31 @@ const MATCH_LINE_TOOL = {
   },
 };
 
+// The specific "NOT matching" categories below were added 2026-07-31 after
+// auditing ~750 real cached names/judgments and finding this exact class of
+// wrong merge already confirmed live: "cooked rice" <-> "rice", "chicken
+// bouillon cubes" <-> "chicken broth"/"chicken stock", "beans" <-> "canned
+// kidney beans" -- the earlier prompt's one example ("chicken broth" is not
+// "chicken breast") only demonstrated a different-CORE-ingredient mismatch,
+// nothing hinting at the different-QUANTITY-of-the-SAME-core-ingredient
+// risk, which is a distinct failure mode a smaller model needs spelled out
+// rather than inferred.
 function buildPrompt(anchorName: string, candidates: string[]): string {
   return `A grocery list has an ingredient line named "${anchorName}". Which of the following OTHER grocery-list ingredient names refer to the SAME purchasable grocery item, such that they should be combined into one line instead of listed separately?
 
 Candidates:
 ${candidates.map((c) => `- ${c}`).join("\n")}
 
-Treat differently-prepared or differently-labeled variants of a genuinely different product as NOT matching -- for example, "green onions" and "onion" are different produce items sold separately, and "chicken broth" is not the same purchase as "vegetable broth" or "chicken breast". Only include a candidate if a grocery store would reasonably shelve it as the same item as the anchor (matching on the core ingredient; minor descriptor differences like brand, "large", or "organic" are fine). When genuinely unsure, leave it out -- a missed match just leaves one redundant line on the list, which is safer than wrongly combining two different products' quantities into one.`;
+Treat differently-prepared or differently-labeled variants of a genuinely different product as NOT matching -- for example, "green onions" and "onion" are different produce items sold separately, and "chicken broth" is not the same purchase as "vegetable broth" or "chicken breast". Only include a candidate if a grocery store would reasonably shelve it as the same item as the anchor (matching on the core ingredient; minor descriptor differences like brand, "large", or "organic" are fine).
+
+Also treat these as NOT matching even when the core ingredient word is identical, because the two names imply meaningfully different real-world QUANTITIES of that ingredient (cooking, drying, and concentrating all change weight/volume, sometimes drastically) -- combining their amounts into one line would silently misstate how much to actually buy:
+- Raw vs. cooked/prepared (e.g. "rice" vs. "cooked rice"; "chicken breast" vs. "cooked chicken breast" or a marinated-raw variant)
+- Dried vs. fresh produce or herbs (e.g. "thyme" vs. "dried thyme")
+- Canned/hydrated vs. dry (e.g. "beans" vs. "canned kidney beans")
+- A concentrated or dry form vs. its diluted/liquid form (e.g. "chicken bouillon cubes" vs. "chicken broth" or "chicken stock")
+- A generic/whole-item name vs. a specific cut or variety of it (e.g. "chicken" vs. "chicken breast"; "beans" vs. a specific bean variety) -- these are different purchasable products even when one word is a literal substring of the other.
+
+When genuinely unsure, leave it out -- a missed match just leaves one redundant line on the list, which is safer than wrongly combining two different products' (or two different quantities of the same product's) amounts into one.`;
 }
 
 // Never trusts the LLM's JSON shape blindly, and never trusts it to only
@@ -343,7 +423,7 @@ export async function resolveLineIdentityRemap(entries: IdentityEntry[]): Promis
   await Promise.all(
     componentsNeedingConfirmation.map(async (names) => {
       const confirmed = await resolveComponentConfirmedPairs(names);
-      if (isFullClique(names, confirmed)) qualifyingComponents.push(names);
+      qualifyingComponents.push(...partitionConfirmedCliques(names, confirmed));
     }),
   );
 

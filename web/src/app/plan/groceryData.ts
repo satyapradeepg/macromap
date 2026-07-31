@@ -31,7 +31,7 @@ import {
   UNCATEGORIZED_AISLE,
 } from "@/lib/grocery/ingredientAisle";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
-import { lookupIngredientCost } from "@/lib/spoonacular";
+import { lookupIngredientCost, repairOrRejectIngredientName } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
 
 export interface GroceryLineView {
@@ -313,13 +313,27 @@ export async function getGroceryList(
     .select("name, spoonacular_ingredient_id, amount, unit")
     .eq("user_id", userId);
 
+  // Applied here too, not just at Spoonacular ingest time (spoonacular.ts's
+  // mapToCandidate) -- a plan generated/swapped BEFORE this filter existed
+  // already has a garbled name baked into its persisted `ingredients` jsonb
+  // (live-confirmed 2026-07-31: a real plan's grocery list kept rendering
+  // "101.2g to" across repeated fetches), and there's no migration to
+  // retroactively clean already-stored rows. Re-applying the same
+  // repair/reject at read time fixes every existing plan's list immediately
+  // without needing a swap or regeneration.
   const slotIngredientLists: SlotIngredientEntry[][] = slotRows.map((row) =>
-    ((row.ingredients as RawSlotIngredient[] | null) ?? []).map((ing) => ({
-      id: ing.id,
-      name: ing.name,
-      metricAmount: ing.metricAmount,
-      metricUnit: ing.metricUnit,
-    })),
+    ((row.ingredients as RawSlotIngredient[] | null) ?? []).flatMap((ing) => {
+      const repairedName = repairOrRejectIngredientName(ing.name);
+      if (repairedName === null) return [];
+      return [
+        {
+          id: ing.id,
+          name: repairedName,
+          metricAmount: ing.metricAmount,
+          metricUnit: ing.metricUnit,
+        },
+      ];
+    }),
   );
 
   const addonEntries: AddonEntry[] = (addonRows ?? []).map((row) => ({

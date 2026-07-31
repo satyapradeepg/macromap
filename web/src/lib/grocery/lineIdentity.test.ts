@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildNameComponents, parseLineMatchResponse, isFullClique, buildIdRemap } from "./lineIdentity";
+import { buildNameComponents, parseLineMatchResponse, isFullClique, partitionConfirmedCliques, buildIdRemap } from "./lineIdentity";
 
 describe("buildNameComponents", () => {
   it("groups different ids sharing the exact same normalized name, no LLM needed", () => {
@@ -121,6 +121,94 @@ describe("isFullClique", () => {
     const names = ["chicken broth", "broth", "vegetable broth"];
     const partiallyConfirmed = new Set(["broth||chicken broth", "broth||vegetable broth"]);
     expect(isFullClique(names, partiallyConfirmed)).toBe(false);
+  });
+});
+
+describe("partitionConfirmedCliques", () => {
+  it("still merges nothing for the classic hub-bridge case (broth is ambiguous between two exclusive pairs)", () => {
+    const names = ["chicken broth", "broth", "vegetable broth"];
+    const partiallyConfirmed = new Set(["broth||chicken broth", "broth||vegetable broth"]);
+    expect(partitionConfirmedCliques(names, partiallyConfirmed)).toEqual([]);
+  });
+
+  it("merges a fully-confirmed 3-name clique in full", () => {
+    const names = ["a broth", "broth", "b broth"];
+    const allConfirmed = new Set(["a broth||b broth", "a broth||broth", "b broth||broth"]);
+    const result = partitionConfirmedCliques(names, allConfirmed);
+    expect(result).toHaveLength(1);
+    expect(new Set(result[0])).toEqual(new Set(names));
+  });
+
+  it("merges a verified subgroup even when a differently-prepared variant in the same candidate component was correctly rejected", () => {
+    // Live-confirmed 2026-07-31 shape: "chicken breast"/"chicken breasts"/
+    // "chicken breast halves boned and skinned" are the same raw product
+    // (verified full triangle); "cooked chicken breast" is a genuinely
+    // different physical quantity (moisture loss from cooking) and was
+    // correctly never confirmed against any of the other three. The old
+    // all-or-nothing isFullClique gate would have merged NOTHING here.
+    const names = ["chicken breast", "chicken breasts", "chicken breast halves boned and skinned", "cooked chicken breast"];
+    // pairKey internally alphabetizes each pair -- both orderings are added
+    // here so this test doesn't depend on getting that alphabetization
+    // right by hand for a long, easy-to-miscompare string.
+    const confirmed = new Set([
+      "chicken breast||chicken breasts",
+      "chicken breasts||chicken breast",
+      "chicken breast||chicken breast halves boned and skinned",
+      "chicken breast halves boned and skinned||chicken breast",
+      "chicken breasts||chicken breast halves boned and skinned",
+      "chicken breast halves boned and skinned||chicken breasts",
+    ]);
+    const result = partitionConfirmedCliques(names, confirmed);
+    expect(result).toHaveLength(1);
+    expect(new Set(result[0])).toEqual(new Set(["chicken breast", "chicken breasts", "chicken breast halves boned and skinned"]));
+  });
+
+  it("excludes an ambiguous hub from both groups but still merges the rest of each group", () => {
+    // "chicken breast" confirmed-matches both a 2-name group ("chicken")
+    // and a 3-name group ("chicken breasts"/"...boned and skinned") that do
+    // NOT confirm with each other -- "chicken breast" itself is the
+    // ambiguous hub and merges with neither, but "chicken breasts" and
+    // "...boned and skinned" (confirmed with each other directly) still
+    // merge as their own pair.
+    const names = ["chicken", "chicken breast", "chicken breasts", "chicken breast halves boned and skinned"];
+    // Both orderings included per-pair, same reasoning as the test above.
+    const confirmed = new Set([
+      "chicken||chicken breast",
+      "chicken breast||chicken",
+      "chicken breast||chicken breasts",
+      "chicken breasts||chicken breast",
+      "chicken breast||chicken breast halves boned and skinned",
+      "chicken breast halves boned and skinned||chicken breast",
+      "chicken breasts||chicken breast halves boned and skinned",
+      "chicken breast halves boned and skinned||chicken breasts",
+    ]);
+    const result = partitionConfirmedCliques(names, confirmed);
+    expect(result).toHaveLength(1);
+    expect(new Set(result[0])).toEqual(new Set(["chicken breasts", "chicken breast halves boned and skinned"]));
+  });
+
+  it("returns no groups when nothing at all was confirmed", () => {
+    expect(partitionConfirmedCliques(["onion", "green onion"], new Set())).toEqual([]);
+  });
+
+  it("merges two fully disjoint qualifying cliques found within one call independently", () => {
+    const names = ["a", "b", "c", "d", "e"];
+    const confirmed = new Set(["a||b", "b||a", "d||e", "e||d"]);
+    const result = partitionConfirmedCliques(names, confirmed);
+    expect(result).toHaveLength(2);
+    const sets = result.map((g) => new Set(g));
+    expect(sets).toContainEqual(new Set(["a", "b"]));
+    expect(sets).toContainEqual(new Set(["d", "e"]));
+  });
+
+  it("merges nothing at all for a linear chain with no triangle anywhere -- every interior node is an ambiguous hub", () => {
+    // a-b, b-c, c-d confirmed; a-c, b-d, a-d never confirmed. b sits in
+    // both {a,b} and {b,c}; c sits in both {b,c} and {c,d} -- both are
+    // ambiguous hubs, which leaves every 2-clique with at most one
+    // unambiguous member, so nothing clears the size-2 bar.
+    const names = ["a", "b", "c", "d"];
+    const confirmed = new Set(["a||b", "b||a", "b||c", "c||b", "c||d", "d||c"]);
+    expect(partitionConfirmedCliques(names, confirmed)).toEqual([]);
   });
 });
 

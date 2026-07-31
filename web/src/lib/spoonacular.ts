@@ -499,6 +499,52 @@ export function parsePrimaryAisle(raw: string | undefined): string | null {
   return trimmed || null;
 }
 
+// Spoonacular's own ingredient-text NLP parser occasionally leaks
+// non-ingredient fragments into extendedIngredients[].name -- live-audited
+// 2026-07-31 against ~750 distinct real names that had passed through this
+// pipeline, turning up 3 distinct failure shapes (~2.6% of names):
+//
+// 1. A BARE connector/stopword with nothing else, from a mis-split
+//    quantity RANGE (e.g. "1 to 2 jalapeños, chopped" -> a spurious entry
+//    named just "to") -- live-confirmed rendering as "101.2g to" on a real
+//    generated grocery list. Nothing to repair; dropped entirely.
+// 2. A REAL ingredient with a leading connector or instruction verb glued
+//    on from the same kind of mis-split (e.g. "of basil", "fry 2 strips
+//    bacon") -- repaired by stripping the leading word rather than
+//    dropped, since the ingredient after it is still real grocery data
+//    worth keeping (and the plain remainder still text-overlaps its clean
+//    counterpart elsewhere on the list via lineIdentity.ts's own
+//    word-boundary matching, e.g. "2 chicken stock" still merges with
+//    "chicken stock").
+// 3. Multiple real ingredients concatenated into one run-on string with 2+
+//    separate quantities embedded (e.g. "swiss cheese 8 ounces cheddar 2
+//    eggs") -- genuinely unsalvageable without guessing where to split, so
+//    dropped entirely rather than shown as one nonsense line. A rare
+//    single-quantity descriptor (e.g. "corn tortillas 4\"") has only ONE
+//    digit group and is never at risk.
+const BARE_NON_INGREDIENT_WORDS = new Set(["to", "or", "and", "a", "an", "the", "of", "with", "for"]);
+const LEADING_CONNECTOR = /^(?:to|of|and|from|for|with)\s+(.+)$/i;
+// Imperative instruction verbs that would never legitimately lead a real
+// ingredient's name (unlike a state-descriptor like "sliced"/"cooked",
+// already handled by prefixStripFallback above) -- their presence means
+// instruction text leaked into the ingredient-name field.
+const LEADING_INSTRUCTION_VERB = /^(?:fry|boil|dissolve|mix|whisk|stir|simmer|heat|melt|combine|pour|add|bring|cover)\s+(.+)$/i;
+
+export function repairOrRejectIngredientName(rawName: string): string | null {
+  const trimmed = rawName.trim();
+  if (!trimmed || BARE_NON_INGREDIENT_WORDS.has(trimmed.toLowerCase())) return null;
+
+  const connectorMatch = LEADING_CONNECTOR.exec(trimmed);
+  const verbMatch = connectorMatch ? null : LEADING_INSTRUCTION_VERB.exec(trimmed);
+  const repaired = (connectorMatch ?? verbMatch)?.[1].trim() ?? trimmed;
+  if (!repaired || BARE_NON_INGREDIENT_WORDS.has(repaired.toLowerCase())) return null;
+
+  const digitGroupCount = repaired.match(/\d+/g)?.length ?? 0;
+  if (digitGroupCount >= 2) return null;
+
+  return repaired;
+}
+
 function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
   return {
     id: recipe.id,
@@ -515,14 +561,19 @@ function mapToCandidate(recipe: SpoonacularRecipe): RecipeCandidate {
     pricePerServingCents:
       recipe.pricePerServing !== undefined ? Math.round(recipe.pricePerServing) : null,
     aggregateLikes: recipe.aggregateLikes ?? 0,
-    ingredients: (recipe.extendedIngredients ?? []).map((ing) => ({
-      id: ing.id,
-      name: ing.name,
-      amount: ing.amount,
-      unit: ing.unit,
-      metricAmount: ing.measures?.metric?.amount ?? ing.amount,
-      metricUnit: ing.measures?.metric?.unitShort ?? ing.unit,
-    })),
+    ingredients: (recipe.extendedIngredients ?? [])
+      .flatMap((ing) => {
+        const repairedName = repairOrRejectIngredientName(ing.name);
+        return repairedName === null ? [] : [{ ...ing, name: repairedName }];
+      })
+      .map((ing) => ({
+        id: ing.id,
+        name: ing.name,
+        amount: ing.amount,
+        unit: ing.unit,
+        metricAmount: ing.measures?.metric?.amount ?? ing.amount,
+        metricUnit: ing.measures?.metric?.unitShort ?? ing.unit,
+      })),
   };
 }
 
