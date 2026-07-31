@@ -60,11 +60,10 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
 
   return (
     <main className="mx-auto w-full max-w-2xl px-6 py-12">
-      <h1 className="mb-1 text-lg font-semibold">Test profiles</h1>
+      <h1 className="mb-1 text-lg font-semibold">Your profiles</h1>
       <p className="mb-6 text-sm text-muted">
-        Dev-only. Each profile is a separate identity with its own plan,
-        pantry, and grocery list — switching swaps which one is active in
-        this browser.
+        Choose a profile to continue, or create a new one. Each profile has
+        its own plan, pantry, and grocery list.
       </p>
 
       <form onSubmit={handleCreate} className="mb-6 flex gap-2">

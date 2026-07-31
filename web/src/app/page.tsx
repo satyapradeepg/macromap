@@ -64,7 +64,7 @@ export default async function Home() {
 
         <div className="mt-8 flex flex-wrap items-center gap-4">
           <Link
-            href="/onboarding"
+            href="/profiles"
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-accent-2"
           >
             Build my plan
@@ -72,7 +72,6 @@ export default async function Home() {
               <path d="M5 12h14M13 6l6 6-6 6" />
             </svg>
           </Link>
-          <span className="text-sm text-muted">No signup needed to try it — free to start.</span>
         </div>
 
         <div className="mt-16 grid gap-7 border-t border-border pt-8 sm:grid-cols-3">
