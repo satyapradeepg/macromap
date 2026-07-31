@@ -24,6 +24,16 @@ const apple: IngredientMacroLookup = {
   estimatedCostCentsPer100g: 33.11,
 };
 
+const banana: IngredientMacroLookup = {
+  id: 9040,
+  name: "banana",
+  caloriesPer100g: 89,
+  proteinGPer100g: 1.09,
+  carbsGPer100g: 22.84,
+  fatGPer100g: 0.33,
+  estimatedCostCentsPer100g: 24.19,
+};
+
 function proteinGap(overshootPct = 0.1): MacroGapDirection {
   return { macro: "proteinG", direction: "increase", overshootPct };
 }
@@ -68,6 +78,51 @@ describe("buildAddonForSlot", () => {
     const fetcher = vi.fn().mockResolvedValue(null);
     const addon = await buildAddonForSlot(700, proteinGap(), fetcher, NO_RESTRICTIONS);
     expect(addon).toBeNull();
+  });
+
+  // Persona audit 2026-07-31, finding #5: live-confirmed 8 of 9 addons
+  // across a real unrestricted week were banana -- this loop used to
+  // always try `ordered` starting at index 0, so the first-safe-and-
+  // resolving candidate won essentially every time. Same rotation idiom
+  // snackComposition.ts's pickFromPool already uses (varietySeed %
+  // preferredCount), applied here for the first time.
+  describe("variety rotation (varietySeed)", () => {
+    const carbGap: MacroGapDirection = { macro: "carbsG", direction: "increase", overshootPct: 0.1 };
+    const NO_PANTRY_CTX: PantryPriceContext = { pantryItemNames: [], budgetAware: false };
+
+    it("defaults to today's exact always-try-index-0-first behavior when varietySeed is omitted", async () => {
+      const fetcher = vi.fn().mockResolvedValue(apple);
+      await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS);
+      expect(fetcher).toHaveBeenCalledWith("banana");
+    });
+
+    it("rotates which safe candidate is tried first as varietySeed changes, wrapping back around", async () => {
+      const fetcher = vi.fn().mockResolvedValue(apple);
+
+      await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS, NO_PANTRY_CTX, Infinity, 0);
+      expect(fetcher).toHaveBeenNthCalledWith(1, "banana");
+
+      await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS, NO_PANTRY_CTX, Infinity, 1);
+      expect(fetcher).toHaveBeenNthCalledWith(2, "apple");
+
+      await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS, NO_PANTRY_CTX, Infinity, 2);
+      expect(fetcher).toHaveBeenNthCalledWith(3, "orange");
+
+      await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS, NO_PANTRY_CTX, Infinity, 3);
+      expect(fetcher).toHaveBeenNthCalledWith(4, "banana");
+    });
+
+    it("still falls through to every other safe candidate on a lookup failure, regardless of rotation", async () => {
+      // seed=2 tries orange first; orange fails to resolve here, so it
+      // must fall through to banana next (the rotated list's 2nd entry),
+      // exactly the same fallback guarantee as before this fix.
+      const fetcher = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(banana);
+      const addon = await buildAddonForSlot(700, carbGap, fetcher, NO_RESTRICTIONS, NO_PANTRY_CTX, Infinity, 2);
+      expect(fetcher).toHaveBeenNthCalledWith(1, "orange");
+      expect(fetcher).toHaveBeenNthCalledWith(2, "banana");
+      expect(addon).not.toBeNull();
+      expect(addon!.ingredientName).toBe("banana");
+    });
   });
 
   it("returns null when a tiny meal's calorie cap rounds below the minimum add-on size", async () => {

@@ -716,6 +716,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       dietaryCtx,
       pantryPriceCtx,
       neededAmount,
+      claimed.slotId.dayIndex,
     );
     if (!addon) return;
     // Never-worse guard (found live + confirmed offline July 20 2026, via a
@@ -837,7 +838,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // triggered this loop -- same reasoning as Phase 0's addon-at-
         // selection above (macroDeviationScore has no band-awareness).
         const neededAmount = amountNeededFor(dayActualBefore[increaseGap.macro], input.dailyTargets[increaseGap.macro]);
-        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount);
+        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount, targetSlotId.dayIndex);
         addonedThisDay.add(slotKey(targetSlotId));
         // Never-worse guard (found live + confirmed offline July 20 2026):
         // this pre-existing phase only ever checked "does this ingredient
@@ -1037,7 +1038,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // phase's job is only to clear PROTEIN_FLOOR_FRACTION, not push
             // the meal all the way to its share of the day's protein target.
             const neededAmount = amountNeededFor(existing.candidate.proteinG, proteinFloor);
-            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount);
+            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount, slotId.dayIndex);
             if (addon) addons.set(slotKey(slotId), addon);
           }
         }

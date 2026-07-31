@@ -117,12 +117,28 @@ const PROPOSE_MEAL_TOOL = {
 // is a slight overestimate of the true remaining gap, not an exact match.
 const LENTILS_REALISTIC_PROTEIN_CEILING_G = 22;
 
+// Persona audit 2026-07-31, finding #5: live-confirmed real macro-deviation
+// data across a real vegetarian+nut-allergy week -- tempeh got suggested
+// (and picked) for demanding targets it structurally can't reach, missing
+// by as much as -15g protein on one dinner-scale target (~61g), the same
+// failure shape lentils were already fixed for above. Real density
+// verified live just now via Spoonacular's own ingredient database:
+// 18.54g protein/100g (id 16114). Within the realistic 280g portion cap
+// (aiMealComposition.ts's PORTION_BOUNDS_G.protein.max), that's a hard
+// ceiling of ~52g protein -- same "slight overestimate of the true
+// remaining gap, not an exact match" caveat as lentils' own ceiling above.
+const TEMPEH_REALISTIC_PROTEIN_CEILING_G = 52;
+
 const PROTEIN_EXAMPLES: Array<{
   name: string;
   conflictsWith: (ctx: { dietaryStyles: string[]; allergies: string[] }, targetProteinG?: number) => boolean;
 }> = [
   { name: "seitan", conflictsWith: (ctx) => ctx.dietaryStyles.includes("gluten_free") || ctx.allergies.some((a) => /wheat|gluten/i.test(a)) },
-  { name: "tempeh", conflictsWith: (ctx) => ctx.allergies.some((a) => /soy|soya/i.test(a)) },
+  {
+    name: "tempeh",
+    conflictsWith: (ctx, targetProteinG) =>
+      ctx.allergies.some((a) => /soy|soya/i.test(a)) || (targetProteinG !== undefined && targetProteinG > TEMPEH_REALISTIC_PROTEIN_CEILING_G),
+  },
   // Added July 16 2026, same live test as the tempeh fix above: once
   // tempeh/seitan/cheese/meat are all filtered out for a vegan+soy+nut+
   // dairy-restricted profile, "lentils" was the only example left --

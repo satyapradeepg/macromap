@@ -234,6 +234,33 @@ describe("buildPrompt", () => {
       const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }).map((e) => e.toLowerCase());
       expect(examples).toContain("lentils");
     });
+
+    // Persona audit 2026-07-31, finding #5: live macro-deviation data
+    // across a real vegetarian+nut-allergy week showed tempeh missing a
+    // demanding dinner-scale target by -15g protein (~61g needed) --
+    // exactly the same "offered for a target it can't realistically
+    // reach" shape already fixed for lentils above. Tempeh's real density
+    // (18.54g/100g, live-verified via Spoonacular) caps out at ~52g
+    // protein within the realistic 280g portion bound.
+    it("excludes tempeh once the target protein is demanding enough that tempeh structurally cannot reach it", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 61).map((e) => e.toLowerCase());
+      expect(examples).not.toContain("tempeh");
+    });
+
+    it("still includes tempeh for a lighter target where it's a perfectly fine option", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 40).map((e) => e.toLowerCase());
+      expect(examples).toContain("tempeh");
+    });
+
+    it("still includes tempeh when no target is given, unchanged from before this fix", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }).map((e) => e.toLowerCase());
+      expect(examples).toContain("tempeh");
+    });
+
+    it("still excludes tempeh for a soy allergy regardless of how light the target is", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: ["soy"] }, 15).map((e) => e.toLowerCase());
+      expect(examples).not.toContain("tempeh");
+    });
   });
 
   // Persona audit 2026-07-31, finding #3: the same "concrete suggestion

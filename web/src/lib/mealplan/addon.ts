@@ -111,6 +111,18 @@ export async function buildAddonForSlot(
   // so any caller that doesn't pass one reproduces the pre-2026-07-28
   // always-max-to-cap behavior exactly (existing tests rely on this).
   neededAmount: number = Infinity,
+  // Variety rotation (persona audit 2026-07-31, finding #5): without this,
+  // the loop below always tried `ordered` starting at index 0, so the
+  // SAME first-safe-and-resolving candidate (e.g. banana, first in
+  // ADDON_INGREDIENT_OPTIONS_BY_MACRO.carbsG) won essentially every time
+  // -- live-confirmed 8 of 9 addons across a real unrestricted week were
+  // banana. Reuses the exact rotation idiom snackComposition.ts's
+  // pickFromPool already uses successfully (rankByPantryAndPrice's own
+  // preferredCount exists precisely so a caller can rotate within the
+  // preferred tier without ever touching a worse pantry/price fit).
+  // Defaults to 0 so any caller that doesn't pass one reproduces today's
+  // exact always-try-index-0-first behavior (existing tests rely on this).
+  varietySeed: number = 0,
 ): Promise<SlotAddon | null> {
   // Safety first (unchanged): filter to candidates safe for this profile
   // before considering pantry/price preference at all.
@@ -124,17 +136,30 @@ export async function buildAddonForSlot(
   // efficiency this function has always had. All of ADDON_INGREDIENT_
   // OPTIONS_BY_MACRO's candidates are from the known fixed pool, so this
   // is always available (no need to fall back to a live cost peek here).
-  const { ordered } = rankByPantryAndPrice(
+  const { ordered, preferredCount } = rankByPantryAndPrice(
     safeCandidates.map((name) => ({ name, costCentsPer100g: lookupIngredientMacrosStatic(name)?.estimatedCostCentsPer100g ?? null })),
     pantryPriceCtx,
   );
 
-  // Tries each candidate in the (now preference-ordered) list, skipping
-  // straight to the next if a lookup fails to resolve — never falls
-  // through to an unsafe option even if every safe one fails to resolve
-  // (a genuine "no add-on this time," same as today's null-lookup case).
+  // Rotates ONLY the preferred tier (pantry matches, or cheapest-half when
+  // budget-aware, or the whole list when neither applies -- see
+  // pantryPricePreference.ts) by varietySeed -- the non-preferred tail
+  // stays in its original order/position as the fallback, exactly as
+  // before, so a lookup failure still falls through to every other safe
+  // candidate unchanged. Only WHICH preferred candidate gets tried first
+  // now varies by slot instead of always being index 0.
+  const preferredTier = ordered.slice(0, preferredCount);
+  const rest = ordered.slice(preferredCount);
+  const rotation = preferredTier.length > 0 ? varietySeed % preferredTier.length : 0;
+  const tryOrder = [...preferredTier.slice(rotation), ...preferredTier.slice(0, rotation), ...rest];
+
+  // Tries each candidate in the (now preference- and variety-ordered)
+  // list, skipping straight to the next if a lookup fails to resolve --
+  // never falls through to an unsafe option even if every safe one fails
+  // to resolve (a genuine "no add-on this time," same as today's
+  // null-lookup case).
   let lookup = null;
-  for (const candidate of ordered) {
+  for (const candidate of tryOrder) {
     lookup = await fetchIngredientMacros(candidate.name);
     if (lookup) break;
   }
