@@ -422,6 +422,24 @@ describe("buildPrompt", () => {
     expect(lower).toContain("constraintcheck");
     expect(lower).toContain("last");
   });
+
+  // Persona audit 2026-07-31, finding #6: live-confirmed a real dish
+  // titled "Tempeh and Broccoli Stir-Fry with Rice Noodles" whose actual
+  // ingredients never included rice noodles -- traced to a pure prompt-
+  // adherence gap (nothing tied the dish NAME to the ingredients list).
+  it("instructs Claude to check the dish name against its own ingredients list, after picking ingredients", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("titleingredientcheck");
+    expect(lower).toContain("rice noodles");
+  });
 });
 
 // Batch-aware AI-compose (added 2026-07-20) -- gives Claude visibility
@@ -628,6 +646,22 @@ describe("buildBatchPrompt", () => {
     const lower = prompt.toLowerCase();
     expect(lower).toContain("constraintcheck");
     expect(lower).toContain("last");
+  });
+
+  // Persona audit 2026-07-31, finding #6 -- same rationale as buildPrompt's
+  // equivalent test above, for the batch path.
+  it("instructs Claude to check each dish's name against its own ingredients list, after picking ingredients", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "lunch", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("titleingredientcheck");
+    expect(lower).toContain("rice noodles");
   });
 });
 
