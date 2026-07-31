@@ -361,6 +361,43 @@ describe("synonym and vegetarian/vegan keyword completeness (audit round 3, July
   });
 });
 
+// Persona audit 2026-07-31, live diet-filter test: bare "beef" doesn't catch
+// a recipe/title naming only the specific cut ("flank steak," "pot roast")
+// with no separate "beef"/"meat" word anywhere -- 3 real Spoonacular
+// recipes would have slipped past unflagged. Deliberately fully-qualified
+// cut names, not bare "steak"/"roast" (see NON_VEGETARIAN_KEYWORDS's own
+// comment for why those two bare words are NOT added -- real collision
+// risk with "cauliflower steak"/"roasted vegetables").
+describe("beef-cut/roast compounds (persona audit follow-up, 2026-07-31)", () => {
+  const VEGETARIAN: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+
+  it("catches the exact real recipe titles/ingredients that slipped through live", () => {
+    expect(isRecipeTitleUnsafeFor("Marinated Flat Iron Steak", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Spinach and Gorgonzola Stuffed Flank Steak", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Instant Pot Pressure Cooker Pot Roast", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("flank steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("flat iron steak", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("catches other common beef-cut and roast compounds", () => {
+    expect(isOpenEndedIngredientUnsafeFor("sirloin steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("ribeye steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roast beef sandwich", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("chuck roast", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("prime rib", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("does NOT flag a vegetable dish using the same 'steak'/'roasted' naming convention", () => {
+    // These are real, common vegetarian dish names -- bare "steak"/"roast"
+    // are deliberately NOT keywords for exactly this reason.
+    expect(isOpenEndedIngredientUnsafeFor("cauliflower steak", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("portobello steak", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roasted red peppers", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roasted vegetables", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Cauliflower Steak with Chimichurri", VEGETARIAN)).toBeNull();
+  });
+});
+
 // Live-confirmed 2026-07-31 (persona audit): a "halal" profile got pork
 // (ham hocks, salt pork) and white wine served across a real generated
 // week -- halal/kosher had zero keyword coverage anywhere before this.

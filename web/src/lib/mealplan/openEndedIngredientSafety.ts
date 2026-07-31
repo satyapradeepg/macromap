@@ -96,11 +96,30 @@ const SYNONYM_GROUPS: Array<{ words: string[]; alsoMatches: string[]; dietaryInt
 // suet/tallow/isinglass/carmine/marshmallow), and other mollusks/organs
 // (squid/octopus/snail/escargot/foie gras/liver/tripe) already covered
 // for allergy purposes via SHELLFISH_SYNONYMS but not diet-compliance.
+//
+// Beef-cut/roast compounds (found live 2026-07-31, diet-filter test): bare
+// "beef" alone doesn't catch a recipe whose ingredient/title names only
+// the specific cut ("flank steak," "flat iron steak," "pot roast") with
+// no separate "beef" word anywhere -- live-confirmed 3 real non-vegetarian
+// Spoonacular recipes ("Marinated Flat Iron Steak," "Spinach and
+// Gorgonzola Stuffed Flank Steak," "Instant Pot Pressure Cooker Pot
+// Roast") would slip past unflagged. Deliberately fully-qualified cut
+// names, NOT bare "steak"/"roast" -- those two bare words collide with
+// genuinely vegetarian naming conventions ("cauliflower steak,"
+// "portobello steak," "roasted vegetables," "roasted red peppers" are all
+// common real dishes) that a keyword-only check has no reliable way to
+// tell apart from the meat sense without a much bigger, riskier change.
+// Every phrase below names a real cut/preparation with essentially zero
+// vegetarian-dish collision risk, the same specificity discipline as
+// "ham hocks"/"salt pork" above.
 const NON_VEGETARIAN_KEYWORDS = [
   "chicken", "beef", "pork", "bacon", "ham", "sausage", "turkey", "lamb", "duck", "veal", "venison",
   "goat", "rabbit", "bison", "quail", "chorizo", "prosciutto", "pepperoni", "salami",
   "gelatin", "gelatine", "lard", "rennet", "suet", "tallow", "isinglass", "carmine", "marshmallow",
   "foie gras", "liver", "tripe", "oyster sauce",
+  "flank steak", "flat iron steak", "sirloin steak", "ribeye steak", "rib eye steak", "hanger steak",
+  "skirt steak", "t-bone steak", "porterhouse steak", "beef steak",
+  "pot roast", "roast beef", "beef roast", "chuck roast", "rib roast", "prime rib",
   ...FISH_SYNONYMS,
   ...SHELLFISH_SYNONYMS,
 ];
