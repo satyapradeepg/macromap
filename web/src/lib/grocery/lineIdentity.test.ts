@@ -29,6 +29,44 @@ describe("buildNameComponents", () => {
     expect(componentsNeedingConfirmation).toEqual([]);
   });
 
+  // Grocery-duplicates investigation, 2026-07-31: "bell pepper" and "red
+  // pepper" never share a substring relationship either direction, so they
+  // never became identity-match candidates at all -- live-confirmed zero
+  // rows for this exact pair in the production ingredient_line_identity_
+  // matches cache table, a candidate-generation gap, not a wrong cached
+  // answer. Widening what's worth asking about never changes what merges
+  // (isFullClique's own LLM-confirmed judgment still gates that).
+  it("connects two multi-word names sharing only their LAST word (different leading modifier)", () => {
+    const { componentsNeedingConfirmation } = buildNameComponents([
+      { id: 5, name: "Bell Pepper" },
+      { id: 6, name: "Red Pepper" },
+    ]);
+    expect(componentsNeedingConfirmation).toHaveLength(1);
+    expect(new Set(componentsNeedingConfirmation[0])).toEqual(new Set(["bell pepper", "red pepper"]));
+  });
+
+  it("does not connect names sharing only their FIRST word (different product)", () => {
+    const { componentsNeedingConfirmation } = buildNameComponents([
+      { id: 5, name: "Tomato Paste" },
+      { id: 6, name: "Tomato Sauce" },
+    ]);
+    expect(componentsNeedingConfirmation).toEqual([]);
+  });
+
+  it("does not connect a single-word name with a multi-word name sharing only a middle/last word (already covered by containment, not by this rule)", () => {
+    // "cayenne" is one word -- if it were also a suffix of some other
+    // multi-word name that's a genuinely different case (containment),
+    // not the last-word rule this test is scoping.
+    const { componentsNeedingConfirmation } = buildNameComponents([
+      { id: 5, name: "Cayenne" },
+      { id: 6, name: "Ground Cayenne Pepper" },
+    ]);
+    // "cayenne" IS contained in "ground cayenne pepper" as a whole word,
+    // so containment (not the last-word rule) correctly connects these --
+    // confirms the last-word rule isn't needed here, not that it's absent.
+    expect(componentsNeedingConfirmation).toHaveLength(1);
+  });
+
   it("transitively connects a 3-name component via a shared hub word (e.g. 'broth') into ONE component to investigate", () => {
     // Connectivity here only decides what's worth ASKING about -- it does
     // NOT mean these three will merge. isFullClique (tested below) is what

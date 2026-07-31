@@ -23,6 +23,7 @@ import {
   type ResolvedLineConversion,
 } from "@/lib/grocery/aggregate";
 import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
+import { resolveLineIdentityRemap } from "@/lib/grocery/lineIdentity";
 import { checkGroceryList } from "@/lib/grocery/groceryCritic";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
@@ -145,7 +146,28 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         ? [{ ingredientId: s.addon.spoonacularIngredientId, ingredientName: s.addon.ingredientName, amountG: s.addon.amountG }]
         : [],
     );
-    const splitGroceryLines = buildGroceryLines(slotIngredientLists, addonEntries);
+    // Cross-Spoonacular-id display merge (groceryData.ts's getGroceryList
+    // does this before buildGroceryLines too) -- found live 2026-07-31
+    // (grocery-duplicates investigation): this critique used to skip
+    // resolveLineIdentityRemap entirely, so it saw "cottage cheese"/"low
+    // fat cottage cheese", "broccoli"/"broccoli florets", etc. as still
+    // split even on plans where the REAL grocery page had already merged
+    // them (same real ingredient, different Spoonacular ids) -- the
+    // critique text was warning users about "duplicates" that don't
+    // actually exist on the list they see. Mirrors groceryData.ts's exact
+    // sequence so this check sees the SAME merge quality as a real shopper.
+    const idRemap = await resolveLineIdentityRemap([
+      ...slotIngredientLists.flat().map((ing) => ({ id: ing.id, name: ing.name })),
+      ...addonEntries.map((a) => ({ id: a.ingredientId, name: a.ingredientName })),
+    ]);
+    const remappedSlotIngredientLists = slotIngredientLists.map((list) =>
+      list.map((ing) => ({ ...ing, id: idRemap.get(ing.id) ?? ing.id })),
+    );
+    const remappedAddonEntries = addonEntries.map((addon) => ({
+      ...addon,
+      ingredientId: idRemap.get(addon.ingredientId) ?? addon.ingredientId,
+    }));
+    const splitGroceryLines = buildGroceryLines(remappedSlotIngredientLists, remappedAddonEntries);
     // Found live 2026-07-27 (this feature's own first real trial): checking
     // buildGroceryLines' output directly, before reconciling the same-
     // ingredient splits it deliberately leaves apart on a unit mismatch,

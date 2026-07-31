@@ -58,8 +58,29 @@ function wordBoundaryIncludes(haystack: string, needle: string): boolean {
   return new RegExp(`\\b${escaped}s?\\b`).test(haystack);
 }
 
+// Grocery-duplicates investigation, 2026-07-31: whole-phrase containment
+// above catches a dropped/added QUALIFIER at the front (e.g. "broccoli" ->
+// "broccoli florets"), but not two names that share their LAST word (the
+// real head noun) with a DIFFERENT leading modifier -- "bell pepper" and
+// "red pepper" never share a substring relationship either direction, so
+// they never became identity-match candidates at all (confirmed live: zero
+// rows for this exact pair in ingredient_line_identity_matches, a pure
+// candidate-generation gap, not a wrong cached answer). Requires BOTH
+// names to have 2+ words -- a single-word name sharing the other's last
+// word is already caught by wordBoundaryIncludes above (e.g. "pepper"
+// alone is already contained in "bell pepper"), so this only ever adds the
+// genuinely new case. Same "cheap, local, no-network filter" role as
+// namesOverlap -- widening what's worth ASKING never changes what merges;
+// isFullClique's own LLM-confirmed judgment still decides that.
+function sharesLastWord(a: string, b: string): boolean {
+  const wordsA = a.trim().split(/\s+/);
+  const wordsB = b.trim().split(/\s+/);
+  if (wordsA.length < 2 || wordsB.length < 2) return false;
+  return wordsA[wordsA.length - 1] === wordsB[wordsB.length - 1];
+}
+
 function namesOverlap(a: string, b: string): boolean {
-  return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a);
+  return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a) || sharesLastWord(a, b);
 }
 
 function orderPair(a: string, b: string): [string, string] {

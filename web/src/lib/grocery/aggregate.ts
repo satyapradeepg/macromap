@@ -115,6 +115,28 @@ function namesOverlap(a: string, b: string): boolean {
   return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a);
 }
 
+// Grocery-duplicates investigation, 2026-07-31: real bug found live --
+// resolveLineIdentityRemap (lineIdentity.ts, LLM-confirmed) correctly
+// canonicalized "bell pepper" and "red pepper" to the same id, but
+// clusterByNameOverlap below (this id bucket's OWN plausibility re-check,
+// same purpose as the gluten/seitan-cutlets fix) then silently split them
+// right back apart, since neither name is a substring of the other --
+// undoing a real, already-confirmed identity match. Deliberately a
+// SEPARATE function from namesOverlap above, applied ONLY at
+// clusterByNameOverlap's one call site below, NOT folded into the shared
+// namesOverlap -- that function is also used by matchesPantryItem, where
+// this looser rule has a worse failure mode (a pantry "black pepper"
+// wrongly excluding a needed "bell pepper" from the shopping list
+// entirely, not just a display-line miscount) and doesn't have
+// clusterByNameOverlap's own belt to compensate. Same 2+-words-and-exact-
+// last-word-match scope as lineIdentity.ts's own copy of this rule.
+function sharesLastWord(a: string, b: string): boolean {
+  const wordsA = a.trim().split(/\s+/);
+  const wordsB = b.trim().split(/\s+/);
+  if (wordsA.length < 2 || wordsB.length < 2) return false;
+  return wordsA[wordsA.length - 1] === wordsB[wordsB.length - 1];
+}
+
 function matchesPantryItem(line: GroceryLine, item: PantryExclusionItem): boolean {
   if (item.spoonacularIngredientId !== null) {
     return line.ingredientId === item.spoonacularIngredientId;
@@ -363,7 +385,9 @@ function clusterByNameOverlap<T extends { name: string }>(entries: T[]): T[][] {
   }
   for (let i = 0; i < entries.length; i++) {
     for (let j = i + 1; j < entries.length; j++) {
-      if (namesOverlap(entries[i].name.toLowerCase(), entries[j].name.toLowerCase())) union(i, j);
+      const nameA = entries[i].name.toLowerCase();
+      const nameB = entries[j].name.toLowerCase();
+      if (namesOverlap(nameA, nameB) || sharesLastWord(nameA, nameB)) union(i, j);
     }
   }
   const clusters = new Map<number, T[]>();

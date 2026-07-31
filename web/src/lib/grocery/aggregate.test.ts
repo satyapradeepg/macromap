@@ -118,6 +118,42 @@ describe("aggregateGroceryList", () => {
     expect(lines.find((l) => l.name === "seitan cutlets")).toMatchObject({ totalAmount: 385, unit: "g" });
   });
 
+  // Grocery-duplicates investigation, 2026-07-31: live-confirmed real bug --
+  // resolveLineIdentityRemap (lineIdentity.ts) correctly canonicalized
+  // "bell pepper" and "red pepper" to the same Spoonacular id (an
+  // LLM-confirmed match, already cached), but this file's OWN
+  // clusterByNameOverlap safety check then silently split them right back
+  // apart, since neither name is a substring of the other (they only
+  // share their LAST word, "pepper") -- undoing a real, already-confirmed
+  // identity match. Simulates the post-remap state directly (same id,
+  // different names) since that's exactly what groceryData.ts hands this
+  // function after resolveLineIdentityRemap runs.
+  it("merges same-id entries whose names share only their last word (e.g. 'bell pepper' / 'red pepper')", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 11821, name: "red pepper", metricAmount: 100, metricUnit: "g" })],
+        [slotIngredient({ id: 11821, name: "bell pepper", metricAmount: 165, metricUnit: "g" })],
+        [slotIngredient({ id: 11821, name: "red pepper", metricAmount: 60, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ totalAmount: 325, unit: "g" });
+  });
+
+  it("still does not merge same-id entries sharing only their FIRST word (different product)", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 555, name: "tomato paste", metricAmount: 50, metricUnit: "g" })],
+        [slotIngredient({ id: 555, name: "tomato sauce", metricAmount: 100, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+  });
+
   it("still merges same-id entries with genuinely overlapping names (e.g. minor naming variants)", () => {
     const lines = aggregateGroceryList(
       [
