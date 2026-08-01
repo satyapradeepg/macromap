@@ -16,11 +16,17 @@ export async function checkCredentials(
     return { error: "Incorrect username or password." };
   }
 
+  // path must be "/" (not "/profiles"): /onboarding and /plan are gated
+  // with this same cookie too, and a browser only sends a cookie on
+  // requests whose path matches the cookie's own path as a prefix -- a
+  // "/profiles"-scoped cookie is never sent to those sibling routes at
+  // all, so requireGateCookie() there would always see no cookie and
+  // redirect to login, even for an already-authenticated visitor.
   const cookieStore = await cookies();
   cookieStore.set(GATE_COOKIE, gateValueFor(username, password), {
     httpOnly: true,
     sameSite: "lax",
-    path: "/profiles",
+    path: "/",
   });
 
   return { error: null };
