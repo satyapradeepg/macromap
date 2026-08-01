@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireGateCookie } from "./gate";
@@ -45,7 +46,7 @@ export async function switchPersona(
   const admin = createAdminClient();
   const { data: persona, error: fetchError } = await admin
     .from("test_personas")
-    .select("id, refresh_token")
+    .select("id, persona_user_id")
     .eq("id", id)
     .maybeSingle();
 
@@ -53,22 +54,41 @@ export async function switchPersona(
     return { error: fetchError?.message ?? "Persona not found." };
   }
 
+  // Mint a fresh session on demand instead of reusing/refreshing a stored
+  // refresh token. Refresh tokens rotate on every use (Supabase default),
+  // including transparent refreshes triggered by ordinary page loads
+  // elsewhere in the app while acting as this persona -- so a token
+  // snapshotted at switch-time inevitably goes stale the moment the
+  // persona is used for anything, and the next switch attempt fails with
+  // "Invalid Refresh Token: Already Used". A password reset immediately
+  // followed by sign-in has no such staleness: it always succeeds
+  // regardless of what happened to any previous session, since it doesn't
+  // depend on the state of one.
+  const email = `persona-${persona.persona_user_id}@personas.macromap.internal`;
+  const password = randomUUID();
+
+  const { error: updateAuthError } = await admin.auth.admin.updateUserById(
+    persona.persona_user_id,
+    { email, password, email_confirm: true },
+  );
+
+  if (updateAuthError) {
+    return { error: updateAuthError.message };
+  }
+
   const supabase = await createClient();
-  const { data, error: refreshError } = await supabase.auth.refreshSession({
-    refresh_token: persona.refresh_token,
+  const { data, error: signInError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
   });
 
-  if (refreshError || !data.session) {
+  if (signInError || !data.session) {
     return {
-      error:
-        refreshError?.message ??
-        "Failed to switch — the saved refresh token may be expired or already used. Delete and recreate this persona.",
+      error: signInError?.message ?? "Failed to switch to this persona.",
     };
   }
 
-  // Refresh tokens rotate on every use (Supabase default) — the new one
-  // MUST be re-persisted, or the next switch to this persona will fail.
-  const { error: updateError } = await admin
+  const { error: updateRowError } = await admin
     .from("test_personas")
     .update({
       refresh_token: data.session.refresh_token,
@@ -76,8 +96,8 @@ export async function switchPersona(
     })
     .eq("id", id);
 
-  if (updateError) {
-    return { error: updateError.message };
+  if (updateRowError) {
+    return { error: updateRowError.message };
   }
 
   return { error: null };
