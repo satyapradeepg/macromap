@@ -8,7 +8,7 @@
 // what's already decided), it can never introduce a new ingredient or
 // change a macro-relevant decision, so it carries none of that file's own
 // grounding/safety risk. Same forced tool-call pattern as
-// groceryCritic.ts/planCritic.ts, for the same reason: reliable structured
+// planCritic.ts, for the same reason: reliable structured
 // output instead of parsing free-text.
 //
 // Cached per-slot (migration 0028), not globally like
@@ -56,7 +56,7 @@ Write 3-6 short, concrete steps a home cook could actually follow (prep, cook, c
 }
 
 // Never trusts the LLM's JSON shape blindly, same discipline as
-// planCritic.ts's validateCritique / groceryCritic.ts's validateGroceryCheck
+// planCritic.ts's validateCritique
 // -- malformed output is treated as "no instructions available," never a
 // crash, and never silently shown as fewer/different ingredients than
 // what was actually asked for (this function only validates step TEXT,
@@ -72,7 +72,7 @@ export function validateRecipeSteps(raw: unknown): string[] | null {
 
 // Returns null (never throws) on a missing API key, a failed request, or a
 // malformed/empty response -- same "never blocks the real feature it
-// supports" discipline as groceryCritic.ts/planCritic.ts. The caller
+// supports" discipline as planCritic.ts. The caller
 // (actions.ts) treats null as "instructions unavailable right now," the
 // same UX a real recipe's own instructions-fetch failure already has.
 export async function generateAiComposedRecipeSteps(

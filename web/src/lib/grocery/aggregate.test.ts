@@ -415,8 +415,7 @@ describe("aggregateGroceryList", () => {
       for (const line of merged) expect(line.needsManualCombine).toBe(true);
     });
 
-    // Bug fix 2026-07-27, found live via groceryCritic.ts's first real
-    // trial: a real generation had "clove"/"cloves" and "serving"/
+    // Bug fix 2026-07-27, found live: a real generation had "clove"/"cloves" and "serving"/
     // "servings" garlic/maple-syrup/garnish lines for the SAME ingredient
     // id never merging -- singular/plural spelling of the identical unit,
     // not a real size difference like "medium" vs "large" (still correctly

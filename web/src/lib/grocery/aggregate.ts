@@ -612,7 +612,7 @@ export function mergeConvertibleLines(
         } else if (!targetIsBlank && !lineIsBlank && stemOtherUnit(targetNorm) === stemOtherUnit(lineNorm)) {
           // Singular/plural spelling of the identical unit word (e.g.
           // "clove" vs "cloves", "serving" vs "servings") -- found live
-          // 2026-07-27 (groceryCritic.ts's first real trial): a genuine 1:1
+          // 2026-07-27: a genuine 1:1
           // unit, not a size difference like "medium" vs "large" or a
           // different word entirely like "clove" vs "slice" (both still
           // correctly fall through to unresolved below, since their stems
