@@ -76,7 +76,7 @@ import {
 } from "./aiMealComposition";
 import { proposeMealViaClaude, proposeMealsBatchViaClaude } from "./mealProposer";
 import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, dietaryStyleExcludeKeywords } from "./openEndedIngredientSafety";
-import { critiquePlan, type PlanSlotSummary } from "./planCritic";
+import { critiquePlan, type PlanSlotSummary, type FlaggedSlot } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import { lookupIngredientMacrosCached } from "./ingredientMacroCache";
@@ -328,15 +328,10 @@ export interface OrchestrateResult {
   // A flagged diet_violation the repair pass couldn't resolve even after
   // both the real-recipe swap attempt and the AI-composition fallback —
   // see the "Post-generation plan critique + repair" section below.
-  // Expected empty in the overwhelming majority of plans. No frontend
-  // consumer yet (see plan-critic-diet-violation-spec-2026-07-16.md,
-  // OQ-B) — this is the data shape for a follow-up warning banner.
-  unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }>;
-  // planCritic.ts's 1-2 sentence take on the week's variety/macro fit,
-  // computed during generation (before any critic-triggered repair swaps
-  // run) -- null if the critique itself was skipped or failed (no
-  // ANTHROPIC_API_KEY, or a recoverable API error).
-  weeklyAssessment: string | null;
+  // Expected empty in the overwhelming majority of plans. Surfaced as a
+  // real warning banner on /plan (PlanView.tsx) as of 2026-08-01 -- see
+  // data.ts's UnresolvedDietaryConcernView.
+  unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }>;
 }
 
 export async function orchestrateGeneration(input: OrchestrateInput): Promise<OrchestrateResult> {
@@ -1287,7 +1282,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // no_ingredients means there was never any real data to build from in
   // the first place. Every other kind is worth one best-effort attempt.
   function canAttemptBestEffort(reason: CompositionRejection | null): boolean {
-    return reason !== null && reason.kind !== "unsafe_ingredient" && reason.kind !== "no_ingredients";
+    // title_ingredient_mismatch is a text-only problem -- best-effort only
+    // relaxes ingredient-amount realism and never touches dishName (see
+    // aiMealComposition.ts), so it can't fix this and would just re-surface
+    // the same mismatched title.
+    return (
+      reason !== null &&
+      reason.kind !== "unsafe_ingredient" &&
+      reason.kind !== "no_ingredients" &&
+      reason.kind !== "title_ingredient_mismatch"
+    );
   }
 
   // One full propose+compose attempt for a slot -- optionally carrying
@@ -1784,12 +1788,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // unsupportedDietaryStyles (halal/kosher). Expected to be empty in the
   // overwhelming majority of plans; only ever populated for a genuine,
   // unresolvable safety flag, never for repetitive/macro_miss/other.
-  const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }> = [];
-  // Previously computed every generation but only ever console.log'd below
-  // -- null whenever the critique itself is skipped/fails (no
-  // ANTHROPIC_API_KEY, or a recoverable API error), same as today's
-  // existing graceful-skip behavior for the repair pass it feeds.
-  let weeklyAssessment: string | null = null;
+  const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }> = [];
 
   // Post-generation plan critique + repair (built July 15 2026, extended
   // July 16 2026 with diet_violation) — the per-slot pipeline above never
@@ -1855,19 +1854,29 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       });
 
       if (critique) {
-        weeklyAssessment = critique.overallAssessment;
         console.log(
           `[mealplan] plan critique: ${critique.overallAssessment} (${critique.flaggedSlots.length} slots flagged)`,
         );
         const repairBudget = createPlanRepairBudget();
 
-        // diet_violation flags process first so the shared, capped repair
-        // budget can't let cosmetic (repetitive/macro_miss/other) repairs
-        // starve a genuine safety fix earlier in the list — safety
-        // shouldn't depend on array order.
-        const sortedFlags = [...critique.flaggedSlots].sort(
-          (a, b) => (a.reason === "diet_violation" ? 0 : 1) - (b.reason === "diet_violation" ? 0 : 1),
-        );
+        // Ranked, not a binary diet_violation-vs-not split -- live-tested
+        // 2026-08-01: the critic routinely flags EVERY occurrence of a
+        // repeated dish individually (5 separate "repetitive" flags for
+        // one dish repeated 5x, not one flag), which under the old binary
+        // sort could consume the ENTIRE shared budget on repetition alone,
+        // starving out a genuine macro_miss sitting later in the array.
+        // macro_miss now ranks ahead of repetitive/other for the same
+        // reason diet_violation already ranked first: a real, specific
+        // problem shouldn't lose its shot at the shared budget just
+        // because array order happened to put a pile of repetition flags
+        // first.
+        const FLAG_PRIORITY: Record<FlaggedSlot["reason"], number> = {
+          diet_violation: 0,
+          macro_miss: 1,
+          other: 2,
+          repetitive: 3,
+        };
+        const sortedFlags = [...critique.flaggedSlots].sort((a, b) => FLAG_PRIORITY[a.reason] - FLAG_PRIORITY[b.reason]);
 
         // Dedupes flags pointing at the same slot -- found July 16 2026
         // (comprehensive engine test): a critique response flagging the
@@ -1878,19 +1887,34 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // spending any budget, not just before acting, so a duplicate
         // costs nothing.
         const processedFlagSlots = new Set<string>();
+        // Same discipline, for the SAME underlying dish appearing at
+        // multiple different slots -- see FLAG_PRIORITY's comment above.
+        // Only the first occurrence of a given duplicated title actually
+        // spends budget; later occurrences of the identical title are
+        // skipped for free. Fixing one occurrence already reduces the
+        // duplicate count by one -- a genuine partial improvement -- even
+        // though it doesn't eliminate every repeat in a single pass, and
+        // it leaves the rest of the shared budget available for whatever
+        // else was flagged.
+        const repairedRepetitiveTitles = new Set<string>();
 
         for (const flag of sortedFlags) {
           const flagSlotKey = `${flag.dayIndex}-${flag.mealType}`;
           if (processedFlagSlots.has(flagSlotKey)) continue;
           processedFlagSlots.add(flagSlotKey);
 
-          if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
-
           const idx = claimResult.claimed.findIndex(
             (c) => c.slotId.dayIndex === flag.dayIndex && c.slotId.mealType === flag.mealType,
           );
           if (idx === -1) continue;
           const existing = claimResult.claimed[idx];
+
+          if (flag.reason === "repetitive") {
+            if (repairedRepetitiveTitles.has(existing.candidate.title)) continue;
+            repairedRepetitiveTitles.add(existing.candidate.title);
+          }
+
+          if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
 
           // Snacks and AI-composed meals aren't swapped by this pass —
           // the critic is prompted not to flag composed snacks for
@@ -1902,7 +1926,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // time) but is disclosed rather than silently dropped.
           if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) {
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
             }
             continue;
           }
@@ -1940,7 +1964,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             if (!isRecoverableSpoonacularError(err)) throw err;
             console.error(`[mealplan] repair swap failed for day ${flag.dayIndex} ${flag.mealType}, keeping original:`, err);
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
             }
             continue;
           }
@@ -1971,7 +1995,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
                     `"${existing.candidate.title}" -> "${composed.title}"`,
                 );
               } else {
-                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
                 console.error(
                   `[mealplan] no safe alternative found for flagged diet_violation, day ${flag.dayIndex} ${flag.mealType}: ${flag.note}`,
                 );
@@ -2004,6 +2028,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             console.log(
               `[mealplan] repair accepted for day ${flag.dayIndex} ${flag.mealType} (${flag.reason}): ` +
                 `"${existing.candidate.title}" -> "${swapResult.candidate.title}"`,
+            );
+          } else {
+            // A real alternative was found and scored, but shouldAcceptRepair
+            // rejected it (not a meaningful improvement, or -- for a
+            // repetitive flag -- still a duplicate elsewhere in the plan).
+            // Previously silent: the flagged slot is kept exactly as
+            // generated, with zero trace anywhere that a repair was even
+            // attempted, let alone why it was abandoned -- live-confirmed
+            // 2026-08-01, a plan with 6 flagged slots produced zero log
+            // lines across the whole repair loop.
+            console.log(
+              `[mealplan] repair rejected for day ${flag.dayIndex} ${flag.mealType} (${flag.reason}): ` +
+                `"${existing.candidate.title}" (score ${oldScore.toFixed(2)}) kept over ` +
+                `"${swapResult.candidate.title}" (score ${newScore.toFixed(2)}) -- not a meaningful improvement`,
             );
           }
         }
@@ -2052,7 +2090,6 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     weeklyTarget: weekly,
     weeklyActual: actual,
     unresolvedDietaryConcerns,
-    weeklyAssessment,
   };
 }
 

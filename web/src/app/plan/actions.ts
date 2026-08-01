@@ -13,18 +13,6 @@ import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
 import { generateAiComposedRecipeSteps } from "@/lib/mealplan/aiComposedRecipeInstructions";
-import {
-  buildGroceryLines,
-  mergeConvertibleLines,
-  pendingCrossCategoryConversions,
-  conversionKey,
-  type AddonEntry,
-  type SlotIngredientEntry,
-  type ResolvedLineConversion,
-} from "@/lib/grocery/aggregate";
-import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
-import { resolveLineIdentityRemap } from "@/lib/grocery/lineIdentity";
-import { checkGroceryList } from "@/lib/grocery/groceryCritic";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -126,79 +114,6 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       pantryItems,
     });
 
-    // One-shot grocery-list sanity check (groceryCritic.ts, 2026-07-27) —
-    // over the plan's OWN ingredient output (before pantry/pricing/aisle
-    // resolution, which changes independently of the plan and doesn't need
-    // a fresh check on every view — see that file's header comment for why
-    // this only runs here, at generation time, never on the grocery list's
-    // own hot read path). Best-effort: never throws, so a failure here
-    // never blocks the real plan/grocery-list this pass runs alongside.
-    const slotIngredientLists: SlotIngredientEntry[][] = result.slots.map((s) =>
-      s.candidate.ingredients.map((i) => ({
-        id: i.id,
-        name: i.name,
-        metricAmount: i.metricAmount,
-        metricUnit: i.metricUnit,
-      })),
-    );
-    const addonEntries: AddonEntry[] = result.slots.flatMap((s) =>
-      s.addon
-        ? [{ ingredientId: s.addon.spoonacularIngredientId, ingredientName: s.addon.ingredientName, amountG: s.addon.amountG }]
-        : [],
-    );
-    // Cross-Spoonacular-id display merge (groceryData.ts's getGroceryList
-    // does this before buildGroceryLines too) -- found live 2026-07-31
-    // (grocery-duplicates investigation): this critique used to skip
-    // resolveLineIdentityRemap entirely, so it saw "cottage cheese"/"low
-    // fat cottage cheese", "broccoli"/"broccoli florets", etc. as still
-    // split even on plans where the REAL grocery page had already merged
-    // them (same real ingredient, different Spoonacular ids) -- the
-    // critique text was warning users about "duplicates" that don't
-    // actually exist on the list they see. Mirrors groceryData.ts's exact
-    // sequence so this check sees the SAME merge quality as a real shopper.
-    const idRemap = await resolveLineIdentityRemap([
-      ...slotIngredientLists.flat().map((ing) => ({ id: ing.id, name: ing.name })),
-      ...addonEntries.map((a) => ({ id: a.ingredientId, name: a.ingredientName })),
-    ]);
-    const remappedSlotIngredientLists = slotIngredientLists.map((list) =>
-      list.map((ing) => ({ ...ing, id: idRemap.get(ing.id) ?? ing.id })),
-    );
-    const remappedAddonEntries = addonEntries.map((addon) => ({
-      ...addon,
-      ingredientId: idRemap.get(addon.ingredientId) ?? addon.ingredientId,
-    }));
-    const splitGroceryLines = buildGroceryLines(remappedSlotIngredientLists, remappedAddonEntries);
-    // Found live 2026-07-27 (this feature's own first real trial): checking
-    // buildGroceryLines' output directly, before reconciling the same-
-    // ingredient splits it deliberately leaves apart on a unit mismatch,
-    // produced a false positive -- e.g. flagging "1.36 small banana" /
-    // "1.54 whole banana" as an unmerged duplicate, when two DIFFERENT
-    // named "other"-category descriptors are a real, by-design non-merge
-    // (see aggregate.ts's mergeConvertibleLines, same precedent as "medium"
-    // vs "large" onion), and flagging a weight-vs-count split that would
-    // have resolved fine via a real cross-category conversion rate. Running
-    // the SAME reconciliation groceryData.ts's getGroceryList performs
-    // (minus pantry/pricing/aisle, irrelevant to this check) before the
-    // critique ever sees the list fixes this -- the critique now only ever
-    // sees what a real shopper would, not an intermediate aggregation step.
-    const pendingConversions = pendingCrossCategoryConversions(splitGroceryLines);
-    const crossCategoryRates = new Map<string, ResolvedLineConversion>();
-    await Promise.all(
-      pendingConversions.map(async ({ ingredientId, name, sourceUnit, targetUnit }) => {
-        const resolved = await resolveConversionRateWithSource(name, sourceUnit, targetUnit);
-        if (resolved) crossCategoryRates.set(conversionKey(ingredientId, sourceUnit, targetUnit), resolved);
-      }),
-    );
-    const rawGroceryLines = mergeConvertibleLines(splitGroceryLines, crossCategoryRates);
-    const groceryNotes = await checkGroceryList(
-      rawGroceryLines.map((l) => ({
-        name: l.name,
-        totalAmount: l.totalAmount,
-        unit: l.unit,
-        needsManualCombine: l.needsManualCombine,
-      })),
-    );
-
     const { data: insertedPlan, error: planError } = await supabase
       .from("meal_plans")
       .insert({
@@ -213,8 +128,6 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         weekly_actual_fat_g: result.weeklyActual.fatG,
         reconciliation_status: result.reconciliationStatus,
         retry_queries_used: result.retryQueriesUsed,
-        weekly_assessment: result.weeklyAssessment,
-        grocery_notes: groceryNotes,
       })
       .select()
       .single();
@@ -347,8 +260,7 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       id: insertedPlan.id,
       generatedAt: insertedPlan.generated_at,
       reconciliationStatus: result.reconciliationStatus,
-      weeklyAssessment: result.weeklyAssessment,
-      groceryNotes,
+      unresolvedDietaryConcerns: result.unresolvedDietaryConcerns,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
       slots: [

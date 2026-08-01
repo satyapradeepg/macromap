@@ -224,7 +224,143 @@ export type CompositionRejection =
       min: number;
       max: number;
       gapNeeded: number;
-    };
+    }
+  | { kind: "title_ingredient_mismatch"; dishName: string; mismatchedWord: string };
+
+// mealProposer.ts's TITLE_INGREDIENT_CHECK_FIELD asks Claude to self-check
+// this, but never enforces it (validateProposal never reads the field's
+// content) -- live-confirmed 2026-08-01, in ONE 35-slot plan: three fresh
+// dinners titled "...with Rice"/"...with Quinoa"/"Tofu Steak..." whose real
+// ingredients never included rice/quinoa/tofu at all, the exact same bug
+// class as the persona audit's finding #6 (rice noodles), just with the
+// self-check having failed silently again. A curated list of specific,
+// unambiguous food-component words, not a generic "any noun not found in
+// ingredients" check -- a broad heuristic would flag legitimate
+// preparation/style words ("Skillet," "Crusted," "Mashed," "Roasted") as
+// false mismatches, wasting this fallback's already-scarce AI-compose
+// retry budget (see the persona audit's finding #3 and the 2026-08-01
+// budget-vs-price backlog note) rejecting proposals that were never
+// actually wrong. Deliberately excludes "toast"/"bagel"/"waffle"/"pancake"
+// for the same reason -- these name a PREPARED FORM/finished baked good,
+// not a raw purchasable ingredient (a pancake's real ingredients are
+// flour/egg/milk, never an item literally called "pancake"), so including
+// them false-flagged this codebase's own correct "...Whole Wheat Toast"
+// fixture and would do the same to any real "...Waffles"/"...Pancakes"
+// dish. Not exhaustive, but covers the common specific-protein/
+// starch/dairy nouns this app's own proposals actually reach for, closing
+// the exact failure class found live.
+const SPECIFIC_INGREDIENT_WORDS = [
+  "rice",
+  "quinoa",
+  "noodle",
+  "pasta",
+  "spaghetti",
+  "couscous",
+  "cheese",
+  "tofu",
+  "tempeh",
+  "seitan",
+  "chicken",
+  "beef",
+  "pork",
+  "bacon",
+  "ham",
+  "turkey",
+  "shrimp",
+  "salmon",
+  "tuna",
+  "egg",
+  "yogurt",
+  "potato",
+  "bean",
+  "lentil",
+  "chickpea",
+  "avocado",
+  "bread",
+  "oat",
+];
+
+// Word-boundary match tolerant of a regular ("+s") or "-o"-ending irregular
+// ("+es", e.g. potato/potatoes) plural -- every list entry above is a bare
+// singular/base form, so this is the only pluralization handling needed.
+// Same word-boundary idiom as aggregate.ts's wordBoundaryIncludes (kept as
+// a local copy per this codebase's existing convention of a small per-file
+// copy over a cross-module dependency for this exact string-matching
+// shape).
+function containsWord(haystack: string, word: string): boolean {
+  return new RegExp(`\\b${word}(e?s)?\\b`).test(haystack);
+}
+
+// Exported (pure, no network) so it's directly unit-testable, matching
+// this codebase's convention of testing the validator rather than the
+// network call itself. Returns the first specific-ingredient word found in
+// the dish name that has no corresponding match anywhere in the proposed
+// ingredient names -- null when every specific-ingredient word mentioned in
+// the title is actually backed by a real ingredient (the overwhelmingly
+// common case).
+export function findTitleIngredientMismatch(
+  dishName: string,
+  ingredients: Array<{ name: string }>,
+): string | null {
+  const titleLower = dishName.toLowerCase();
+  const ingredientText = ingredients.map((i) => i.name.toLowerCase()).join(" ");
+  for (const word of SPECIFIC_INGREDIENT_WORDS) {
+    if (containsWord(titleLower, word) && !containsWord(ingredientText, word)) {
+      return word;
+    }
+  }
+  return null;
+}
+
+// Used only by composeMealFromProposalBestEffort below -- that composer can
+// never reject (its whole purpose is "produce something rather than leave
+// the slot blocked"), so a title/ingredient mismatch there can't be handled
+// by the strict composer's reject-and-retry mechanism the way it is
+// everywhere else. Live-confirmed 2026-08-01: best-effort explicitly
+// tolerates a missing protein/carb/fat role (see this file's own
+// `if (!proteinProposed) notes.push(...)`), which can orphan a title
+// reference with no repair mechanism to catch it -- reproduced twice in one
+// real generation ("Seitan and Kale Fried Rice..." with no seitan at all).
+// Deterministically removes the mismatched word, preferring to also drop an
+// adjacent " and "/"and " connector (the common "X and Y ..." title shape)
+// so the result reads naturally; falls back to a bare word removal plus
+// whitespace/dangling-connector cleanup when no adjacent connector exists.
+// Never perfect English for every possible title shape, but always paired
+// with a note in the caller's `notes` array (this function's own established
+// disclosure idiom, already surfaced to the user via matchLabelFor's
+// "Approximate — ..." label) -- an imperfect but honest correction beats an
+// undisclosed wrong claim.
+function stripMismatchedTitleWord(dishName: string, word: string): string {
+  const w = `${word}(e?s)?`;
+  let result = dishName
+    .replace(new RegExp(`\\b${w}\\b\\s+and\\s+`, "i"), "")
+    .replace(new RegExp(`\\s+and\\s+\\b${w}\\b`, "i"), "")
+    .replace(new RegExp(`\\bwith\\s+${w}\\b`, "i"), "")
+    .replace(new RegExp(`\\b${w}\\b`, "i"), "");
+  result = result.replace(/\s{2,}/g, " ").trim();
+  result = result.replace(/^(and|with)\s+/i, "").replace(/\s+(and|with)$/i, "");
+  return result.trim();
+}
+
+// Repeatedly strips every mismatched word from the title against the FINAL
+// composed ingredients (not the original proposal) -- best-effort's own
+// role-dropping/lookup-failure relaxations happen after the proposal is
+// first checked, so more than one title reference could end up orphaned in
+// the same dish. Bounded at the length of the curated word list itself
+// (SPECIFIC_INGREDIENT_WORDS), which is the real, finite ceiling on how many
+// distinct mismatches a single title could ever produce -- guarantees
+// termination without an arbitrary magic number.
+export function stripAllTitleMismatches(dishName: string, ingredients: Array<{ name: string }>): { dishName: string; removedWords: string[] } {
+  let name = dishName;
+  const removedWords: string[] = [];
+  for (let i = 0; i < SPECIFIC_INGREDIENT_WORDS.length; i++) {
+    const mismatch = findTitleIngredientMismatch(name, ingredients);
+    if (!mismatch) break;
+    name = stripMismatchedTitleWord(name, mismatch);
+    removedWords.push(mismatch);
+  }
+  return { dishName: name, removedWords };
+}
 
 export type ComposeMealResult = { ok: true; meal: ComposedMeal } | { ok: false; reason: CompositionRejection };
 
@@ -242,6 +378,14 @@ export async function composeMealFromProposalDetailed(
   fetchIngredientMacros: FetchIngredientMacrosFn,
 ): Promise<ComposeMealResult> {
   if (proposal.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
+
+  // Cheap, synchronous, checked before any network lookup below -- a
+  // misleading title is wrong regardless of how well the ingredients
+  // themselves would otherwise score.
+  const mismatchedWord = findTitleIngredientMismatch(proposal.dishName, proposal.ingredients);
+  if (mismatchedWord) {
+    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: proposal.dishName, mismatchedWord } };
+  }
 
   for (const ing of proposal.ingredients) {
     const unsafeReason = isOpenEndedIngredientUnsafeFor(ing.name, ctx);
@@ -419,6 +563,31 @@ export async function composeMealFromProposalDetailed(
       };
     }
     composed.push(toComposedIngredient(fatLookup, fatSized.amountG));
+  }
+
+  // Second, final title check against the ACTUAL composed ingredients --
+  // not just the original proposal checked at the top of this function.
+  // Live-confirmed 2026-08-01: the early check alone missed a real case --
+  // a dish titled "...Brown Bean Buddha Bowl..." shipped with no bean
+  // anywhere, because the proposal's "bean"-ish item was a `fixed`-role
+  // garnish that passed the early check fine (it WAS in the proposal at
+  // that point), then failed its Spoonacular lookup a few lines above and
+  // was silently dropped (the fixed-item loop's own deliberate "don't
+  // reject a whole good dish over one ungroundable garnish" rule, unrelated
+  // to this check). Re-checking here, against composed's real final
+  // ingredient names, catches exactly that gap. Reuses the SAME rejection
+  // kind/retry-with-feedback path as the early check rather than silently
+  // editing the title -- this fires rarely (only when a fixed item's own
+  // title reference specifically fails lookup), so paying for one more
+  // retry here is the same "reject late, retry" cost class this function
+  // already accepts for portion_out_of_bounds, which also only fires after
+  // grounding/sizing work is already done.
+  const finalMismatch = findTitleIngredientMismatch(
+    proposal.dishName,
+    composed.map((i) => ({ name: i.ingredientName })),
+  );
+  if (finalMismatch) {
+    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: proposal.dishName, mismatchedWord: finalMismatch } };
   }
 
   const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
@@ -639,12 +808,25 @@ export async function composeMealFromProposalBestEffort(
     return { ok: false, reason: { kind: "ingredient_not_found", role: "protein", ingredientName: proteinProposed?.name ?? carbProposed?.name ?? fatProposed?.name ?? "unknown" } };
   }
 
+  // Best-effort's own role-dropping/lookup-failure relaxations above can
+  // orphan a title reference the original proposal-time wording never had a
+  // chance to avoid -- see stripAllTitleMismatches' comment. Checked
+  // against the FINAL composed ingredient names, not the original proposal,
+  // for the same reason the strict composer's own second check does.
+  const { dishName: correctedDishName, removedWords } = stripAllTitleMismatches(
+    proposal.dishName,
+    composed.map((i) => ({ name: i.ingredientName })),
+  );
+  for (const word of removedWords) {
+    notes.push(`dish name no longer mentions "${word}" -- it wasn't actually included as an ingredient`);
+  }
+
   const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
   return {
     ok: true,
     result: {
       meal: {
-        dishName: proposal.dishName,
+        dishName: correctedDishName,
         ingredients: composed,
         totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
         totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
@@ -698,5 +880,7 @@ export function describeRejectionForFeedback(reason: CompositionRejection): stri
         over ? "over" : "under"
       } the realistic ${bound}g ${over ? "cap" : "floor"}. Pick a ${over ? "denser" : "less concentrated"} ${reason.role} source.`;
     }
+    case "title_ingredient_mismatch":
+      return `Your dish name "${reason.dishName}" mentions "${reason.mismatchedWord}" but that isn't one of your listed ingredients. Either remove that word from the dish name, or add it as a real ingredient.`;
   }
 }

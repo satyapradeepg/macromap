@@ -250,15 +250,32 @@ export function PlanBoard({
             <MacroStat label="Carbs" unit="g" actual={plan.weeklyActual.carbsG} target={plan.weeklyTarget.carbsG} />
             <MacroStat label="Fat" unit="g" actual={plan.weeklyActual.fatG} target={plan.weeklyTarget.fatG} />
           </div>
-          {plan.weeklyAssessment && (
-            // A generation-time note, not a live description of the current
-            // plan -- planCritic.ts runs before any critic-triggered repair
-            // swaps, so a flagged issue mentioned here may already be fixed.
-            // Absent on any plan generated before this field existed, or
-            // whenever the underlying critique call was skipped/failed
-            // (both silent, non-error conditions -- see orchestrate.ts).
-            <p className="mt-3 border-t border-border pt-3 text-sm text-muted">{plan.weeklyAssessment}</p>
-          )}
+        </div>
+      )}
+
+      {plan && plan.unresolvedDietaryConcerns.length > 0 && (
+        // Ephemeral, same as blockedSlots -- orchestrate.ts's repair pass
+        // computes this in memory during generation but nothing persists
+        // it, so a reloaded plan can't recover it (see data.ts). A genuine
+        // diet_violation the repair pass tried and failed to fix even
+        // after a real swap attempt and the AI-composition fallback --
+        // expected empty in the overwhelming majority of plans, so this
+        // gets a visually distinct (not just muted-gray) warning treatment
+        // rather than blending in with routine plan-quality notes.
+        <div className="mt-4 rounded-lg border border-amber-600/40 bg-amber-50 p-4 dark:bg-amber-950/30">
+          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+            Couldn&apos;t fully resolve a dietary concern
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-300">
+            {plan.unresolvedDietaryConcerns.map((concern, i) => (
+              <li key={i}>
+                <span className="font-medium">
+                  {DAY_LABELS[concern.dayIndex]} {MEAL_TYPE_LABELS[concern.mealType]}:
+                </span>{" "}
+                {concern.note}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -368,15 +385,6 @@ export function PlanBoard({
           </span>
         </summary>
         <div className="border-t border-border p-4 pt-3">
-          {plan?.groceryNotes && (
-            // groceryCritic.ts's one-shot sanity check, computed once at
-            // generation time -- won't reflect a pantry change or swap made
-            // since then (same accepted staleness tradeoff as the weekly
-            // assessment above).
-            <p className="mb-3 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted">
-              {plan.groceryNotes}
-            </p>
-          )}
           <GroceryList lines={groceryList} tier={tier} />
         </div>
       </details>

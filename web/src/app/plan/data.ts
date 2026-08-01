@@ -87,29 +87,30 @@ export interface BlockedSlotView {
   blockingHint: string;
 }
 
+export interface UnresolvedDietaryConcernView {
+  dayIndex: number;
+  mealType: MealType;
+  note: string;
+}
+
 export interface PlanView {
   id: string;
   generatedAt: string;
   reconciliationStatus: "within_band" | "outside_band_after_retries";
   weeklyTarget: MacroTargets;
   weeklyActual: MacroTargets;
-  // planCritic.ts's 1-2 sentence take on the week's variety/macro fit,
-  // computed during generation. Null on any plan generated before this
-  // field existed, or where the critique itself was skipped/failed (no
-  // ANTHROPIC_API_KEY, or a recoverable API error) — absence isn't an error.
-  weeklyAssessment: string | null;
-  // groceryCritic.ts's one-shot sanity check over this plan's OWN
-  // aggregated ingredient list, computed once at generation time (not
-  // refreshed by pantry changes/swaps afterward — a real, accepted
-  // staleness tradeoff, same as weeklyAssessment above). Null in the
-  // common case (nothing looked wrong), on any plan generated before this
-  // field existed, or wherever the check itself was skipped/failed.
-  groceryNotes: string | null;
   slots: PlanSlotView[];
   // Only populated on a freshly-generated plan (ephemeral, from the action's
   // return value) — blocked slots have no meal_plan_slots row, so a plan
   // reloaded from history can't recover which slots were blocked or why.
   blockedSlots: BlockedSlotView[];
+  // Same ephemeral-only shape as blockedSlots above, for the same reason --
+  // orchestrate.ts's post-generation repair pass computes this in memory
+  // (a diet_violation flag it couldn't resolve even after a real swap
+  // attempt and the AI-composition fallback) but nothing persists it, so a
+  // reloaded plan can't recover which slot it was or why. Expected empty
+  // in the overwhelming majority of plans -- see PlanView.tsx's banner.
+  unresolvedDietaryConcerns: UnresolvedDietaryConcernView[];
 }
 
 export async function getMostRecentPlan(
@@ -142,8 +143,6 @@ export async function getMostRecentPlan(
     id: plan.id,
     generatedAt: plan.generated_at,
     reconciliationStatus: plan.reconciliation_status,
-    weeklyAssessment: plan.weekly_assessment,
-    groceryNotes: plan.grocery_notes,
     weeklyTarget: {
       calories: plan.weekly_target_calories,
       proteinG: plan.weekly_target_protein_g,
@@ -205,5 +204,6 @@ export async function getMostRecentPlan(
       };
     }),
     blockedSlots: [],
+    unresolvedDietaryConcerns: [],
   };
 }

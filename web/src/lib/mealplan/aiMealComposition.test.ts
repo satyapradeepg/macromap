@@ -4,6 +4,8 @@ import {
   composeMealFromProposalDetailed,
   composeMealFromProposalBestEffort,
   describeRejectionForFeedback,
+  findTitleIngredientMismatch,
+  stripAllTitleMismatches,
   type CompositionRejection,
   type GroundedIngredientData,
   type MealProposal,
@@ -142,7 +144,7 @@ describe("composeMealFromProposal", () => {
   it("rejects the whole composition when any ingredient is unsafe for the profile", async () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
     const proposal: MealProposal = {
-      dishName: "Chicken and Rice Bowl",
+      dishName: "Chicken and Bread Bowl",
       ingredients: [
         { name: "grilled chicken breast", role: "protein" },
         { name: "whole wheat bread", role: "carb" },
@@ -322,7 +324,7 @@ describe("composeMealFromProposal", () => {
     // same class of bug already fixed for the fat role above.
     const carbHeavyProtein: GroundedIngredientData = { id: 3, name: "carb-heavy protein", caloriesPer100g: 300, proteinGPer100g: 25, carbsGPer100g: 40, fatGPer100g: 0, estimatedCostCentsPer100g: null };
     const proposal: MealProposal = {
-      dishName: "Lentil Bowl",
+      dishName: "Hearty Bowl",
       ingredients: [
         { name: "carb-heavy protein", role: "protein" },
         { name: "whole wheat bread", role: "carb" },
@@ -391,7 +393,7 @@ describe("composeMealFromProposalDetailed", () => {
   it("tags an unsafe ingredient as unsafe_ingredient, carrying the real safety-gate reason string", async () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
     const proposal: MealProposal = {
-      dishName: "Chicken and Rice Bowl",
+      dishName: "Chicken and Bread Bowl",
       ingredients: [
         { name: "grilled chicken breast", role: "protein" },
         { name: "whole wheat bread", role: "carb" },
@@ -438,6 +440,125 @@ describe("composeMealFromProposalDetailed", () => {
     if (!result.ok) throw new Error("expected success");
     expect(result.meal.dishName).toBe("Seitan Scramble with Spinach and Whole Wheat Toast");
   });
+
+  it("tags a title/ingredient mismatch as title_ingredient_mismatch, before any grounding call", async () => {
+    // Live-confirmed 2026-08-01: a dish titled "...with Rice" whose real
+    // ingredients never included rice at all -- same bug class as the
+    // persona audit's finding #6, just with the model's own
+    // titleIngredientCheck self-check (mealProposer.ts) having failed
+    // silently again.
+    const proposal: MealProposal = {
+      dishName: "Spinach and Chickpea Curry with Rice",
+      ingredients: [
+        { name: "chickpeas", role: "protein" },
+        { name: "olive oil", role: "fat" },
+        { name: "spinach", role: "fixed", fixedAmountG: 40 },
+      ],
+    };
+    const fetcher = lookupFrom({ chickpeas: seitan, "olive oil": oil, spinach });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toEqual({
+      kind: "title_ingredient_mismatch",
+      dishName: "Spinach and Chickpea Curry with Rice",
+      mismatchedWord: "rice",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("catches a title/ingredient mismatch that only appears AFTER a fixed ingredient silently fails its lookup and gets dropped", async () => {
+    // Live-confirmed 2026-08-01: a dish titled "...Brown Bean Buddha
+    // Bowl..." shipped with no bean anywhere -- the proposal's "black
+    // beans" fixed-role item passed the EARLY title check fine (it WAS in
+    // the proposal at that point), then failed its Spoonacular lookup a
+    // few lines later and was silently dropped (the fixed-item loop's own
+    // deliberate "don't reject a whole good dish over one ungroundable
+    // garnish" rule) -- orphaning the title's "Bean" reference. This test
+    // reproduces that exact shape: "black beans" is proposed but the
+    // fetcher has no entry for it, so it's the only fixed item to be
+    // dropped, and the final composed ingredients (seitan, brown rice,
+    // olive oil) genuinely have no bean anywhere.
+    const proposal: MealProposal = {
+      dishName: "Seitan and Brown Bean Buddha Bowl with Rice",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "brown rice", role: "carb" },
+        { name: "olive oil", role: "fat" },
+        { name: "black beans", role: "fixed", fixedAmountG: 40 },
+      ],
+    };
+    const rice: GroundedIngredientData = { id: 2, name: "brown rice", caloriesPer100g: 112, proteinGPer100g: 2.6, carbsGPer100g: 23.5, fatGPer100g: 0.9, estimatedCostCentsPer100g: null };
+    // "black beans" deliberately has no entry -- lookupFrom returns null,
+    // reproducing the real silent-drop path.
+    const fetcher = lookupFrom({ "seitan cutlets": seitan, "brown rice": rice, "olive oil": oil });
+    const result = await composeMealFromProposalDetailed(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toEqual({
+      kind: "title_ingredient_mismatch",
+      dishName: "Seitan and Brown Bean Buddha Bowl with Rice",
+      mismatchedWord: "bean",
+    });
+    // Confirms the drop really happened (not skipped/short-circuited) --
+    // the lookup WAS attempted for the fixed item before it was dropped.
+    expect(fetcher).toHaveBeenCalledWith("black beans");
+  });
+});
+
+describe("findTitleIngredientMismatch", () => {
+  it("returns null when every specific-ingredient word in the title is backed by a real ingredient", () => {
+    const result = findTitleIngredientMismatch("Seitan Stir-Fry with Brown Rice and Peas", [
+      { name: "seitan cutlets" },
+      { name: "brown rice" },
+      { name: "sesame oil" },
+      { name: "petite peas" },
+    ]);
+    expect(result).toBeNull();
+  });
+
+  it("catches the live-confirmed 'Tofu Steak' case with no tofu in the ingredients at all", () => {
+    const result = findTitleIngredientMismatch("Pea Protein Crusted Tofu Steak with Mashed Sweet Potato", [
+      { name: "spinach" },
+      { name: "pea protein powder" },
+      { name: "sweet potato" },
+    ]);
+    expect(result).toBe("tofu");
+  });
+
+  it("catches the live-confirmed '...with Quinoa' case with no quinoa in the ingredients", () => {
+    const result = findTitleIngredientMismatch("Tempeh and Kale Skillet with Quinoa", [
+      { name: "kale" },
+      { name: "garlic" },
+      { name: "tempeh" },
+    ]);
+    expect(result).toBe("quinoa");
+  });
+
+  it("handles the irregular potato/potatoes plural in both directions", () => {
+    expect(findTitleIngredientMismatch("Roasted Potatoes Bowl", [{ name: "russet potato" }])).toBeNull();
+    expect(findTitleIngredientMismatch("Potato Bowl", [{ name: "russet potatoes" }])).toBeNull();
+  });
+
+  it("is case-insensitive", () => {
+    expect(findTitleIngredientMismatch("TOFU Scramble", [{ name: "Firm Tofu" }])).toBeNull();
+  });
+
+  it("does not flag common preparation/style words that aren't in the curated list (e.g. 'toast', 'steak', 'bowl')", () => {
+    // "toast" describes a PREPARATION of bread, not a separate ingredient
+    // -- live-confirmed this exact combination is a normal, correct dish
+    // (found while adding this check: it initially false-flagged this
+    // codebase's own long-standing "Seitan Scramble with Spinach and
+    // Whole Wheat Toast" test fixture, whose carb ingredient is
+    // legitimately named "whole wheat bread", not "toast").
+    const result = findTitleIngredientMismatch("Seitan Scramble with Spinach and Whole Wheat Toast", [
+      { name: "seitan cutlets" },
+      { name: "whole wheat bread" },
+      { name: "olive oil" },
+      { name: "spinach" },
+    ]);
+    expect(result).toBeNull();
+  });
 });
 
 describe("describeRejectionForFeedback", () => {
@@ -450,6 +571,7 @@ describe("describeRejectionForFeedback", () => {
     { kind: "ingredient_not_found", role: "carb", ingredientName: "unobtainium grain" },
     { kind: "portion_infeasible", role: "protein", ingredientName: "lentils", gapNeeded: 40 },
     { kind: "portion_out_of_bounds", role: "protein", ingredientName: "firm tofu", amountG: 346, min: 20, max: 280, gapNeeded: 30.8 },
+    { kind: "title_ingredient_mismatch", dishName: "Curry with Rice", mismatchedWord: "rice" },
   ];
 
   it.each(cases)("returns a non-empty, specific sentence for kind=%s", (reason) => {
@@ -457,6 +579,7 @@ describe("describeRejectionForFeedback", () => {
     expect(sentence.length).toBeGreaterThan(10);
     if ("ingredientName" in reason) expect(sentence).toContain(reason.ingredientName);
     if ("role" in reason) expect(sentence).toContain(reason.role);
+    if ("mismatchedWord" in reason) expect(sentence).toContain(reason.mismatchedWord);
   });
 
   it("names the over-cap direction and the cap value for a too-large portion", () => {
@@ -484,7 +607,7 @@ describe("composeMealFromProposalBestEffort", () => {
   it("CRITICAL: still rejects an unsafe ingredient -- safety is never relaxed, even as a last resort", async () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
     const proposal: MealProposal = {
-      dishName: "Chicken and Rice Bowl",
+      dishName: "Chicken and Bread Bowl",
       ingredients: [
         { name: "grilled chicken breast", role: "protein" },
         { name: "whole wheat bread", role: "carb" },
@@ -690,5 +813,95 @@ describe("composeMealFromProposalBestEffort", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected rejection despite best-effort mode");
     expect(result.reason.kind).toBe("ingredient_not_found");
+  });
+
+  it("corrects a title left orphaned by its own role-dropping relaxation, and discloses the correction via approximationNotes", async () => {
+    // Live-confirmed 2026-08-01, twice in one real generation: a dish
+    // titled "Seitan and Kale Fried Rice..." shipped with no seitan (and
+    // once, no kale either) -- best-effort's own tolerance for a missing
+    // protein role (this file's "no protein ingredient was proposed" note
+    // above) orphaned the title reference, with no mechanism to catch it
+    // since best-effort can never reject and re-check the title the way
+    // the strict composer's two checks do. Reproduces the exact shape:
+    // "seitan cutlets" fails its lookup (dropped, matching this file's own
+    // "couldn't be matched to real ingredient data" note), leaving the
+    // title's "Seitan" reference with nothing backing it.
+    const proposal: MealProposal = {
+      dishName: "Seitan and Kale Fried Rice with Peas",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein" },
+        { name: "brown rice", role: "carb" },
+        { name: "sesame oil", role: "fat" },
+        { name: "petite peas", role: "fixed", fixedAmountG: 40 },
+      ],
+    };
+    const rice: GroundedIngredientData = { id: 2, name: "brown rice", caloriesPer100g: 112, proteinGPer100g: 2.6, carbsGPer100g: 23.5, fatGPer100g: 0.9, estimatedCostCentsPer100g: null };
+    const peas: GroundedIngredientData = { id: 3, name: "petite peas", caloriesPer100g: 81, proteinGPer100g: 5.4, carbsGPer100g: 14.5, fatGPer100g: 0.4, estimatedCostCentsPer100g: null };
+    const sesameOil: GroundedIngredientData = { id: 4, name: "sesame oil", caloriesPer100g: 884, proteinGPer100g: 0, carbsGPer100g: 0, fatGPer100g: 100, estimatedCostCentsPer100g: null };
+    // "seitan cutlets" deliberately has no entry -- reproduces the real
+    // failed-lookup-drop path (this file's `relaxedRoleItem`'s own
+    // "couldn't be matched to real ingredient data and was dropped" note).
+    const fetcher = lookupFrom({ "brown rice": rice, "petite peas": peas, "sesame oil": sesameOil });
+    const result = await composeMealFromProposalBestEffort(proposal, BREAKFAST_TARGET, NONE, fetcher);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.result.meal.dishName).toBe("Kale Fried Rice with Peas");
+    expect(result.result.meal.dishName.toLowerCase()).not.toContain("seitan");
+    expect(result.result.isApproximate).toBe(true);
+    expect(result.result.approximationNotes.some((n) => n.includes('no longer mentions "seitan"'))).toBe(true);
+  });
+});
+
+describe("stripAllTitleMismatches", () => {
+  it("removes a single mismatched word and its adjacent 'and' connector", () => {
+    const result = stripAllTitleMismatches("Seitan and Kale Fried Rice with Peas", [
+      { name: "kale" },
+      { name: "brown rice" },
+      { name: "sesame oil" },
+      { name: "petite peas" },
+    ]);
+    expect(result).toEqual({ dishName: "Kale Fried Rice with Peas", removedWords: ["seitan"] });
+  });
+
+  it("removes a trailing 'with X' clause entirely", () => {
+    const result = stripAllTitleMismatches("Spinach and Chickpea Curry with Rice", [
+      { name: "spinach" },
+      { name: "chickpeas" },
+    ]);
+    expect(result).toEqual({ dishName: "Spinach and Chickpea Curry", removedWords: ["rice"] });
+  });
+
+  it("removes multiple mismatched words across repeated passes", () => {
+    const result = stripAllTitleMismatches("Seitan and Bean Bowl with Rice", [{ name: "kale" }]);
+    expect(result.dishName.toLowerCase()).not.toContain("seitan");
+    expect(result.dishName.toLowerCase()).not.toContain("bean");
+    expect(result.dishName.toLowerCase()).not.toContain("rice");
+    expect(result.removedWords.sort()).toEqual(["bean", "rice", "seitan"]);
+  });
+
+  it("returns the title unchanged, with no removed words, when nothing is mismatched", () => {
+    const result = stripAllTitleMismatches("Seitan Stir-Fry with Brown Rice and Peas", [
+      { name: "seitan cutlets" },
+      { name: "brown rice" },
+      { name: "petite peas" },
+    ]);
+    expect(result).toEqual({ dishName: "Seitan Stir-Fry with Brown Rice and Peas", removedWords: [] });
+  });
+
+  it("still produces a readable (if imperfect) title when the mismatched word isn't adjacent to a connector", () => {
+    // The real live-confirmed case: "Bean" sits between two other words
+    // ("Brown" and "Buddha"), not next to "and"/"with" -- falls through to
+    // the bare-word-removal fallback rather than the cleaner connector-aware
+    // removal, and that's an accepted, disclosed tradeoff (see this
+    // function's own comment), not a bug.
+    const result = stripAllTitleMismatches("Seitan and Brown Bean Buddha Bowl with Quinoa", [
+      { name: "kale" },
+      { name: "seitan cutlets" },
+      { name: "quinoa" },
+      { name: "tahini" },
+    ]);
+    expect(result.dishName.toLowerCase()).not.toContain("bean");
+    expect(result.dishName).not.toContain("  "); // no leftover double space
+    expect(result.removedWords).toEqual(["bean"]);
   });
 });
