@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { requireGateCookie } from "../profiles/gate";
 import { LogoutBar } from "../LogoutBar";
 import { getMostRecentPlan } from "./data";
 import { getPantryItems } from "./pantryData";
@@ -13,6 +14,8 @@ import { PlanBoard } from "./PlanView";
 export const maxDuration = 60;
 
 export default async function PlanPage() {
+  await requireGateCookie();
+
   const supabase = await createClient();
   const {
     data: { user },

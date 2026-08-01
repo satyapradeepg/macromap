@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { requireGateCookie } from "../profiles/gate";
 import type { ActivityLevel, BiologicalSex, Goal } from "@/lib/tdee";
 
 export interface SaveProfileInput {
@@ -24,6 +25,8 @@ export interface SaveProfileInput {
 export async function saveProfile(
   input: SaveProfileInput,
 ): Promise<{ error: string | null }> {
+  await requireGateCookie();
+
   const supabase = await createClient();
   const {
     data: { user },
