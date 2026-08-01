@@ -71,8 +71,7 @@ async function main() {
     // Back to profiles, switch to it. Row cards are the specific
     // .rounded-lg.border.border-border.bg-surface div (see Card.tsx) --
     // a generic "div with this text" locator also matches broad ancestor
-    // wrappers, and "Switch" (exact: false) also substring-matches the
-    // LogoutBar's unrelated "Switch profile" button.
+    // wrappers.
     await page.goto(`${BASE}/profiles`, { waitUntil: "networkidle" });
     const row = page.locator(".rounded-lg.border.border-border.bg-surface").filter({ hasText: LABEL });
     // The disposable persona has no profiles row yet (onboarding was never
@@ -101,10 +100,10 @@ async function main() {
     await page.waitForTimeout(1500);
     check("edit -> /onboarding and stays there", page.url() === `${BASE}/onboarding`);
 
-    // "Switch profile" ends the persona session but keeps Basic Auth valid
-    await page.getByRole("button", { name: /Switch profile/i }).click();
+    // "Back to profiles" ends the persona session but keeps Basic Auth valid
+    await page.getByRole("button", { name: /Back to profiles/i }).click();
     await page.waitForURL(`${BASE}/profiles`, { timeout: 10000 });
-    check("switch profile -> /profiles (not a 401 -- Basic Auth still cached)", page.url() === `${BASE}/profiles`);
+    check("back to profiles -> /profiles (not a 401 -- Basic Auth still cached)", page.url() === `${BASE}/profiles`);
 
     await page.goto(`${BASE}/plan`, { waitUntil: "networkidle" });
     check("/plan with no active persona redirects to /onboarding, not a 401", page.url() === `${BASE}/onboarding`);
