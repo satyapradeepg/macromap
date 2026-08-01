@@ -13,9 +13,18 @@ describe("needsAiNameCheck", () => {
     expect(needsAiNameCheck("herbs - i use 1 sprig of thyme & a bay")).toBe(true);
   });
 
-  it("is exactly at the threshold boundary (8 words triggers, 7 does not)", () => {
-    expect(needsAiNameCheck("one two three four five six seven")).toBe(false);
-    expect(needsAiNameCheck("one two three four five six seven eight")).toBe(true);
+  // Live-confirmed 2026-08-01 (end-to-end test of the deployed app): this
+  // exact 7-word leak (a recipe title + serving-size label fragment) fell
+  // one word short of the original 8-word threshold and reached a real
+  // generated grocery list untouched -- the threshold was lowered to 7
+  // the same day this was found (see this file's own header comment).
+  it("flags the live-confirmed 7-word leak that motivated lowering the threshold from 8 to 7", () => {
+    expect(needsAiNameCheck("sundried tomato & artichoke tuna casserole: serves")).toBe(true);
+  });
+
+  it("is exactly at the threshold boundary (7 words triggers, 6 does not)", () => {
+    expect(needsAiNameCheck("one two three four five six")).toBe(false);
+    expect(needsAiNameCheck("one two three four five six seven")).toBe(true);
   });
 
   it("collapses extra whitespace rather than over-counting", () => {

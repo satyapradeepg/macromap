@@ -90,6 +90,20 @@ describe("repairOrRejectIngredientName", () => {
     expect(repairOrRejectIngredientName('corn tortillas 4"')).toBe('corn tortillas 4"');
     expect(repairOrRejectIngredientName("ginger long 2 inch")).toBe("ginger long 2 inch");
   });
+
+  // Live-confirmed 2026-08-01 (end-to-end test of the deployed app): a
+  // recipe title + serving-size label fragment split on a colon reached a
+  // real generated grocery list -- neither side of the colon is a
+  // trustworthy real ingredient, so this is dropped entirely rather than
+  // repaired, same as the run-on-concatenation shape above.
+  it("rejects a name containing a colon -- a recipe title/serving-size label leak, not a real ingredient", () => {
+    expect(repairOrRejectIngredientName("sundried tomato & artichoke tuna casserole: serves")).toBeNull();
+    expect(repairOrRejectIngredientName("Serves: 4")).toBeNull();
+  });
+
+  it("still rejects a colon-containing name even after a leading connector is stripped", () => {
+    expect(repairOrRejectIngredientName("of casserole: serves")).toBeNull();
+  });
 });
 
 // Audit item #1 (2026-07-21 spec): a leading prep-word with no comma at

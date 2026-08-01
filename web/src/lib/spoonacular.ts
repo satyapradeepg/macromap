@@ -502,7 +502,8 @@ export function parsePrimaryAisle(raw: string | undefined): string | null {
 // Spoonacular's own ingredient-text NLP parser occasionally leaks
 // non-ingredient fragments into extendedIngredients[].name -- live-audited
 // 2026-07-31 against ~750 distinct real names that had passed through this
-// pipeline, turning up 3 distinct failure shapes (~2.6% of names):
+// pipeline, turning up 3 distinct failure shapes (~2.6% of names), plus a
+// 4th found live 2026-08-01 during end-to-end testing of the deployed app:
 //
 // 1. A BARE connector/stopword with nothing else, from a mis-split
 //    quantity RANGE (e.g. "1 to 2 jalapeños, chopped" -> a spurious entry
@@ -522,6 +523,19 @@ export function parsePrimaryAisle(raw: string | undefined): string | null {
 //    dropped entirely rather than shown as one nonsense line. A rare
 //    single-quantity descriptor (e.g. "corn tortillas 4\"") has only ONE
 //    digit group and is never at risk.
+// 4. A recipe title + serving-size label fragment, split on a colon (e.g.
+//    "sundried tomato & artichoke tuna casserole: serves") -- live-
+//    confirmed rendering as a genuine grocery-list line on a real
+//    generated plan. This is exactly the "free-text leak with no fixed
+//    pattern" shape nameRepair.ts's AI fallback exists for, but at 7 words
+//    it fell one word short of that check's own trigger threshold (see
+//    that file's AI_CHECK_WORD_THRESHOLD, lowered from 8 to 7 the same
+//    day this was found) -- a real ingredient name essentially never
+//    contains a literal colon, so this is a cheap, deterministic, zero-
+//    AI-cost second line of defense for the same failure shape, not a
+//    replacement for the threshold fix. Neither side of the colon is
+//    trustworthy as a real ingredient (unlike shape 2's leading
+//    connector), so this is dropped entirely rather than repaired.
 const BARE_NON_INGREDIENT_WORDS = new Set(["to", "or", "and", "a", "an", "the", "of", "with", "for"]);
 const LEADING_CONNECTOR = /^(?:to|of|and|from|for|with)\s+(.+)$/i;
 // Imperative instruction verbs that would never legitimately lead a real
@@ -538,6 +552,8 @@ export function repairOrRejectIngredientName(rawName: string): string | null {
   const verbMatch = connectorMatch ? null : LEADING_INSTRUCTION_VERB.exec(trimmed);
   const repaired = (connectorMatch ?? verbMatch)?.[1].trim() ?? trimmed;
   if (!repaired || BARE_NON_INGREDIENT_WORDS.has(repaired.toLowerCase())) return null;
+
+  if (repaired.includes(":")) return null;
 
   const digitGroupCount = repaired.match(/\d+/g)?.length ?? 0;
   if (digitGroupCount >= 2) return null;

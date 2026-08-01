@@ -12,12 +12,21 @@
 // Deliberately NOT run on every ingredient -- needsAiCheck's word-count
 // trigger is a cheap, high-recall filter (a real single-ingredient name,
 // even a verbose real Spoonacular one like "chicken breast halves boned
-// and skinned", is essentially never 8+ words) so the LLM call only fires
-// for the rare long-tail case, and only at grocery-list READ time
-// (groceryData.ts), not at Spoonacular ingest -- ingest runs over every
-// candidate recipe fetched during generation (most discarded), while read
-// time only ever processes a plan's ~35 already-selected slots' worth of
-// ingredients.
+// and skinned" -- 6 words -- is essentially never this long) so the LLM
+// call only fires for the rare long-tail case, and only at grocery-list
+// READ time (groceryData.ts), not at Spoonacular ingest -- ingest runs
+// over every candidate recipe fetched during generation (most discarded),
+// while read time only ever processes a plan's ~35 already-selected
+// slots' worth of ingredients.
+//
+// Threshold lowered from 8 to 7 on 2026-08-01: live end-to-end testing of
+// the deployed app found a real 7-word garbled leak ("sundried tomato &
+// artichoke tuna casserole: serves", a recipe title + serving-size label
+// fragment) that fell one word short of the original threshold and
+// reached a real user's grocery list untouched. 7 still sits one full
+// word above the longest known genuine ingredient name (6 words, cited
+// above), preserving the same safety margin the original threshold was
+// set with, just recalibrated against a second real data point.
 //
 // Cached GLOBALLY (ingredient_name_repairs, migration 0029), not per user
 // -- whether a given raw string is a clean name, has a real name
@@ -30,11 +39,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // sites (unitConversion.ts's AI_ESTIMATE_MODEL, lineIdentity.ts's MODEL).
 const MODEL = "claude-haiku-4-5-20251001";
 
-const AI_CHECK_WORD_THRESHOLD = 8;
+const AI_CHECK_WORD_THRESHOLD = 7;
 
 // Pure, no network -- exported for direct unit testing. A real single
 // ingredient name (even a long, verbose real Spoonacular descriptor) is
-// essentially never this long; live-confirmed offenders are 8-11+ words.
+// essentially never this long; live-confirmed offenders are 7-11+ words.
 export function needsAiNameCheck(name: string): boolean {
   return name.trim().split(/\s+/).filter(Boolean).length >= AI_CHECK_WORD_THRESHOLD;
 }
