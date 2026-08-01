@@ -15,7 +15,9 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
   const router = useRouter();
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [pending, setPending] = useState<
+    { id: string; action: "switch" | "edit" | "delete" } | null
+  >(null);
   const [isPending, startTransition] = useTransition();
 
   async function handleCreate(e: React.FormEvent) {
@@ -32,11 +34,12 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
   }
 
   async function handleSwitch(id: string, destination: "/plan" | "/onboarding") {
+    const action = destination === "/plan" ? "switch" : "edit";
     setError(null);
-    setPendingId(id);
+    setPending({ id, action });
     const result = await switchPersona(id);
-    setPendingId(null);
     if (result.error) {
+      setPending(null);
       setError(result.error);
     } else {
       router.push(destination);
@@ -48,9 +51,9 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
       return;
     }
     setError(null);
-    setPendingId(id);
+    setPending({ id, action: "delete" });
     const result = await deletePersona(id);
-    setPendingId(null);
+    setPending(null);
     if (result.error) {
       setError(result.error);
     } else {
@@ -89,39 +92,42 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
         {personas.length === 0 && (
           <li className="py-4 text-sm text-muted">No test profiles yet.</li>
         )}
-        {personas.map((p) => (
-          <li key={p.id} className="flex items-center justify-between py-3">
-            <div>
-              <p className="font-medium">{p.label}</p>
-              <p className="text-xs text-muted">
-                last used {new Date(p.last_used_at).toLocaleString()}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleSwitch(p.id, "/plan")}
-                disabled={pendingId === p.id}
-                className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-              >
-                Switch
-              </button>
-              <button
-                onClick={() => handleSwitch(p.id, "/onboarding")}
-                disabled={pendingId === p.id}
-                className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-              >
-                Edit
-              </button>
-              <button
-                onClick={() => handleDelete(p.id, p.label)}
-                disabled={pendingId === p.id}
-                className="rounded border px-3 py-1 text-sm text-red-600 disabled:opacity-50"
-              >
-                Delete
-              </button>
-            </div>
-          </li>
-        ))}
+        {personas.map((p) => {
+          const isRowPending = pending?.id === p.id;
+          return (
+            <li key={p.id} className="flex items-center justify-between py-3">
+              <div>
+                <p className="font-medium">{p.label}</p>
+                <p className="text-xs text-muted">
+                  last used {new Date(p.last_used_at).toLocaleString()}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleSwitch(p.id, "/plan")}
+                  disabled={isRowPending}
+                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+                >
+                  {isRowPending && pending.action === "switch" ? "Switching…" : "Switch"}
+                </button>
+                <button
+                  onClick={() => handleSwitch(p.id, "/onboarding")}
+                  disabled={isRowPending}
+                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+                >
+                  {isRowPending && pending.action === "edit" ? "Opening…" : "Edit"}
+                </button>
+                <button
+                  onClick={() => handleDelete(p.id, p.label)}
+                  disabled={isRowPending}
+                  className="rounded border px-3 py-1 text-sm text-red-600 disabled:opacity-50"
+                >
+                  {isRowPending && pending.action === "delete" ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </main>
   );
