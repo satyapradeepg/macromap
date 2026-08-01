@@ -487,7 +487,12 @@ function MealCard({
         {slot && !slot.isUnfilled ? (
           <>
             <p className="mt-1 text-sm font-semibold text-foreground">{slot.recipeTitle}</p>
-            {slot.matchLabel && <p className="mt-0.5 text-xs text-muted">{slot.matchLabel}</p>}
+            {/* slot.matchLabel ("Approximate...", "Closest match...", "Closest
+                to your budget...") is deliberately not rendered -- surfacing
+                match-quality/approximation caveats read as alarming or
+                confusing on a meal card rather than useful, per Satya
+                2026-08-01. Still computed/stored (matchLabelFor, orchestrate.ts)
+                for internal use (ranking, ops debugging via the MCP route). */}
 
             <div className="mt-2 flex flex-wrap gap-1.5">
               <MacroPill>{Math.round(slot.calories + (slot.addon?.caloriesKcal ?? 0))} cal</MacroPill>
@@ -524,11 +529,11 @@ function MealCard({
                 </p>
               )
             )}
-            {slot.aiComposed && (
-              <p className="mt-1 text-xs text-muted">
-                AI-composed — no recipe matched, assembled from real ingredient data.
-              </p>
-            )}
+            {/* slot.aiComposed's "AI-composed -- no recipe matched..." label
+                is deliberately not rendered, same reasoning as matchLabel
+                above (Satya 2026-08-01) -- slot.aiComposed itself is still
+                set and used elsewhere (e.g. the plan critic skips repetition
+                flags on composed slots). */}
             {slot.addon && (
               // A single template literal, not JSX text split across lines --
               // the line-wrapped text below this cost a real space (JSX's
