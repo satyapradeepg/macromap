@@ -20,7 +20,7 @@ export function LogoutBar({
         )}
         <form action={logout}>
           <button type="submit" className="text-sm text-muted hover:underline">
-            Log out
+            Switch profile
           </button>
         </form>
       </div>

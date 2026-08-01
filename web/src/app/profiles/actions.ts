@@ -3,13 +3,14 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireGateCookie } from "./gate";
+
+// Access is enforced in middleware.ts (HTTP Basic Auth) for every request
+// to this route, including these Server Action invocations -- no separate
+// check needed here.
 
 export async function createPersona(
   label: string,
 ): Promise<{ error: string | null }> {
-  await requireGateCookie();
-
   const trimmed = label.trim();
   if (!trimmed) {
     return { error: "Label is required." };
@@ -41,8 +42,6 @@ export async function createPersona(
 export async function switchPersona(
   id: string,
 ): Promise<{ error: string | null }> {
-  await requireGateCookie();
-
   const admin = createAdminClient();
   const { data: persona, error: fetchError } = await admin
     .from("test_personas")
@@ -106,8 +105,6 @@ export async function switchPersona(
 export async function deletePersona(
   id: string,
 ): Promise<{ error: string | null }> {
-  await requireGateCookie();
-
   const admin = createAdminClient();
   const { data: persona, error: fetchError } = await admin
     .from("test_personas")

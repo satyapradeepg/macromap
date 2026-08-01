@@ -2,11 +2,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
-// A returning user (profile already exists -- onboarding done) skips the
+// A returning persona (profile already exists -- onboarding done) skips the
 // pitch and goes straight to their plan, mirroring plan/page.tsx's own
-// profile check in reverse. Only a first-time visitor (no profile yet, even
-// if a guest session already exists via middleware.ts's anonymous
-// bootstrap) sees the copy below.
+// profile check in reverse. Only a visitor with no active persona session
+// (including right after "Switch profile") sees the copy below.
 export default async function Home() {
   const supabase = await createClient();
   const {
