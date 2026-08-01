@@ -15,5 +15,12 @@ export async function logout() {
   // original cookie around untouched (cookie deletion is matched by
   // name+path+domain, not name alone).
   cookieStore.set(GATE_COOKIE, "", { path: "/profiles", maxAge: 0 });
-  redirect("/");
+  // Redirecting to "/" (not directly to the login screen) used to bounce
+  // the user right back to /plan: the landing page (page.tsx) redirects any
+  // visitor with a still-valid Supabase user + completed profile straight
+  // to /plan, and clearing the gate cookie here doesn't touch that Supabase
+  // session at all -- so logging out silently landed back on the exact
+  // page you were leaving, looking like the button did nothing. Redirecting
+  // straight to the login screen skips that bounce entirely.
+  redirect("/profiles/login");
 }
