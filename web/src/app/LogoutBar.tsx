@@ -12,18 +12,13 @@ export function LogoutBar({
       <Link href="/profiles">
         <Logo />
       </Link>
-      <div className="flex gap-4">
-        {showBackToProfiles && (
-          <Link href="/profiles" className="text-sm text-muted hover:underline">
-            Back to profiles
-          </Link>
-        )}
+      {showBackToProfiles && (
         <form action={logout}>
           <button type="submit" className="text-sm text-muted hover:underline">
-            Switch profile
+            Back to profiles
           </button>
         </form>
-      </div>
+      )}
     </div>
   );
 }
