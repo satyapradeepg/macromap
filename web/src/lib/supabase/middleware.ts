@@ -30,19 +30,7 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    const { error } = await supabase.auth.signInAnonymously();
-    if (error) {
-      // Most common cause: this Supabase project has anonymous sign-ins
-      // disabled (the default for new projects). Enable it in the
-      // dashboard: Authentication -> Sign In / Providers -> Anonymous.
-      console.error("Guest session bootstrap failed:", error.message);
-    }
-  }
+  await supabase.auth.getUser();
 
   return supabaseResponse;
 }
