@@ -39,7 +39,7 @@ export default async function PlanPage() {
 
   return (
     <>
-      <LogoutBar />
+      <LogoutBar showBackToProfiles />
       <PlanBoard
         initialPlan={initialPlan}
         dietaryStyles={profile.dietary_styles ?? []}

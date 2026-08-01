@@ -4,7 +4,7 @@ import { OnboardingWizard } from "./OnboardingWizard";
 export default function OnboardingPage() {
   return (
     <>
-      <LogoutBar />
+      <LogoutBar showBackToProfiles />
       <OnboardingWizard />
     </>
   );
