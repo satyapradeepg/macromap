@@ -249,13 +249,177 @@ export const STATIC_INGREDIENT_MACROS: Record<string, StaticIngredientMacro> = {
     containsGluten: false,
     veganCompliant: true,
   },
+
+  // Added 2026-07-30 (15-profile comprehensive live audit, engine-comprehensive-
+  // test-2026-07-30.md): the carb role's original 3-option pool (banana/apple/
+  // orange) was never widened in the July 15 2026 audit round that widened
+  // protein/fat to 5 each -- found live that this is a real, structural gap,
+  // not just an oversight. Banana/apple/orange top out at 33-57g deliverable
+  // carbs within their own realistic-portion caps (MAX_REALISTIC_AMOUNT_G
+  // below), but a snack's own carb target regularly needs 68g+ for a
+  // higher-calorie profile (live-confirmed: a bulk-goal profile's snack1
+  // needed 68.1g carbs, and EVERY fruit option would have needed 300-580g to
+  // close it -- all three silently return null, since sizeIngredientForGap
+  // rejects any amount over its realistic cap). This is what actually drove
+  // the "fat looks like it's overshooting" appearance found in the audit: fat
+  // wasn't overshooting its own target, carbs (and therefore total calories)
+  // were undershooting far more severely, inflating fat's apparent share.
+  // Real data, fetched live the same way the original 9 and the July 15
+  // 5-widening were (search + information, amount=100/unit=grams).
+  oats: {
+    id: 8120,
+    name: "oats",
+    caloriesPer100g: 379,
+    proteinGPer100g: 13.2,
+    carbsGPer100g: 67.7,
+    fatGPer100g: 6.52,
+    estimatedCostCentsPer100g: 39.29,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    // Pure oats are naturally gluten-free, but commercial oats are routinely
+    // cross-contaminated with wheat during farming/milling unless explicitly
+    // "certified gluten-free" -- this app has no way to distinguish that at
+    // the ingredient-name level, so conservatively tagged true, same
+    // "ambiguous -> excluded" default this file already documents for
+    // protein powder's dairy/soy tagging above.
+    containsGluten: true,
+    veganCompliant: true,
+  },
+  dates: {
+    id: 9087,
+    name: "dates",
+    caloriesPer100g: 282,
+    proteinGPer100g: 2.45,
+    carbsGPer100g: 75.0,
+    fatGPer100g: 0.39,
+    estimatedCostCentsPer100g: 114.29,
+    containsDairy: false,
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+
+  // Added 2026-07-30 (variety/repetition follow-up to the same comprehensive
+  // audit): the protein role bottlenecks to just 2 safe options
+  // (pea protein powder, hemp seeds) under a vegan restriction alone --
+  // greek yogurt/cottage cheese/protein powder are all dairy-tagged, and a
+  // stacked soy allergy (the exact H1 test profile) also removes protein
+  // powder's soy tag, still leaving 2. With only 2 real rotation options
+  // across 14 weekly snack slots, even perfect rotation guarantees each one
+  // appears ~7 times -- live-confirmed in the audit ("Hemp Seeds + Orange"
+  // appearing 7x for a dairy-free profile, "Pea Protein Powder + Sunflower
+  // Seed Butter" 7x for vegan+nut). Real data, fetched live the same way as
+  // every other pool addition (search + information, amount=100/unit=grams).
+  "pumpkin seeds": {
+    id: 12014,
+    name: "pumpkin seeds",
+    caloriesPer100g: 559,
+    proteinGPer100g: 30.23,
+    carbsGPer100g: 10.71,
+    fatGPer100g: 49.05,
+    estimatedCostCentsPer100g: 178.57,
+    containsDairy: false,
+    // A seed, not a tree nut or peanut -- same classification as the
+    // already-present hemp/chia/sunflower seed entries, none of which are
+    // tagged containsNut. Safe for a nut allergy, safe for soy allergy,
+    // gluten-free, vegan -- the widest-safety addition available, closing
+    // the gap for the SAME worst-case profile (vegan + soy, H1) the carb
+    // pool was widened for two commits ago.
+    containsNut: false,
+    containsSoy: false,
+    containsGluten: false,
+    veganCompliant: true,
+  },
+  edamame: {
+    id: 99296,
+    name: "edamame",
+    caloriesPer100g: 121.62,
+    proteinGPer100g: 9.46,
+    carbsGPer100g: 13.51,
+    fatGPer100g: 3.34,
+    estimatedCostCentsPer100g: 75.0,
+    containsDairy: false,
+    containsNut: false,
+    // Real soybeans -- unlike pumpkin seeds above, does NOT help a soy-
+    // allergic profile (correctly excluded there), but adds real rotation
+    // headroom for the more common case of vegan-without-soy-allergy,
+    // where the pool would otherwise still bottleneck to 3.
+    containsSoy: true,
+    containsGluten: false,
+    veganCompliant: true,
+  },
 };
 
 export function lookupIngredientMacrosStatic(query: string): StaticIngredientMacro | null {
   return STATIC_INGREDIENT_MACROS[query.toLowerCase().trim()] ?? null;
 }
 
-// Display-only realism note (2026-07-27): 4 of the 13 pool ingredients
+// Per-ingredient realistic-portion ceiling, shared by every path that sizes
+// one of this fixed 17-ingredient pool to close a macro gap (snackComposition.ts's
+// composeSnack, addon.ts's buildAddonForSlot) -- moved here from
+// snackComposition.ts (2026-07-28) so both consumers read one table instead
+// of risking two definitions drifting apart.
+//
+// Originally added to snackComposition.ts (audit item #3, 2026-07-21 spec):
+// that file had no upper bound at all -- a low-density carb like orange
+// (11.8g carb/100g) sizing to close a genuinely large carb gap could reach
+// ~340g with nothing catching it. Deliberately PER-INGREDIENT, not per-role
+// like aiMealComposition.ts's PORTION_BOUNDS_G -- that file has to use one
+// generic bound per role because it's grounding arbitrary LLM-proposed
+// ingredient names it can't enumerate in advance. This pool is the opposite
+// case: a small, fully known, fixed set of 17 real foods, and macro density
+// varies too widely WITHIN a role for one shared ceiling to work -- protein
+// powder (83g protein/100g) and greek yogurt (10g protein/100g) are both
+// "protein role," but a per-role max loose enough to allow a normal ~200g
+// yogurt serving would also wave through an absurd ~200g of protein powder
+// (166g protein, several days' worth of scoops in one snack/addon). An
+// explicit editorial call per ingredient, not a density-derived formula, so
+// it can't silently drift wrong as the pool's foods change. A rejection here
+// just skips that ingredient's contribution (both callers already treat a
+// null result as "skip, try the next thing") -- never breaks the whole
+// snack/addon/plan.
+export const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
+  "greek yogurt": 300,
+  // 260g+ is a real, already-validated output for snackComposition.ts's own
+  // reference 29g-protein snack target (roughly 1.15 cups) -- not the
+  // unrealistic case this bound exists to catch. 300, not 250.
+  "cottage cheese": 300,
+  "protein powder": 60,
+  "pea protein powder": 60,
+  "hemp seeds": 50,
+  banana: 250,
+  apple: 300,
+  // Needs headroom up to ~260g for the same reference target (a realistic
+  // ~2-orange snack), while still catching the audit's actual ~340g problem
+  // case. 280, not 250.
+  orange: 280,
+  almonds: 60,
+  "peanut butter": 50,
+  walnuts: 60,
+  "sunflower seed butter": 50,
+  "chia seeds": 40,
+  // Added with the 2026-07-30 carb-pool widening. 150g dry oats is a large
+  // but real single-serving bowl of oatmeal (delivers up to ~101g carbs --
+  // comfortably covers the ~68g gap that motivated adding it, without
+  // waving through an absurd amount). 120g dates is roughly 7-8 medjool
+  // dates, a generous but real handful (up to ~90g carbs).
+  oats: 150,
+  dates: 120,
+  // Added with the 2026-07-30 protein-pool widening (variety/repetition
+  // follow-up). Pumpkin seeds are as dense as almonds/walnuts -- same 60g
+  // cap. Edamame is far less dense; 150g is a real, generous "bowl of
+  // edamame pods" snack portion (delivers up to ~14g protein).
+  "pumpkin seeds": 60,
+  edamame: 150,
+};
+// Safety net for a future pool addition someone forgets to add a bound for
+// above -- fails closed (a real, if conservative, cap) rather than silently
+// reproducing this exact gap for the new ingredient.
+export const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
+
+// Display-only realism note (2026-07-27, extended 2026-07-30 for oats and edamame): 6 of the 17 pool ingredients
 // aren't things a person actually eats standalone in the sized amount --
 // protein powder/pea protein powder need a liquid, chia/hemp seeds are
 // normally a topping/mix-in, not a bowl of dry seeds. The macros are real
@@ -273,7 +437,13 @@ export type PrepNoteContext = "addon" | "snack";
 export function prepNoteFor(
   ingredientName: string,
   context: PrepNoteContext,
-  hasOtherTrackedIngredients: boolean,
+  // Names of the OTHER ingredients already in this same snack/addon slot
+  // (empty if this is the only one) -- used to name a concrete referent
+  // instead of a vague "the rest of this snack" (2026-07-30: with oats/
+  // edamame added to the pool, a snack can now have two ingredients that
+  // both carry a note, so "the rest" can mean exactly one other named
+  // ingredient, not an ambiguous remainder).
+  otherIngredientNames: string[],
 ): string | null {
   const name = ingredientName.toLowerCase().trim();
 
@@ -283,11 +453,32 @@ export function prepNoteFor(
     return "mix with water";
   }
 
+  // Added alongside the 2026-07-30 carb-pool widening -- a sized amount of
+  // dry oats (e.g. 100g+) isn't eaten standalone any more than protein
+  // powder is; real prep is cooking it into oatmeal with water, same
+  // zero-extra-macro note pattern as protein powder above. Dates need no
+  // note -- eaten standalone like the existing banana/apple/orange options.
+  if (name === "oats") {
+    return "cook with water as oatmeal";
+  }
+
+  // Added alongside the 2026-07-30 protein-pool widening -- same "isn't
+  // eaten standalone in the sized raw amount" gap as oats above, missed
+  // when edamame was first added and only caught when asked directly
+  // whether people actually snack on it: yes, but on the STEAMED beans,
+  // not raw/frozen ones. Real prep is a few minutes in water, zero extra
+  // macros, same pattern as oats/protein powder.
+  if (name === "edamame") {
+    return "steam or boil a few minutes";
+  }
+
   if (name === "chia seeds" || name === "hemp seeds") {
     // An addon always sits next to a real recipe slot, so there's always
     // something already-tracked to sprinkle it over.
     if (context === "addon") return "sprinkle over your meal";
-    if (hasOtherTrackedIngredients) return "sprinkle over the rest of this snack";
+    if (otherIngredientNames.length > 0) {
+      return `sprinkle over the ${otherIngredientNames.join(" and ")}`;
+    }
     // Standalone in a composed snack (the other 2 roles didn't resolve) --
     // chia genuinely gels in plain water (real chia-pudding prep, still
     // zero extra macros); hemp seeds have no equivalent zero-macro

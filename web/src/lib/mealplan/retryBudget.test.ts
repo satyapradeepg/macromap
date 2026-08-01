@@ -8,6 +8,7 @@ import {
   RECIPE_ACTION_COST,
   ADDON_ATTEMPT_COST,
   AI_COMPOSE_ACTION_COST,
+  MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT,
 } from "./retryBudget";
 
 describe("retryBudget", () => {
@@ -60,6 +61,38 @@ describe("createSelectionAddonBudget", () => {
   });
 });
 
+// Adaptive since 2026-07-28 (was a flat 10 slots) -- live-confirmed a
+// vegan+nut+soy-allergy profile had 16 real blocked recipe slots in one
+// week, and the old flat budget only let 10 of them even attempt
+// AI-compose; the other 6 never got a try purely because the budget ran
+// out first, not because AI-compose failed for them.
+describe("createAiComposeBudget", () => {
+  // Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count (2026-07-30,
+  // retry-with-feedback): a count-sized budget left zero headroom for any
+  // slot's retry, since the eligibility loop's own first-attempt trySpend
+  // already exhausted it -- live-confirmed 0 retry attempts despite 2 real
+  // composition rejections in the same generation.
+  it("sizes to cover every slot's first attempt AND one retry each", () => {
+    const budget = createAiComposeBudget(16);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(16 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
+  });
+
+  it("allocates zero budget when nothing is blocked, rather than wasting a flat allowance", () => {
+    const budget = createAiComposeBudget(0);
+    expect(budget.remaining).toBe(0);
+    expect(trySpend(budget, AI_COMPOSE_ACTION_COST)).toBe(false);
+  });
+
+  it("clamps at RECIPE_SLOTS_PER_WEEK (21) even if an implausibly large count is passed", () => {
+    const budget = createAiComposeBudget(30);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(21 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
+  });
+});
+
 // Found live 2026-07-21: sharing createAiComposeBudget between the
 // genuinely-blocked pass and the newer bad-fit-but-claimed pass let a
 // profile with many blocked slots exhaust the whole thing before the
@@ -67,23 +100,42 @@ describe("createSelectionAddonBudget", () => {
 // slots starved every time. This is a separate, additive budget so that
 // pass always gets a real chance regardless of how many slots are
 // blocked that week.
+//
+// Adaptive since 2026-07-28 (was a flat 2 attempts) -- live-confirmed a
+// vegetarian-cut profile had 6 real null-tier slots in one week, and the
+// old flat budget only covered 2 of them.
 describe("createBadFitSwapBudget", () => {
   it("is a separate budget from createAiComposeBudget, not shared or carved out of it", () => {
-    const aiComposeBudget = createAiComposeBudget();
-    const badFitBudget = createBadFitSwapBudget();
+    const aiComposeBudget = createAiComposeBudget(10);
+    const badFitBudget = createBadFitSwapBudget(2);
     // Draining the blocked-slot budget entirely must not affect the
     // bad-fit budget at all -- they're independent objects.
     while (trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) {
       /* drain */
     }
     expect(aiComposeBudget.remaining).toBe(0);
-    expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * 2);
+    expect(badFitBudget.remaining).toBe(AI_COMPOSE_ACTION_COST * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT * 2);
   });
 
-  it("guarantees at least 2 attempts, matching the typical 1-3 thin-pool slots per plan found in the offline cached-pool survey", () => {
-    const budget = createBadFitSwapBudget();
+  // Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count for the same reason
+  // as createAiComposeBudget above (2026-07-30, retry-with-feedback).
+  it("sizes to cover every slot's first attempt AND one retry each", () => {
+    const budget = createBadFitSwapBudget(6);
     let attempts = 0;
     while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(6 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
+  });
+
+  it("allocates zero budget when nothing needs repair, rather than wasting a flat allowance", () => {
+    const budget = createBadFitSwapBudget(0);
+    expect(budget.remaining).toBe(0);
+    expect(trySpend(budget, AI_COMPOSE_ACTION_COST)).toBe(false);
+  });
+
+  it("clamps at RECIPE_SLOTS_PER_WEEK (21) even if an implausibly large count is passed", () => {
+    const budget = createBadFitSwapBudget(30);
+    let attempts = 0;
+    while (trySpend(budget, AI_COMPOSE_ACTION_COST)) attempts++;
+    expect(attempts).toBe(21 * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
   });
 });

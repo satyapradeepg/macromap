@@ -90,6 +90,79 @@ describe("buildPrompt", () => {
     expect(prompt.toLowerCase()).toContain("protein-dense");
   });
 
+  // Retry-with-feedback (2026-07-30): when a slot's first AI-compose
+  // attempt was rejected, the retry prompt must carry WHY, so the model
+  // doesn't just re-roll the same doomed proposal.
+  it("omits any retry-feedback paragraph when priorAttemptFeedback isn't set (first attempt)", () => {
+    const prompt = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt).not.toContain("your previous proposal");
+  });
+
+  it("includes the specific rejection feedback when priorAttemptFeedback is set (a retry)", () => {
+    const prompt = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      priorAttemptFeedback: "Your protein choice, \"firm tofu\", needed 346g -- over the realistic 280g cap. Pick a denser protein source.",
+    });
+    expect(prompt).toContain("your previous proposal for this exact slot was rejected");
+    expect(prompt).toContain("firm tofu");
+    expect(prompt).toContain("over the realistic 280g cap");
+  });
+
+  // Variety/repetition follow-up (2026-07-30): the plan critic independently
+  // flagged real dish-level repetition on an unrestricted profile ("Seitan
+  // Stir-Fry with Rice and Broccoli", 4 of 7 days) -- separate AI-compose
+  // calls have no memory of each other, so this feeds back what's already
+  // been used elsewhere in the week.
+  it("omits any avoid-repeats paragraph when avoidDishNames isn't set or empty", () => {
+    const withoutField = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(withoutField).not.toContain("already used elsewhere");
+
+    const withEmptyArray = buildPrompt({
+      mealType: "breakfast",
+      target: { calories: 355, proteinG: 31, carbsG: 36, fatG: 10 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: [],
+    });
+    expect(withEmptyArray).not.toContain("already used elsewhere");
+  });
+
+  it("includes already-used dish titles when avoidDishNames is set", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 500, proteinG: 40, carbsG: 45, fatG: 12 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: ["Seitan Stir-Fry with Rice and Broccoli", "Chicken Enchiladas"],
+    });
+    expect(prompt).toContain("already used elsewhere in this week's plan");
+    expect(prompt).toContain("Seitan Stir-Fry with Rice and Broccoli");
+    expect(prompt).toContain("Chicken Enchiladas");
+  });
+
   // Comprehensive engine test, July 16 2026: live-confirmed that Claude
   // proposed tempeh (a soy product) as the protein source in 9 of 10 real
   // AI-composition attempts for a vegan+soy-allergic profile, because the
@@ -160,6 +233,94 @@ describe("buildPrompt", () => {
     it("still includes lentils when no target is given, unchanged from before this fix", () => {
       const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }).map((e) => e.toLowerCase());
       expect(examples).toContain("lentils");
+    });
+
+    // Persona audit 2026-07-31, finding #5: live macro-deviation data
+    // across a real vegetarian+nut-allergy week showed tempeh missing a
+    // demanding dinner-scale target by -15g protein (~61g needed) --
+    // exactly the same "offered for a target it can't realistically
+    // reach" shape already fixed for lentils above. Tempeh's real density
+    // (18.54g/100g, live-verified via Spoonacular) caps out at ~52g
+    // protein within the realistic 280g portion bound.
+    it("excludes tempeh once the target protein is demanding enough that tempeh structurally cannot reach it", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 61).map((e) => e.toLowerCase());
+      expect(examples).not.toContain("tempeh");
+    });
+
+    it("still includes tempeh for a lighter target where it's a perfectly fine option", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }, 40).map((e) => e.toLowerCase());
+      expect(examples).toContain("tempeh");
+    });
+
+    it("still includes tempeh when no target is given, unchanged from before this fix", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: [] }).map((e) => e.toLowerCase());
+      expect(examples).toContain("tempeh");
+    });
+
+    it("still excludes tempeh for a soy allergy regardless of how light the target is", () => {
+      const examples = safeProteinExamples({ dietaryStyles: [], allergies: ["soy"] }, 15).map((e) => e.toLowerCase());
+      expect(examples).not.toContain("tempeh");
+    });
+  });
+
+  // Persona audit 2026-07-31, finding #3: the same "concrete suggestion
+  // overrides an abstract constraint" failure mode as the tempeh/soy fix
+  // above, but for the "fixed" (garnish/condiment) role, which had zero
+  // steering at all -- only the general constraint text + self-check. A
+  // vegan+soy profile whose blocked slots are seitan-based Asian-style
+  // dishes (stir-fry, gyro, fajita bowl) can naturally reach for soy sauce/
+  // tamari/miso as a "fixed" flavoring with nothing warning against it
+  // specifically.
+  describe("fixed-role condiment steering in the built prompt", () => {
+    it("warns against soy sauce/tamari/miso for a soy allergy", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: ["vegan"],
+        allergies: ["soy"],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      const lower = prompt.toLowerCase();
+      expect(lower).toContain("soy sauce");
+      expect(lower).toContain("tamari");
+      expect(lower).toContain("miso");
+    });
+
+    it("warns against honey for a vegan profile", () => {
+      const prompt = buildPrompt({
+        mealType: "breakfast",
+        target: { calories: 400, proteinG: 25, carbsG: 45, fatG: 12 },
+        dietaryStyles: ["vegan"],
+        allergies: [],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt.toLowerCase()).toContain("honey");
+    });
+
+    it("omits the condiment-warning sentence entirely for an unrestricted profile", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: [],
+        allergies: [],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt).not.toContain("do NOT reach for");
+    });
+
+    it("does not warn about soy condiments for a profile with no soy restriction", () => {
+      const prompt = buildPrompt({
+        mealType: "dinner",
+        target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+        dietaryStyles: ["vegetarian"],
+        allergies: ["nuts"],
+        dislikes: [],
+        pantryItemNames: [],
+      });
+      expect(prompt.toLowerCase()).not.toContain("soy sauce");
     });
   });
 
@@ -261,6 +422,24 @@ describe("buildPrompt", () => {
     expect(lower).toContain("constraintcheck");
     expect(lower).toContain("last");
   });
+
+  // Persona audit 2026-07-31, finding #6: live-confirmed a real dish
+  // titled "Tempeh and Broccoli Stir-Fry with Rice Noodles" whose actual
+  // ingredients never included rice noodles -- traced to a pure prompt-
+  // adherence gap (nothing tied the dish NAME to the ingredients list).
+  it("instructs Claude to check the dish name against its own ingredients list, after picking ingredients", () => {
+    const prompt = buildPrompt({
+      mealType: "lunch",
+      target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("titleingredientcheck");
+    expect(lower).toContain("rice noodles");
+  });
 });
 
 // Batch-aware AI-compose (added 2026-07-20) -- gives Claude visibility
@@ -287,6 +466,62 @@ describe("buildBatchPrompt", () => {
     expect(prompt).toContain("79");
     expect(prompt).toContain("Propose 3 realistic meals");
     expect(prompt).toContain("exactly 3 meals");
+  });
+
+  // Persona audit 2026-07-31, finding #3 -- same rationale/test shape as
+  // buildPrompt's "fixed-role condiment steering" describe block above,
+  // for the batch path.
+  it("warns against soy sauce/tamari/miso for a soy allergy, gated on the whole profile not any one slot", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 } }],
+      aggregateTarget: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+      dietaryStyles: ["vegan"],
+      allergies: ["soy"],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("soy sauce");
+    expect(lower).toContain("tamari");
+    expect(lower).toContain("miso");
+  });
+
+  it("omits the condiment-warning sentence entirely for an unrestricted profile", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 } }],
+      aggregateTarget: { calories: 600, proteinG: 45, carbsG: 55, fatG: 18 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(prompt).not.toContain("do NOT reach for");
+  });
+
+  // Variety/repetition follow-up (2026-07-30) -- same rationale as
+  // buildPrompt's equivalent test above, for the batch path.
+  it("includes already-used dish titles when avoidDishNames is set, omits the paragraph when not", () => {
+    const withoutField = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    expect(withoutField).not.toContain("already used elsewhere");
+
+    const withField = buildBatchPrompt({
+      slots: [{ mealType: "dinner", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+      avoidDishNames: ["Seitan Stir-Fry with Rice and Broccoli"],
+    });
+    expect(withField).toContain("already used elsewhere in this week's plan");
+    expect(withField).toContain("Seitan Stir-Fry with Rice and Broccoli");
   });
 
   it("explicitly grants freedom to redistribute macros across the batch rather than matching each slot exactly", () => {
@@ -411,6 +646,22 @@ describe("buildBatchPrompt", () => {
     const lower = prompt.toLowerCase();
     expect(lower).toContain("constraintcheck");
     expect(lower).toContain("last");
+  });
+
+  // Persona audit 2026-07-31, finding #6 -- same rationale as buildPrompt's
+  // equivalent test above, for the batch path.
+  it("instructs Claude to check each dish's name against its own ingredients list, after picking ingredients", () => {
+    const prompt = buildBatchPrompt({
+      slots: [{ mealType: "lunch", target: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 } }],
+      aggregateTarget: { calories: 500, proteinG: 30, carbsG: 50, fatG: 15 },
+      dietaryStyles: [],
+      allergies: [],
+      dislikes: [],
+      pantryItemNames: [],
+    });
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("titleingredientcheck");
+    expect(lower).toContain("rice noodles");
   });
 });
 

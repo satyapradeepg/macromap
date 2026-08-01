@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { boundsForTier, classifyTier } from "./tolerance";
+import { boundsForTier, classifyTier, wideOpenBounds } from "./tolerance";
 
 describe("boundsForTier", () => {
   const target = { proteinG: 40, calories: 500, carbsG: 50, fatG: 20 };
@@ -26,6 +26,43 @@ describe("boundsForTier", () => {
     expect(bounds.maxCarbs).toBeCloseTo(65, 5);
     expect(bounds.minFat).toBeCloseTo(14, 5);
     expect(bounds.maxFat).toBeCloseTo(26, 5);
+  });
+});
+
+// Persona audit 2026-07-31, finding #3: orchestrate.ts's pass-4 last
+// resort needs a macro band wide enough to never itself be the reason a
+// real recipe search comes back empty -- live-confirmed a real profile
+// had ZERO Spoonacular matches at p30 for some meal types but 100+ once
+// the macro band was effectively dropped (diet/allergy filters unchanged).
+describe("wideOpenBounds", () => {
+  const target = { proteinG: 40, calories: 500, carbsG: 50, fatG: 20 };
+
+  it("is far wider than p30 on every macro", () => {
+    const p30 = boundsForTier(target, "p30");
+    const wide = wideOpenBounds(target);
+    expect(wide.minProtein).toBeLessThan(p30.minProtein);
+    expect(wide.maxProtein).toBeGreaterThan(p30.maxProtein);
+    expect(wide.minCalories).toBeLessThan(p30.minCalories);
+    expect(wide.maxCalories).toBeGreaterThan(p30.maxCalories);
+  });
+
+  it("never produces a negative minimum, even for a zero target", () => {
+    const zero = { proteinG: 0, calories: 0, carbsG: 0, fatG: 0 };
+    const wide = wideOpenBounds(zero);
+    expect(wide.minProtein).toBe(0);
+    expect(wide.minCalories).toBe(0);
+    expect(wide.minCarbs).toBe(0);
+    expect(wide.minFat).toBe(0);
+  });
+
+  it("still allows a meaningfully wide range for a near-zero target (a light snack-scale slot)", () => {
+    // A flat percentage multiplier alone would collapse to ~0 for a tiny
+    // target -- the flat-amount floor (+100/+1000/+200/+100) is what
+    // keeps this genuinely wide open even then.
+    const tiny = { proteinG: 1, calories: 10, carbsG: 1, fatG: 1 };
+    const wide = wideOpenBounds(tiny);
+    expect(wide.maxProtein).toBeGreaterThan(50);
+    expect(wide.maxCalories).toBeGreaterThan(500);
   });
 });
 

@@ -23,6 +23,7 @@
 
 import type { MacroTargets } from "./targets";
 import { rankByPantryAndPrice, type PantryPriceContext } from "./pantryPricePreference";
+import { MAX_REALISTIC_AMOUNT_G, DEFAULT_MAX_REALISTIC_AMOUNT_G } from "./staticIngredientMacros";
 
 export type MacroRole = "protein" | "carb" | "fat";
 
@@ -50,9 +51,39 @@ export interface IngredientMacroLookup {
 // 4). Added 2 per starved role, not 1 -- a single addition leaves exactly
 // 1 safe option for this profile, the same "collapses to 1, no rotation"
 // failure already found and fixed for pantry/budget preference.
+//
+// carb widened from 3 to 5 (2026-07-30, 15-profile comprehensive live
+// audit): this role was never widened in the July 15 pass above even
+// though it has the exact same shape of problem, just density-driven
+// instead of safety-driven -- banana/apple/orange can deliver at most
+// 33-57g carbs each within their own realistic-portion cap
+// (MAX_REALISTIC_AMOUNT_G), but a snack's own carb target regularly needs
+// 68g+ for a higher-calorie profile. Live-confirmed: a bulk-goal profile's
+// snack target needed 68.1g carbs, and all three fruits would have needed
+// 300-580g to close it -- every one silently returns null (see
+// sizeIngredientForGap's realistic-cap rejection below), so the carb role
+// (and the calories that would have come with it) just vanishes from the
+// snack. This is what actually produced the audit's "fat looks like it's
+// overshooting its target" finding: fat wasn't overshooting, carbs (and
+// total calories) were undershooting far more severely, inflating fat's
+// share of what little the snack actually delivered. oats/dates chosen for
+// being carb-dense (67.7g/75g per 100g respectively) real whole foods
+// genuinely eaten as snacks, not just theoretically carb-heavy.
+//
+// protein widened again, 5 to 7 (2026-07-30, variety/repetition follow-up
+// to the same audit): a vegan restriction alone drops this role to just 2
+// safe options (pea protein powder, hemp seeds -- every dairy-tagged
+// option is out), and with only 2 real choices across 14 weekly snack
+// slots, even perfect rotation guarantees each appears ~7 times. Live-
+// confirmed exactly this: "Hemp Seeds + Orange" 7x for a dairy-free
+// profile, "Pea Protein Powder + Sunflower Seed Butter" 7x for vegan+nut.
+// pumpkin seeds (a seed, not tagged containsNut, same classification as
+// the existing hemp/chia/sunflower-seed entries) is safe even under the
+// worst-case vegan+soy stack; edamame adds a 4th option for the more
+// common vegan-without-soy-allergy case.
 export const INGREDIENT_POOL: Record<MacroRole, string[]> = {
-  protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds"],
-  carb: ["banana", "apple", "orange"],
+  protein: ["greek yogurt", "cottage cheese", "protein powder", "pea protein powder", "hemp seeds", "pumpkin seeds", "edamame"],
+  carb: ["banana", "apple", "orange", "oats", "dates"],
   fat: ["almonds", "peanut butter", "walnuts", "sunflower seed butter", "chia seeds"],
 };
 
@@ -125,62 +156,46 @@ export interface ComposedSnack {
 
 const MIN_INGREDIENT_AMOUNT_G = 10;
 
-// Audit item #3 (2026-07-21 spec): this file had no upper bound at all --
-// a low-density carb like orange (11.8g carb/100g) sizing to close a
-// genuinely large carb gap could reach ~340g with nothing catching it.
-// Deliberately PER-INGREDIENT, not per-role like aiMealComposition.ts's
-// PORTION_BOUNDS_G -- that file has to use one generic bound per role
-// because it's grounding arbitrary LLM-proposed ingredient names it can't
-// enumerate in advance. This pool is the opposite case: a small, fully
-// known, fixed set of 13 real foods (INGREDIENT_POOL above), and macro
-// density varies too widely WITHIN a role for one shared ceiling to work
-// -- protein powder (83g protein/100g) and greek yogurt (10g protein/100g)
-// are both "protein role," but a per-role max loose enough to allow a
-// normal ~200g yogurt serving would also wave through an absurd ~200g of
-// protein powder (166g protein, several days' worth of scoops in one
-// snack). An explicit editorial call per ingredient, not a density-derived
-// formula, so it can't silently drift wrong as the pool's foods change.
-// A rejection here just skips that role's contribution (composeSnack
-// already treats a null role result as "skip," same graceful degradation
-// as the existing MIN_INGREDIENT_AMOUNT_G floor) -- never rejects the
-// whole snack.
-const MAX_REALISTIC_AMOUNT_G: Record<string, number> = {
-  "greek yogurt": 300,
-  // 260g+ is a real, already-validated output for this file's own
-  // reference 29g-protein snack target (roughly 1.15 cups) -- not the
-  // unrealistic case this bound exists to catch. 300, not 250.
-  "cottage cheese": 300,
-  "protein powder": 60,
-  "pea protein powder": 60,
-  "hemp seeds": 50,
-  banana: 250,
-  apple: 300,
-  // Needs headroom up to ~260g for the same reference target (a realistic
-  // ~2-orange snack), while still catching the audit's actual ~340g
-  // problem case. 280, not 250.
-  orange: 280,
-  almonds: 60,
-  "peanut butter": 50,
-  walnuts: 60,
-  "sunflower seed butter": 50,
-  "chia seeds": 40,
-};
-// Safety net for a future INGREDIENT_POOL addition someone forgets to add
-// a bound for above -- fails closed (a real, if conservative, cap) rather
-// than silently reproducing this exact gap for the new ingredient.
-const DEFAULT_MAX_REALISTIC_AMOUNT_G = 200;
+// Per-ingredient realistic-portion ceiling (MAX_REALISTIC_AMOUNT_G /
+// DEFAULT_MAX_REALISTIC_AMOUNT_G) now lives in staticIngredientMacros.ts,
+// shared with addon.ts -- see that file for the full rationale (audit item
+// #3, 2026-07-21 spec originally; moved here 2026-07-28).
 
 // Sizes one ingredient to close a specific macro gap (protein/carbs/fat),
 // rounding down to the nearest 5g and skipping it entirely if that rounds
 // below a sensible minimum or above a realistic serving — same pattern as
 // addon.ts's buildAddonForSlot.
+//
+// fatBudgetG (2026-07-28): an optional secondary cap, passed only for the
+// PROTEIN and CARB roles (never the fat role's own call, which would be
+// circular) -- a role ingredient chosen purely for ITS macro can carry a
+// wildly disproportionate amount of fat as a side effect (e.g. hemp seeds,
+// a "protein" option, is 45g fat/100g vs 37g protein/100g -- worse than
+// every other protein-role option by 15-34x). Sizing that ingredient to
+// its own protein target alone could blow the whole slot's fat budget
+// before the fat role ever gets a turn, live-confirmed to collapse a
+// snack to one wildly fat-heavy ingredient. Deliberately NOT extended to
+// calories or protein: capping the FAT role itself by remaining calories
+// undershoots the fat target (verified against this file's own tests --
+// that's the fat role's whole job, not something to additionally cap),
+// and capping by remaining protein punishes the carb role for incidental
+// protein the protein role has already, correctly, mostly used up. Fat is
+// the one macro with no other safety net anywhere in the pipeline
+// (protein has orchestrate.ts's protein-floor enforcement; carbs are
+// cheaply fixed by the day-level addon system since they're an
+// "increase" gap) -- so fat is the one worth hard-capping here.
 function sizeIngredientForGap(
   lookup: IngredientMacroLookup,
   macroPer100g: number,
   gapNeeded: number,
+  fatBudgetG?: number,
 ): ComposedIngredient | null {
   if (macroPer100g <= 0 || gapNeeded <= 0) return null;
-  const amountG = Math.floor(((gapNeeded / macroPer100g) * 100) / 5) * 5;
+  let amountG = Math.floor(((gapNeeded / macroPer100g) * 100) / 5) * 5;
+  if (fatBudgetG !== undefined && lookup.fatGPer100g > 0) {
+    const maxByFat = Math.floor(((Math.max(fatBudgetG, 0) / lookup.fatGPer100g) * 100) / 5) * 5;
+    amountG = Math.min(amountG, maxByFat);
+  }
   if (amountG < MIN_INGREDIENT_AMOUNT_G) return null;
   const maxAmountG = MAX_REALISTIC_AMOUNT_G[lookup.name] ?? DEFAULT_MAX_REALISTIC_AMOUNT_G;
   if (amountG > maxAmountG) return null;
@@ -215,7 +230,7 @@ export function composeSnack(
   const proteinName = pickFromPool("protein", varietySeed, pool, ctx);
   const proteinLookup = proteinName ? pool[proteinName] : undefined;
   const proteinItem = proteinLookup
-    ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG)
+    ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG, remainingFat)
     : null;
   if (proteinItem) {
     ingredients.push(proteinItem);
@@ -225,7 +240,9 @@ export function composeSnack(
 
   const carbName = pickFromPool("carb", varietySeed, pool, ctx);
   const carbLookup = carbName ? pool[carbName] : undefined;
-  const carbItem = carbLookup ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs) : null;
+  const carbItem = carbLookup
+    ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs, remainingFat)
+    : null;
   if (carbItem) {
     ingredients.push(carbItem);
     remainingFat -= carbItem.fatG;

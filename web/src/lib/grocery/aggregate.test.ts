@@ -95,6 +95,78 @@ describe("aggregateGroceryList", () => {
     expect(lines).toHaveLength(2);
   });
 
+  // Live-confirmed 2026-07-31: a real generated grocery list rendered
+  // "122 Tbsps gluten". Root cause -- Spoonacular's own ingredient-text
+  // parser resolved "gluten" (a bread recipe's small additive, 1.6 Tbsp)
+  // to id 93654, which Spoonacular's own /information endpoint confirms
+  // is canonically "seitan cutlets" (a real recipe's protein, measured in
+  // grams, category "meat substitute"). Grouping purely by a VALID id
+  // (unlike the placeholder-id cases above) blindly summed these into one
+  // absurd, mislabeled line.
+  it("does not merge a valid-id entry with another sharing the same id if their names share no word overlap", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 93654, name: "gluten", metricAmount: 1.6, metricUnit: "Tbsp" })],
+        [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 170, metricUnit: "g" })],
+        [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 215, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.name === "gluten")).toMatchObject({ totalAmount: 1.6, unit: "Tbsp" });
+    expect(lines.find((l) => l.name === "seitan cutlets")).toMatchObject({ totalAmount: 385, unit: "g" });
+  });
+
+  // Grocery-duplicates investigation, 2026-07-31: live-confirmed real bug --
+  // resolveLineIdentityRemap (lineIdentity.ts) correctly canonicalized
+  // "bell pepper" and "red pepper" to the same Spoonacular id (an
+  // LLM-confirmed match, already cached), but this file's OWN
+  // clusterByNameOverlap safety check then silently split them right back
+  // apart, since neither name is a substring of the other (they only
+  // share their LAST word, "pepper") -- undoing a real, already-confirmed
+  // identity match. Simulates the post-remap state directly (same id,
+  // different names) since that's exactly what groceryData.ts hands this
+  // function after resolveLineIdentityRemap runs.
+  it("merges same-id entries whose names share only their last word (e.g. 'bell pepper' / 'red pepper')", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 11821, name: "red pepper", metricAmount: 100, metricUnit: "g" })],
+        [slotIngredient({ id: 11821, name: "bell pepper", metricAmount: 165, metricUnit: "g" })],
+        [slotIngredient({ id: 11821, name: "red pepper", metricAmount: 60, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ totalAmount: 325, unit: "g" });
+  });
+
+  it("still does not merge same-id entries sharing only their FIRST word (different product)", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 555, name: "tomato paste", metricAmount: 50, metricUnit: "g" })],
+        [slotIngredient({ id: 555, name: "tomato sauce", metricAmount: 100, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(2);
+  });
+
+  it("still merges same-id entries with genuinely overlapping names (e.g. minor naming variants)", () => {
+    const lines = aggregateGroceryList(
+      [
+        [slotIngredient({ id: 11282, name: "onion", metricAmount: 100, metricUnit: "g" })],
+        [slotIngredient({ id: 11282, name: "an onion", metricAmount: 150, metricUnit: "g" })],
+      ],
+      [],
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ totalAmount: 250, unit: "g" });
+  });
+
   it("does not merge same-id entries with mismatched units, and flags both for manual combine", () => {
     const lines = aggregateGroceryList(
       [
@@ -267,6 +339,39 @@ describe("aggregateGroceryList", () => {
       for (const line of merged) expect(line.needsManualCombine).toBe(true);
     });
 
+    // Live-confirmed 2026-07-31: buildGroceryLines' name-overlap gate alone
+    // was NOT enough -- it correctly split gluten/seitan cutlets into two
+    // separate GroceryLines (same id, no name overlap), but
+    // mergeConvertibleLines groups its OWN input by ingredientId again from
+    // scratch, saw the same id 93654 on both, and merged them right back
+    // together via the cross-category path -- rendering as "122 Tbsps
+    // gluten" even with the buildGroceryLines-only fix in place. This test
+    // exercises mergeConvertibleLines directly (not just aggregateGroceryList,
+    // which never calls it) so a regression here can't hide again.
+    it("does not re-merge a same-id pair with no name overlap even when a cross-category rate IS available", () => {
+      const lines = buildGroceryLines(
+        [
+          [slotIngredient({ id: 93654, name: "gluten", metricAmount: 1.6, metricUnit: "Tbsp" })],
+          [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 170, metricUnit: "g" })],
+          [slotIngredient({ id: 93654, name: "seitan cutlets", metricAmount: 215, metricUnit: "g" })],
+        ],
+        [],
+      );
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+
+      // A resolved rate for this id is available (as it would be live) --
+      // the fix must still refuse to use it, since gluten and seitan
+      // cutlets were never candidates to merge with each other at all.
+      const rates = new Map<string, ResolvedLineConversion>([
+        [conversionKey(93654, "g", "Tbsp"), { rate: 0.11, source: "ai_estimate" }],
+      ]);
+      const merged = mergeConvertibleLines(lines, rates);
+
+      expect(merged).toHaveLength(2);
+      expect(merged.find((l) => l.name === "gluten")).toMatchObject({ totalAmount: 1.6, unit: "Tbsp" });
+      expect(merged.find((l) => l.name === "seitan cutlets")).toMatchObject({ totalAmount: 385, unit: "g" });
+    });
+
     it("does not attempt to convert between two different 'other' descriptors (e.g. clove vs slice)", () => {
       const lines: GroceryLine[] = [
         { ingredientId: 1, name: "Garlic", totalAmount: 2, unit: "clove", needsManualCombine: true, sourceCount: 1 },
@@ -304,6 +409,49 @@ describe("aggregateGroceryList", () => {
       const lines: GroceryLine[] = [
         { ingredientId: 1, name: "onion", totalAmount: 0.5, unit: "medium", needsManualCombine: true, sourceCount: 1 },
         { ingredientId: 1, name: "onion", totalAmount: 0.3, unit: "large", needsManualCombine: true, sourceCount: 1 },
+      ];
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(2);
+      for (const line of merged) expect(line.needsManualCombine).toBe(true);
+    });
+
+    // Bug fix 2026-07-27, found live: a real generation had "clove"/"cloves" and "serving"/
+    // "servings" garlic/maple-syrup/garnish lines for the SAME ingredient
+    // id never merging -- singular/plural spelling of the identical unit,
+    // not a real size difference like "medium" vs "large" (still correctly
+    // unmerged just above) or a genuinely different word like "clove" vs
+    // "slice" (still correctly unmerged above too, since their stems differ).
+    it("merges singular/plural spelling of the same 'other' unit (e.g. clove vs cloves)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "garlic", totalAmount: 0.98, unit: "clove", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "garlic", totalAmount: 1.6, unit: "cloves", needsManualCombine: true, sourceCount: 1 },
+      ];
+      expect(pendingCrossCategoryConversions(lines)).toEqual([]);
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 2.58, needsManualCombine: false });
+    });
+
+    it("merges singular/plural spelling the other way around too (e.g. servings vs serving)", () => {
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "maple syrup", totalAmount: 1.1, unit: "servings", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "maple syrup", totalAmount: 0.77, unit: "serving", needsManualCombine: true, sourceCount: 1 },
+      ];
+      const merged = mergeConvertibleLines(lines, new Map());
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ totalAmount: 1.87, needsManualCombine: false });
+    });
+
+    it("deliberately narrow: a single trailing-s strip does not cover '-es' plurals (e.g. bunch vs bunches)", () => {
+      // Scoped to the actually-observed live bug (a simple trailing "s",
+      // e.g. "clove"/"cloves", "serving"/"servings") rather than a full
+      // English-pluralization rule set -- "bunches" stems to "bunche", not
+      // "bunch", so this stays unresolved just like "clove" vs "slice"
+      // does. A real but narrower gap than the one being fixed here; widen
+      // only if live data shows this specific shape actually recurring.
+      const lines: GroceryLine[] = [
+        { ingredientId: 1, name: "kale", totalAmount: 1, unit: "bunch", needsManualCombine: true, sourceCount: 1 },
+        { ingredientId: 1, name: "kale", totalAmount: 2, unit: "bunches", needsManualCombine: true, sourceCount: 1 },
       ];
       const merged = mergeConvertibleLines(lines, new Map());
       expect(merged).toHaveLength(2);

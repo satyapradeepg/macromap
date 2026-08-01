@@ -11,7 +11,7 @@
 import type { MacroGapDirection, MacroKey } from "./reconciliation";
 import { isKnownIngredientUnsafeFor, type DietaryContext } from "./ingredientSafety";
 import { rankByPantryAndPrice, type PantryPriceContext } from "./pantryPricePreference";
-import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
+import { lookupIngredientMacrosStatic, MAX_REALISTIC_AMOUNT_G, DEFAULT_MAX_REALISTIC_AMOUNT_G } from "./staticIngredientMacros";
 
 export interface IngredientMacroLookup {
   id: number;
@@ -71,15 +71,33 @@ const MAX_ADDON_CALORIE_FRACTION = 0.2;
 // lookup so reconciliation falls through to the slack-meal requery.
 const MIN_ADDON_AMOUNT_G = 10;
 
-// Sizes the add-on to use the FULL calorie allowance for the target macro's
-// ingredient (maximizing its contribution within the realism cap) rather
-// than solving for the exact remaining weekly gap — a single snack can't
-// realistically close a large weekly deficit by itself, so this is a
-// deliberately incremental, capped step: reconciliation re-sums actuals
-// after each attempt and keeps going (up to the shared retry budget) until
-// the gap closes or the budget runs out, falling back to a full recipe
-// requery for whatever's left.
+// Sizes the add-on toward whichever is smallest of: the 20%-calorie
+// allowance below, the actual remaining gap for the targeted macro
+// (`neededAmount`, 2026-07-28), and the realism ceiling above — never uses
+// more than the real gap needs, so an add-on aimed at one macro (e.g.
+// carbs) doesn't incidentally overshoot the OTHERS (e.g. fat) by more than
+// necessary just because it always maxed out before. Reconciliation still
+// re-sums actuals after each attempt and keeps going (up to the shared
+// retry budget) until the gap closes or the budget runs out, falling back
+// to a full recipe requery for whatever's left — a single add-on still
+// isn't expected to close a large gap alone, it's just no longer sized
+// past what's actually needed.
 const NO_PANTRY_PRICE_PREFERENCE: PantryPriceContext = { pantryItemNames: [], budgetAware: false };
+
+// The ingredient lookup's per-100g fields are named `caloriesPer100g`/
+// `proteinGPer100g`/etc., not indexable by a MacroKey string directly.
+function macroPer100g(lookup: IngredientMacroLookup, macro: MacroKey): number {
+  switch (macro) {
+    case "calories":
+      return lookup.caloriesPer100g;
+    case "proteinG":
+      return lookup.proteinGPer100g;
+    case "carbsG":
+      return lookup.carbsGPer100g;
+    case "fatG":
+      return lookup.fatGPer100g;
+  }
+}
 
 export async function buildAddonForSlot(
   slotCalories: number,
@@ -87,6 +105,24 @@ export async function buildAddonForSlot(
   fetchIngredientMacros: FetchIngredientMacrosFn,
   ctx: DietaryContext,
   pantryPriceCtx: PantryPriceContext = NO_PANTRY_PRICE_PREFERENCE,
+  // Absolute amount of `gap.macro` still needed to reach the true target
+  // (not just the nearest tolerance-band edge — see orchestrate.ts's call
+  // sites and reconciliation.ts's `amountNeededFor`). Defaults to Infinity
+  // so any caller that doesn't pass one reproduces the pre-2026-07-28
+  // always-max-to-cap behavior exactly (existing tests rely on this).
+  neededAmount: number = Infinity,
+  // Variety rotation (persona audit 2026-07-31, finding #5): without this,
+  // the loop below always tried `ordered` starting at index 0, so the
+  // SAME first-safe-and-resolving candidate (e.g. banana, first in
+  // ADDON_INGREDIENT_OPTIONS_BY_MACRO.carbsG) won essentially every time
+  // -- live-confirmed 8 of 9 addons across a real unrestricted week were
+  // banana. Reuses the exact rotation idiom snackComposition.ts's
+  // pickFromPool already uses successfully (rankByPantryAndPrice's own
+  // preferredCount exists precisely so a caller can rotate within the
+  // preferred tier without ever touching a worse pantry/price fit).
+  // Defaults to 0 so any caller that doesn't pass one reproduces today's
+  // exact always-try-index-0-first behavior (existing tests rely on this).
+  varietySeed: number = 0,
 ): Promise<SlotAddon | null> {
   // Safety first (unchanged): filter to candidates safe for this profile
   // before considering pantry/price preference at all.
@@ -100,27 +136,54 @@ export async function buildAddonForSlot(
   // efficiency this function has always had. All of ADDON_INGREDIENT_
   // OPTIONS_BY_MACRO's candidates are from the known fixed pool, so this
   // is always available (no need to fall back to a live cost peek here).
-  const { ordered } = rankByPantryAndPrice(
+  const { ordered, preferredCount } = rankByPantryAndPrice(
     safeCandidates.map((name) => ({ name, costCentsPer100g: lookupIngredientMacrosStatic(name)?.estimatedCostCentsPer100g ?? null })),
     pantryPriceCtx,
   );
 
-  // Tries each candidate in the (now preference-ordered) list, skipping
-  // straight to the next if a lookup fails to resolve — never falls
-  // through to an unsafe option even if every safe one fails to resolve
-  // (a genuine "no add-on this time," same as today's null-lookup case).
+  // Rotates ONLY the preferred tier (pantry matches, or cheapest-half when
+  // budget-aware, or the whole list when neither applies -- see
+  // pantryPricePreference.ts) by varietySeed -- the non-preferred tail
+  // stays in its original order/position as the fallback, exactly as
+  // before, so a lookup failure still falls through to every other safe
+  // candidate unchanged. Only WHICH preferred candidate gets tried first
+  // now varies by slot instead of always being index 0.
+  const preferredTier = ordered.slice(0, preferredCount);
+  const rest = ordered.slice(preferredCount);
+  const rotation = preferredTier.length > 0 ? varietySeed % preferredTier.length : 0;
+  const tryOrder = [...preferredTier.slice(rotation), ...preferredTier.slice(0, rotation), ...rest];
+
+  // Tries each candidate in the (now preference- and variety-ordered)
+  // list, skipping straight to the next if a lookup fails to resolve --
+  // never falls through to an unsafe option even if every safe one fails
+  // to resolve (a genuine "no add-on this time," same as today's
+  // null-lookup case).
   let lookup = null;
-  for (const candidate of ordered) {
+  for (const candidate of tryOrder) {
     lookup = await fetchIngredientMacros(candidate.name);
     if (lookup) break;
   }
   if (!lookup || lookup.caloriesPer100g <= 0) return null;
 
   // Floors to the nearest 5g (not round-to-nearest) so the add-on's real
-  // calorie contribution never exceeds capCalories, even after rounding.
+  // contribution never exceeds whichever ceiling is smallest, even after
+  // rounding: the 20%-of-calories allowance, the actual gap still needed
+  // for the targeted macro, or (checked just below) the realism ceiling.
   const capCalories = slotCalories * MAX_ADDON_CALORIE_FRACTION;
-  const amountG = Math.floor((capCalories / lookup.caloriesPer100g) * 100 / 5) * 5;
+  const capAmountG = (capCalories / lookup.caloriesPer100g) * 100;
+  const neededAmountG = (neededAmount / macroPer100g(lookup, gap.macro)) * 100;
+  const amountG = Math.floor(Math.min(capAmountG, neededAmountG) / 5) * 5;
   if (amountG < MIN_ADDON_AMOUNT_G) return null;
+
+  // Realistic-portion ceiling (shared with snackComposition.ts, see
+  // staticIngredientMacros.ts) -- the 20%-of-calories cap above has no
+  // opinion on gram amount, so a low-density ingredient on a large-calorie
+  // slot had nothing else stopping an unrealistic serving (e.g. a
+  // several-hundred-gram banana addition). Reject, don't clamp -- same
+  // "skip and let reconciliation try something else" fallback as every
+  // other rejection path in this function.
+  const maxRealisticAmountG = MAX_REALISTIC_AMOUNT_G[lookup.name] ?? DEFAULT_MAX_REALISTIC_AMOUNT_G;
+  if (amountG > maxRealisticAmountG) return null;
 
   const scale = amountG / 100;
   return {

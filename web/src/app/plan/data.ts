@@ -47,6 +47,14 @@ export interface PlanSlotView {
   // composed SNACK, so the UI can show a video-search link and different
   // copy for the former (see PlanView.tsx's MealCard).
   aiComposed: boolean;
+  // Persona audit 2026-07-31, finding #3 (Phase 4): true only for a
+  // placeholder row (recipe_source: 'unfilled') persisted when every
+  // fallback failed to fill this slot -- recipeTitle carries the honest
+  // reason (orchestrate.ts's blockingHint) rather than a real dish name.
+  // Every other field on this slot is a zeroed/null placeholder value, not
+  // real data -- callers must check this FIRST and render the hint state,
+  // never the normal meal-card fields, when it's true.
+  isUnfilled: boolean;
   composedIngredients: ComposedIngredientView[] | null;
   // null for composed/AI-composed slots (no single recipe backs them — see
   // composedIngredients above instead). Populated from the same persisted
@@ -79,6 +87,12 @@ export interface BlockedSlotView {
   blockingHint: string;
 }
 
+export interface UnresolvedDietaryConcernView {
+  dayIndex: number;
+  mealType: MealType;
+  note: string;
+}
+
 export interface PlanView {
   id: string;
   generatedAt: string;
@@ -90,6 +104,13 @@ export interface PlanView {
   // return value) — blocked slots have no meal_plan_slots row, so a plan
   // reloaded from history can't recover which slots were blocked or why.
   blockedSlots: BlockedSlotView[];
+  // Same ephemeral-only shape as blockedSlots above, for the same reason --
+  // orchestrate.ts's post-generation repair pass computes this in memory
+  // (a diet_violation flag it couldn't resolve even after a real swap
+  // attempt and the AI-composition fallback) but nothing persists it, so a
+  // reloaded plan can't recover which slot it was or why. Expected empty
+  // in the overwhelming majority of plans -- see PlanView.tsx's banner.
+  unresolvedDietaryConcerns: UnresolvedDietaryConcernView[];
 }
 
 export async function getMostRecentPlan(
@@ -138,6 +159,7 @@ export async function getMostRecentPlan(
       const addonRow = addonsBySlotId.get(s.id);
       const aiComposed = s.recipe_source === "ai_composed";
       const isComposed = s.recipe_source === "composed" || aiComposed;
+      const isUnfilled = s.recipe_source === "unfilled";
       return {
         dayIndex: s.day_index,
         mealType: s.meal_type,
@@ -145,6 +167,7 @@ export async function getMostRecentPlan(
         recipeTitle: s.recipe_title,
         isComposed,
         aiComposed,
+        isUnfilled,
         composedIngredients: isComposed
           ? (s.ingredients as Array<{ name: string; amount: number }>).map((i) => ({
               name: i.name,
@@ -181,5 +204,6 @@ export async function getMostRecentPlan(
       };
     }),
     blockedSlots: [],
+    unresolvedDietaryConcerns: [],
   };
 }

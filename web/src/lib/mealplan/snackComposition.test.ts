@@ -20,6 +20,11 @@ const pool: Record<string, IngredientMacroLookup> = {
   almonds: { id: 12061, name: "almonds", caloriesPer100g: 579, proteinGPer100g: 21.2, carbsGPer100g: 21.6, fatGPer100g: 49.9, estimatedCostCentsPer100g: 178.57 },
   "peanut butter": { id: 16098, name: "peanut butter", caloriesPer100g: 588, proteinGPer100g: 25, carbsGPer100g: 20, fatGPer100g: 50, estimatedCostCentsPer100g: 35.71 },
   walnuts: { id: 12155, name: "walnuts", caloriesPer100g: 654, proteinGPer100g: 15.2, carbsGPer100g: 13.7, fatGPer100g: 65.2, estimatedCostCentsPer100g: 239.29 },
+  oats: { id: 8120, name: "oats", caloriesPer100g: 379, proteinGPer100g: 13.2, carbsGPer100g: 67.7, fatGPer100g: 6.52, estimatedCostCentsPer100g: 39.29 },
+  dates: { id: 9087, name: "dates", caloriesPer100g: 282, proteinGPer100g: 2.45, carbsGPer100g: 75.0, fatGPer100g: 0.39, estimatedCostCentsPer100g: 114.29 },
+  "pea protein powder": { id: 98890, name: "pea protein powder", caloriesPer100g: 363.63, proteinGPer100g: 72.72, carbsGPer100g: 3.03, fatGPer100g: 6.06, estimatedCostCentsPer100g: 240.0 },
+  "hemp seeds": { id: 93602, name: "hemp seeds", caloriesPer100g: 580, proteinGPer100g: 37, carbsGPer100g: 7, fatGPer100g: 45, estimatedCostCentsPer100g: 339.29 },
+  "pumpkin seeds": { id: 12014, name: "pumpkin seeds", caloriesPer100g: 559, proteinGPer100g: 30.23, carbsGPer100g: 10.71, fatGPer100g: 49.05, estimatedCostCentsPer100g: 178.57 },
 };
 
 describe("composeSnack", () => {
@@ -78,7 +83,13 @@ describe("composeSnack", () => {
 
     it("still sizes the same low-density ingredient normally when the gap is realistic", () => {
       const orangeOnlyPool = { orange: pool.orange };
-      const target = { calories: 0, proteinG: 0, carbsG: 20, fatG: 0 };
+      // fatG: 5, not 0 -- a real generation's snack target is never
+      // literally 0 fat (targets.ts's perMealTarget is always a positive
+      // share of the daily target); a hard 0 would now mean "zero fat
+      // tolerance" under the new fat-budget cap (2026-07-28) and reject
+      // this low-fat ingredient for the wrong reason. 5g is comfortably
+      // non-binding against orange's 0.12g fat/100g at this carb target.
+      const target = { calories: 0, proteinG: 0, carbsG: 20, fatG: 5 };
       const snack = composeSnack(target, orangeOnlyPool, 0);
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["orange"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(250);
@@ -91,17 +102,123 @@ describe("composeSnack", () => {
       // shape (this is the whole reason the bound is per-ingredient, not
       // per-role: 65g of protein powder is ~52g protein, an unrealistic
       // single-snack amount, unlike 65g of a low-density food).
-      const target = { calories: 0, proteinG: 55, carbsG: 0, fatG: 0 };
+      // fatG: 10, not 0 -- see the sibling test above for why a literal 0
+      // is unrealistic and would trip the new fat-budget cap instead of
+      // the realistic-serving cap this test means to isolate. 10g is
+      // comfortably non-binding against protein powder's 5g fat/100g here
+      // (would allow up to 200g before the fat cap binds, far above 65g).
+      const target = { calories: 0, proteinG: 55, carbsG: 0, fatG: 10 };
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients).toHaveLength(0);
     });
-
     it("still sizes protein powder normally within its own tighter cap", () => {
       const proteinPowderOnlyPool = { "protein powder": pool["protein powder"] };
-      const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 0 };
+      const target = { calories: 0, proteinG: 40, carbsG: 0, fatG: 10 };
       const snack = composeSnack(target, proteinPowderOnlyPool, 0);
       expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["protein powder"]);
       expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
+    });
+  });
+
+  // 2026-07-30, 15-profile comprehensive live audit: live-confirmed a
+  // bulk-goal profile's snack needed 68.1g carbs -- banana/apple/orange
+  // would each need 300-580g to close that, all over their realistic caps,
+  // so the carb role (and its calories) silently vanished from the snack
+  // every time, for every profile whose snack carb target exceeded ~57g
+  // (banana's own best case). This is what actually produced the "fat
+  // looks like it's overshooting" appearance in that audit: fat wasn't
+  // overshooting, carbs were undershooting far more severely. oats/dates
+  // are dense enough to close a gap this size within a realistic portion.
+  describe("carb-pool widening for large gaps (2026-07-30)", () => {
+    it("the original 3-fruit carb pool cannot close a 68g gap within realistic portions", () => {
+      const fruitOnlyPool = { banana: pool.banana, apple: pool.apple, orange: pool.orange };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, fruitOnlyPool, 0);
+      expect(snack.ingredients).toHaveLength(0);
+    });
+
+    it("oats closes the same 68g gap the fruit-only pool couldn't", () => {
+      const oatsOnlyPool = { oats: pool.oats };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, oatsOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["oats"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(150);
+      expect(snack.totalCarbsG).toBeGreaterThan(68 * 0.85);
+    });
+
+    it("dates close the same 68g gap the fruit-only pool couldn't", () => {
+      const datesOnlyPool = { dates: pool.dates };
+      const target = { calories: 0, proteinG: 0, carbsG: 68, fatG: 10 };
+      const snack = composeSnack(target, datesOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["dates"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(120);
+      expect(snack.totalCarbsG).toBeGreaterThan(68 * 0.85);
+    });
+  });
+
+  // Variety/repetition follow-up (2026-07-30): a vegan + soy allergy
+  // profile (the same H1 test profile from the comprehensive audit) only
+  // had 2 safe protein-role options before this fix (pea protein powder,
+  // hemp seeds) -- with only 2 real rotation options across 14 weekly
+  // snack slots, perfect rotation still guarantees each appears ~7 times.
+  // pumpkin seeds (a seed, not tagged containsNut) is safe even under this
+  // exact stack, giving a 3rd option. This simulates orchestrate.ts's own
+  // pre-filtering (only the safe subset is ever passed as `pool`).
+  describe("protein-pool widening for heavily-restricted profiles (2026-07-30)", () => {
+    const veganSoyProteinPool = {
+      "pea protein powder": pool["pea protein powder"],
+      "hemp seeds": pool["hemp seeds"],
+      "pumpkin seeds": pool["pumpkin seeds"],
+    };
+
+    it("rotates across all 3 safe options rather than just the original 2", () => {
+      const target = { calories: 0, proteinG: 20, carbsG: 0, fatG: 15 };
+      const picks = [0, 1, 2].map((seed) => composeSnack(target, veganSoyProteinPool, seed).ingredients[0]?.ingredientName);
+      expect(new Set(picks).size).toBe(3);
+      expect(picks).toContain("pumpkin seeds");
+    });
+
+    it("sizes pumpkin seeds normally within its own realistic cap", () => {
+      const pumpkinOnlyPool = { "pumpkin seeds": pool["pumpkin seeds"] };
+      const target = { calories: 0, proteinG: 15, carbsG: 0, fatG: 30 };
+      const snack = composeSnack(target, pumpkinOnlyPool, 0);
+      expect(snack.ingredients.map((i) => i.ingredientName)).toEqual(["pumpkin seeds"]);
+      expect(snack.ingredients[0].amountG).toBeLessThanOrEqual(60);
+    });
+  });
+
+  // Fat-budget cap (2026-07-28): live-found via a real "maintain" profile
+  // that hemp seeds -- a PROTEIN-role option -- has a far worse fat:protein
+  // ratio (1.22:1) than every other protein-role ingredient (0.036-0.39:1).
+  // Sizing it purely to its own protein target could blow the whole slot's
+  // fat budget before the fat role ever got a turn, collapsing a snack to
+  // one wildly fat-heavy ingredient (confirmed: 50g hemp seeds delivered
+  // 22.5g fat against a 12.3g slot fat budget).
+  describe("fat-budget cap on the protein/carb roles (2026-07-28)", () => {
+    const hempSeeds: IngredientMacroLookup = {
+      id: 93602,
+      name: "hemp seeds",
+      caloriesPer100g: 580,
+      proteinGPer100g: 37,
+      carbsGPer100g: 7,
+      fatGPer100g: 45,
+      estimatedCostCentsPer100g: 339.29,
+    };
+
+    it("caps a fat-disproportionate protein-role ingredient by the slot's fat budget instead of sizing to its own protein target alone", () => {
+      const hempSeedsOnlyPool = { "hemp seeds": hempSeeds };
+      // Real profile-1 snack1 target (16% share of 2304/116/287/77).
+      const target = { calories: 368.64, proteinG: 18.56, carbsG: 45.92, fatG: 12.32 };
+      const snack = composeSnack(target, hempSeedsOnlyPool, 4); // seed 4 -> hemp seeds (the live-found case)
+
+      expect(snack.ingredients).toHaveLength(1);
+      const hemp = snack.ingredients[0];
+      expect(hemp.ingredientName).toBe("hemp seeds");
+      // Capped by the 12.32g fat budget (25g, not the 50g the protein
+      // target alone would have sized it to), landing at or under target
+      // rather than nearly double it.
+      expect(hemp.amountG).toBe(25);
+      expect(hemp.fatG).toBeLessThanOrEqual(target.fatG);
     });
   });
 
@@ -221,11 +338,15 @@ describe("composedSnackTitle", () => {
 describe("allPoolIngredientNames / INGREDIENT_POOL", () => {
   // protein/fat widened 3->5 (audit round 2, July 15 2026) so a vegan +
   // nut allergy + soy allergy profile has 2 safe options left in each
-  // role instead of 0 -- see the source comment on INGREDIENT_POOL.
-  it("returns all 13 pool ingredient names across the 3 roles", () => {
-    expect(allPoolIngredientNames()).toHaveLength(13);
-    expect(INGREDIENT_POOL.protein).toHaveLength(5);
-    expect(INGREDIENT_POOL.carb).toHaveLength(3);
+  // role instead of 0; carb widened 3->5 (2026-07-30) so a higher-calorie
+  // profile's larger carb gaps can be closed by something denser than
+  // banana/apple/orange; protein widened again 5->7 (2026-07-30, variety/
+  // repetition follow-up) since a vegan restriction alone still drops it
+  // to 2 -- see the source comment on INGREDIENT_POOL.
+  it("returns all 17 pool ingredient names across the 3 roles", () => {
+    expect(allPoolIngredientNames()).toHaveLength(17);
+    expect(INGREDIENT_POOL.protein).toHaveLength(7);
+    expect(INGREDIENT_POOL.carb).toHaveLength(5);
     expect(INGREDIENT_POOL.fat).toHaveLength(5);
   });
 });

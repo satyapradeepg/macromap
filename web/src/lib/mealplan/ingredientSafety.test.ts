@@ -95,33 +95,58 @@ describe("isKnownIngredientUnsafeFor", () => {
       expect(isKnownIngredientUnsafeFor("greek yogurt", ctx)).toBeNull();
     });
 
-    it("does not currently flag any pool ingredient for gluten_free -- none of the 9 contain gluten today, this locks in that expectation so it's caught if the pool ever changes", () => {
+    // "oats" (added 2026-07-30, carb-pool widening) is the first pool item
+    // with containsGluten: true -- conservatively tagged since commercial
+    // oats are routinely cross-contaminated with wheat unless "certified
+    // gluten-free," which this app has no way to distinguish. Excluded
+    // here rather than folded into the loop below, which now locks in the
+    // opposite expectation for every OTHER pool ingredient.
+    it("does not currently flag any pool ingredient other than oats for gluten_free -- locks in that expectation so it's caught if the pool ever changes", () => {
       const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
       for (const name of Object.keys(STATIC_INGREDIENT_MACROS)) {
+        if (name === "oats") continue;
         expect(isKnownIngredientUnsafeFor(name, ctx), name).toBeNull();
       }
     });
 
     // Comprehensive engine test, July 16 2026: added a GLUTEN_SYNONYMS
     // free-text check (a "wheat" allergy previously got zero protection
-    // here without ALSO separately toggling gluten_free). Not reachable
-    // against a real pool item yet -- no item has containsGluten: true --
-    // so this locks in the same "no false positives" expectation the
-    // test above does, confirming the new check doesn't change today's
-    // behavior for the free-text path either.
-    it("does not currently flag any pool ingredient for a wheat/gluten free-text allergy -- same reason as above", () => {
+    // here without ALSO separately toggling gluten_free). Locks in the
+    // same "no false positives" expectation as the test above (oats
+    // excluded, see its own explicit coverage below) for the free-text
+    // path.
+    it("does not currently flag any pool ingredient other than oats for a wheat/gluten free-text allergy -- same reason as above", () => {
       const ctx: DietaryContext = { dietaryStyles: [], allergies: ["wheat"], dislikes: [] };
       for (const name of Object.keys(STATIC_INGREDIENT_MACROS)) {
+        if (name === "oats") continue;
         expect(isKnownIngredientUnsafeFor(name, ctx), name).toBeNull();
       }
     });
 
-    it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
+    it("flags oats as unsafe for gluten_free and for a wheat/gluten free-text allergy -- the one pool ingredient conservatively tagged containsGluten", () => {
+      expect(isKnownIngredientUnsafeFor("oats", { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] })).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("oats", { dietaryStyles: [], allergies: ["wheat"], dislikes: [] })).not.toBeNull();
+      // Still safe for every other context -- not globally unsafe, just gluten-relevant ones.
+      expect(isKnownIngredientUnsafeFor("oats", { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] })).toBeNull();
+    });
+
+    it("regression: the pool-expansion additions (pea protein powder, hemp seeds, sunflower seed butter, chia seeds, dates, pumpkin seeds) all pass for vegan + nut allergy + soy allergy stacked", () => {
       const ctx: DietaryContext = { dietaryStyles: ["vegan"], allergies: ["nuts", "soy"], dislikes: [] };
       expect(isKnownIngredientUnsafeFor("pea protein powder", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("hemp seeds", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("sunflower seed butter", ctx)).toBeNull();
       expect(isKnownIngredientUnsafeFor("chia seeds", ctx)).toBeNull();
+      expect(isKnownIngredientUnsafeFor("dates", ctx)).toBeNull();
+      // pumpkin seeds (2026-07-30, variety/repetition follow-up): a seed,
+      // not tagged containsNut, same reasoning as chia/hemp/sunflower
+      // above -- the widest-safety protein-pool addition available,
+      // closing the gap for this exact worst-case profile.
+      expect(isKnownIngredientUnsafeFor("pumpkin seeds", ctx)).toBeNull();
+    });
+
+    it("edamame (2026-07-30 protein-pool widening) is correctly excluded for a soy allergy but safe for vegan alone", () => {
+      expect(isKnownIngredientUnsafeFor("edamame", { dietaryStyles: [], allergies: ["soy"], dislikes: [] })).not.toBeNull();
+      expect(isKnownIngredientUnsafeFor("edamame", { dietaryStyles: ["vegan"], allergies: [], dislikes: [] })).toBeNull();
     });
 
     it("regression: dairy_free + gluten_free with no vegan style still blocks dairy pool items -- the exact combination that served cottage cheese/greek yogurt live on July 15 2026", () => {

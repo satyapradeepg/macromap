@@ -92,6 +92,19 @@ export function isWithinBand(actual: MacroTargets, band: MacroBand): boolean {
   return macroGapDirections(actual, band).length === 0;
 }
 
+// Absolute amount of `macro` still needed to reach `target` from `actual` --
+// one shared helper (2026-07-28) so every addon.ts call site computes "how
+// much is still needed" the same way, rather than 3 separate inline
+// computations silently disagreeing about what "target" means (the same
+// class of cross-call-site drift nudgedBounds was fixed for above). Clamped
+// to 0, not negative -- a gap that's already closed (or overshot) needs no
+// further addon, and buildAddonForSlot's own MIN_ADDON_AMOUNT_G floor would
+// reject a near-zero result anyway, but this makes "already satisfied"
+// explicit rather than relying on that floor alone.
+export function amountNeededFor(actual: number, target: number): number {
+  return Math.max(0, target - actual);
+}
+
 // User-facing signal only — deliberately separate from reconciliationStatus,
 // which is an all-or-nothing AND across 7 days x 4 macros at a strict ±5%
 // each (see orchestrate.ts) and so almost never reads "within_band" even for

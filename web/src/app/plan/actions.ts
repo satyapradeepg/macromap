@@ -12,6 +12,7 @@ import type { MacroTargets, MealType } from "@/lib/mealplan/targets";
 import type { CandidateIngredient, PantryItem } from "@/lib/mealplan/ranking";
 import { buildTrackerFromKnownConsumption } from "@/lib/mealplan/pantryRemaining";
 import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
+import { generateAiComposedRecipeSteps } from "@/lib/mealplan/aiComposedRecipeInstructions";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
 interface ProfileRow {
@@ -213,49 +214,121 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
       }
     }
 
+    // Persona audit 2026-07-31, finding #3 (Phase 4): a slot that survives
+    // every fallback (real-recipe cascade, all AI-compose attempts, pass
+    // 4's relaxed-bounds last resort) had NO meal_plan_slots row at all --
+    // only the ephemeral blockedSlots array below, which vanishes on the
+    // next page load (see data.ts's getMostRecentPlan, which always
+    // returns blockedSlots: []). Persists a real, honest placeholder row
+    // instead so a reload can still show WHY this meal is missing, not
+    // just silently omit it. recipe_source: 'unfilled' (migration
+    // 0030_unfilled_slots.sql) keeps this distinct from every real
+    // mechanism; blockingHint (always a real, non-empty string --
+    // orchestrate.ts's blockedHints map) is stored directly as
+    // recipe_title since there's no separate hint column and recipe_title
+    // is NOT NULL. tolerance_tier is a neutral placeholder ('p30', the
+    // column's NOT NULL check constraint requires a valid value) -- never
+    // read as a real match quality for this recipe_source.
+    if (result.blockedSlots.length > 0) {
+      const { error: unfilledError } = await supabase.from("meal_plan_slots").insert(
+        result.blockedSlots.map((b) => ({
+          meal_plan_id: insertedPlan.id,
+          day_index: b.slotId.dayIndex,
+          meal_type: b.slotId.mealType,
+          recipe_id: null,
+          recipe_source: "unfilled",
+          recipe_title: b.blockingHint,
+          image_url: null,
+          servings: 0,
+          calories: 0,
+          protein_g: 0,
+          carbs_g: 0,
+          fat_g: 0,
+          price_per_serving_cents: null,
+          scale_factor: 1,
+          tolerance_tier: "p30",
+          match_label: null,
+          ingredients: [],
+        })),
+      );
+      if (unfilledError) {
+        return { plan: null, usingCachedFallback: false, error: unfilledError.message };
+      }
+    }
+
     const plan: PlanView = {
       id: insertedPlan.id,
       generatedAt: insertedPlan.generated_at,
       reconciliationStatus: result.reconciliationStatus,
+      unresolvedDietaryConcerns: result.unresolvedDietaryConcerns,
       weeklyTarget: result.weeklyTarget,
       weeklyActual: result.weeklyActual,
-      slots: result.slots.map((s) => {
-        const isComposed = s.candidate.id < 0;
-        return {
-          dayIndex: s.slotId.dayIndex,
-          mealType: s.slotId.mealType,
-          recipeId: isComposed ? null : s.candidate.id,
-          recipeTitle: s.candidate.title,
-          isComposed,
-          aiComposed: !!s.candidate.aiComposed,
-          composedIngredients: isComposed
-            ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
-            : null,
-          recipeIngredients: isComposed
-            ? null
-            : s.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
-          imageUrl: s.candidate.imageUrl,
-          servings: s.candidate.servings,
-          calories: s.candidate.caloriesKcal,
-          proteinG: s.candidate.proteinG,
-          carbsG: s.candidate.carbsG,
-          fatG: s.candidate.fatG,
-          pricePerServingCents: s.candidate.pricePerServingCents,
-          scaleFactor: s.candidate.scaleFactor,
-          toleranceTier: s.tier,
-          matchLabel: s.matchLabel,
-          addon: s.addon
-            ? {
-                ingredientName: s.addon.ingredientName,
-                amountG: s.addon.amountG,
-                caloriesKcal: s.addon.caloriesKcal,
-                proteinG: s.addon.proteinG,
-                carbsG: s.addon.carbsG,
-                fatG: s.addon.fatG,
-              }
-            : null,
-        };
-      }),
+      slots: [
+        ...result.slots.map((s) => {
+          const isComposed = s.candidate.id < 0;
+          return {
+            dayIndex: s.slotId.dayIndex,
+            mealType: s.slotId.mealType,
+            recipeId: isComposed ? null : s.candidate.id,
+            recipeTitle: s.candidate.title,
+            isComposed,
+            aiComposed: !!s.candidate.aiComposed,
+            isUnfilled: false,
+            composedIngredients: isComposed
+              ? s.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
+              : null,
+            recipeIngredients: isComposed
+              ? null
+              : s.candidate.ingredients.map((i) => ({ name: i.name, amount: i.amount, unit: i.unit })),
+            imageUrl: s.candidate.imageUrl,
+            servings: s.candidate.servings,
+            calories: s.candidate.caloriesKcal,
+            proteinG: s.candidate.proteinG,
+            carbsG: s.candidate.carbsG,
+            fatG: s.candidate.fatG,
+            pricePerServingCents: s.candidate.pricePerServingCents,
+            scaleFactor: s.candidate.scaleFactor,
+            toleranceTier: s.tier,
+            matchLabel: s.matchLabel,
+            addon: s.addon
+              ? {
+                  ingredientName: s.addon.ingredientName,
+                  amountG: s.addon.amountG,
+                  caloriesKcal: s.addon.caloriesKcal,
+                  proteinG: s.addon.proteinG,
+                  carbsG: s.addon.carbsG,
+                  fatG: s.addon.fatG,
+                }
+              : null,
+          };
+        }),
+        // Mirrors the placeholder rows just persisted above -- so the
+        // immediate post-generation render already matches what a reload
+        // will show via data.ts's getMostRecentPlan, instead of relying on
+        // the separate ephemeral blockedSlots array below.
+        ...result.blockedSlots.map((b) => ({
+          dayIndex: b.slotId.dayIndex,
+          mealType: b.slotId.mealType,
+          recipeId: null,
+          recipeTitle: b.blockingHint,
+          isComposed: false,
+          aiComposed: false,
+          isUnfilled: true,
+          composedIngredients: null,
+          recipeIngredients: null,
+          imageUrl: null,
+          servings: 0,
+          calories: 0,
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+          pricePerServingCents: null,
+          scaleFactor: 1,
+          toleranceTier: "p30" as const,
+          matchLabel: null,
+          addon: null,
+        })),
+      ],
       blockedSlots: result.blockedSlots.map((b) => ({
         dayIndex: b.slotId.dayIndex,
         mealType: b.slotId.mealType,
@@ -485,6 +558,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     recipeTitle: swapResult.candidate.title,
     isComposed,
     aiComposed: !!swapResult.candidate.aiComposed,
+    isUnfilled: false,
     composedIngredients: isComposed
       ? swapResult.candidate.ingredients.map((i) => ({ name: i.name, amountG: i.amount }))
       : null,
@@ -535,4 +609,76 @@ export async function getRecipeInstructions(recipeId: number): Promise<GetRecipe
     return { steps: [], sourceUrl: null, error: "Recipe details unavailable right now — try again shortly." };
   }
   return { steps: result.steps, sourceUrl: result.sourceUrl, error: null };
+}
+
+export interface GetAiComposedRecipeInstructionsInput {
+  mealPlanId: string;
+  dayIndex: number;
+  mealType: MealType;
+}
+
+export interface GetAiComposedRecipeInstructionsResult {
+  steps: string[];
+  error: string | null;
+}
+
+// Backs the "Recipe" detail for an AI-composed dish (2026-07-30, "AI meals
+// should have a similar recipe experience to real Spoonacular meals" --
+// Satya's explicit request), same lazy-on-open trigger as
+// getRecipeInstructions above. UNLIKE that function, this reads/writes a
+// specific user's specific slot (the ingredient list to write instructions
+// FOR, and the cache column to persist them TO) -- not a public
+// Spoonacular id -- so it uses the cookie-scoped, RLS-enforced client
+// (same as swapMeal) rather than the admin client, and ownership is
+// enforced by Postgres RLS on meal_plan_slots, not a manual check here.
+export async function getAiComposedRecipeInstructions(
+  input: GetAiComposedRecipeInstructionsInput,
+): Promise<GetAiComposedRecipeInstructionsResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { steps: [], error: "No active session — refresh the page and try again." };
+  }
+
+  const { data: slot } = await supabase
+    .from("meal_plan_slots")
+    .select("id, recipe_title, recipe_source, ingredients, ai_recipe_instructions")
+    .eq("meal_plan_id", input.mealPlanId)
+    .eq("day_index", input.dayIndex)
+    .eq("meal_type", input.mealType)
+    .maybeSingle();
+
+  if (!slot) {
+    return { steps: [], error: "Meal not found — refresh the page and try again." };
+  }
+  // Defensive, not expected to trigger from the UI (the "Recipe" button is
+  // only ever shown for an ai_composed slot) -- but this reads/writes a
+  // slot by caller-supplied coordinates, so it shouldn't silently generate
+  // instructions for a real Spoonacular recipe if ever called wrong.
+  if (slot.recipe_source !== "ai_composed") {
+    return { steps: [], error: "Instructions unavailable for this meal." };
+  }
+
+  if (slot.ai_recipe_instructions) {
+    return { steps: slot.ai_recipe_instructions as string[], error: null };
+  }
+
+  const ingredients = (slot.ingredients as Array<{ name: string; amount: number }> | null ?? []).map((i) => ({
+    name: i.name,
+    amountG: i.amount,
+  }));
+  const steps = await generateAiComposedRecipeSteps(slot.recipe_title, ingredients);
+  if (!steps) {
+    return { steps: [], error: "Recipe details unavailable right now — try again shortly." };
+  }
+
+  // Best-effort persistence -- a failed write just means the next open
+  // regenerates instead of hitting the cache; never blocks returning the
+  // steps the user is waiting on right now.
+  await supabase.from("meal_plan_slots").update({ ai_recipe_instructions: steps }).eq("id", slot.id);
+
+  return { steps, error: null };
 }

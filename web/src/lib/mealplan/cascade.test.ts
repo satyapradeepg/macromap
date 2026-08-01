@@ -136,4 +136,60 @@ describe("matchLabelFor", () => {
     };
     expect(matchLabelFor("p10", c, target)).toContain("Closest to your budget");
   });
+
+  // 2026-07-30, "fill with the closest meal rather than leaving it open":
+  // an approximate best-effort candidate must disclose that compromise,
+  // and take priority over every other label -- it's a bigger compromise
+  // than a budget miss or a loose tier, and must never be silently
+  // presented as either of those instead.
+  describe("isApproximate (best-effort fallback disclosure)", () => {
+    it("takes priority over the budget label", () => {
+      const c = {
+        ...candidate({ pricePerServingCents: 450 }),
+        score: 0,
+        budgetCompliant: false,
+        actualTier: "p10" as const,
+        isFallbackOfLastResort: true,
+        scaleFactor: 1,
+        isApproximate: true,
+        approximationNotes: ["dropped a duplicate protein ingredient"],
+      };
+      const label = matchLabelFor("p10", c, target);
+      expect(label).toContain("Approximate");
+      expect(label).not.toContain("budget");
+    });
+
+    it("takes priority over an exact p10 match (which would otherwise be null)", () => {
+      const c = {
+        ...candidate(),
+        score: 0,
+        budgetCompliant: true,
+        actualTier: "p10" as const,
+        isFallbackOfLastResort: false,
+        scaleFactor: 1,
+        isApproximate: true,
+        approximationNotes: [],
+      };
+      expect(matchLabelFor("p10", c, target)).toContain("Approximate");
+    });
+
+    it("includes the approximation notes in the label when present", () => {
+      const c = {
+        ...candidate(),
+        score: 0,
+        budgetCompliant: true,
+        actualTier: "p20" as const,
+        isFallbackOfLastResort: false,
+        scaleFactor: 1,
+        isApproximate: true,
+        approximationNotes: ["capped tofu at a realistic 280g instead"],
+      };
+      expect(matchLabelFor("p20", c, target)).toContain("capped tofu at a realistic 280g instead");
+    });
+
+    it("is never set for a normal candidate -- undefined is treated the same as false", () => {
+      const c = { ...candidate(), score: 0, budgetCompliant: true, actualTier: "p10" as const, isFallbackOfLastResort: false, scaleFactor: 1 };
+      expect(matchLabelFor("p10", c, target)).toBeNull();
+    });
+  });
 });

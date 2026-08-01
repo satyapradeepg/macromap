@@ -96,11 +96,30 @@ const SYNONYM_GROUPS: Array<{ words: string[]; alsoMatches: string[]; dietaryInt
 // suet/tallow/isinglass/carmine/marshmallow), and other mollusks/organs
 // (squid/octopus/snail/escargot/foie gras/liver/tripe) already covered
 // for allergy purposes via SHELLFISH_SYNONYMS but not diet-compliance.
+//
+// Beef-cut/roast compounds (found live 2026-07-31, diet-filter test): bare
+// "beef" alone doesn't catch a recipe whose ingredient/title names only
+// the specific cut ("flank steak," "flat iron steak," "pot roast") with
+// no separate "beef" word anywhere -- live-confirmed 3 real non-vegetarian
+// Spoonacular recipes ("Marinated Flat Iron Steak," "Spinach and
+// Gorgonzola Stuffed Flank Steak," "Instant Pot Pressure Cooker Pot
+// Roast") would slip past unflagged. Deliberately fully-qualified cut
+// names, NOT bare "steak"/"roast" -- those two bare words collide with
+// genuinely vegetarian naming conventions ("cauliflower steak,"
+// "portobello steak," "roasted vegetables," "roasted red peppers" are all
+// common real dishes) that a keyword-only check has no reliable way to
+// tell apart from the meat sense without a much bigger, riskier change.
+// Every phrase below names a real cut/preparation with essentially zero
+// vegetarian-dish collision risk, the same specificity discipline as
+// "ham hocks"/"salt pork" above.
 const NON_VEGETARIAN_KEYWORDS = [
   "chicken", "beef", "pork", "bacon", "ham", "sausage", "turkey", "lamb", "duck", "veal", "venison",
   "goat", "rabbit", "bison", "quail", "chorizo", "prosciutto", "pepperoni", "salami",
   "gelatin", "gelatine", "lard", "rennet", "suet", "tallow", "isinglass", "carmine", "marshmallow",
   "foie gras", "liver", "tripe", "oyster sauce",
+  "flank steak", "flat iron steak", "sirloin steak", "ribeye steak", "rib eye steak", "hanger steak",
+  "skirt steak", "t-bone steak", "porterhouse steak", "beef steak",
+  "pot roast", "roast beef", "beef roast", "chuck roast", "rib roast", "prime rib",
   ...FISH_SYNONYMS,
   ...SHELLFISH_SYNONYMS,
 ];
@@ -110,6 +129,31 @@ const NON_VEGAN_EXTRA_KEYWORDS = [
   ...EGG_SYNONYMS,
   ...DAIRY_SYNONYMS,
   "honey",
+];
+
+// Live-confirmed 2026-07-31 (persona audit): a "halal" profile got pork
+// (ham hocks, salt pork) and white wine served across a real generated
+// week -- neither halal nor kosher had ANY keyword coverage anywhere in
+// this codebase; the word "pork" existed only inside NON_VEGETARIAN_
+// KEYWORDS above, which is never consulted for a halal/kosher profile.
+// This is a deliberately narrow, CHECKABLE subset of each religious
+// dietary law -- pork and alcohol for halal, pork and shellfish for
+// kosher -- not a certified/zabiha-verified guarantee (slaughter method
+// can't be verified from ingredient text at all, and kosher's meat/dairy
+// separation rule is a per-DISH cross-ingredient check, structurally
+// different from everything else in this file, and deliberately left
+// out: too much real ambiguity -- chicken broth in a cream sauce? a
+// "non-dairy" creamer? -- for a keyword scan to resolve safely).
+const PORK_SYNONYMS = [
+  "pork", "bacon", "ham", "ham hock", "ham hocks", "salt pork", "prosciutto", "pepperoni",
+  "salami", "chorizo", "lard", "pancetta", "guanciale", "spam",
+];
+// Zero coverage anywhere in this codebase before this -- confirmed via
+// grep. Common cooking-wine forms included since they're still real wine.
+const ALCOHOL_SYNONYMS = [
+  "wine", "beer", "rum", "whiskey", "whisky", "bourbon", "vodka", "brandy", "sherry", "sake",
+  "liqueur", "marsala", "mirin", "champagne", "cognac", "kirsch", "amaretto", "vermouth",
+  "triple sec", "schnapps",
 ];
 
 function normalize(s: string): string {
@@ -215,6 +259,21 @@ function hasGlutenFreeQualifier(haystack: string, word: string): boolean {
   return word === "gluten" && /\bgluten[-\s]free\b/.test(haystack);
 }
 
+// Mirror of hasSafePlantCompound's shape: a handful of common ingredient
+// names contain an ALCOHOL_SYNONYMS word as a real, space-separated
+// substring but carry no meaningful alcohol themselves -- "wine vinegar"
+// is vinegar (fermentation converts the alcohol away, none remains in the
+// product), and "root beer"/"ginger beer" are ordinary non-alcoholic
+// sodas despite the name. Deliberately short and specific, same
+// philosophy as PLANT_MODIFIERS -- add to this list only when a real
+// collision is confirmed, not speculatively.
+const SAFE_ALCOHOL_COMPOUNDS = ["wine vinegar", "root beer", "ginger beer"];
+
+function hasSafeAlcoholCompound(haystack: string, word: string): boolean {
+  if (word !== "wine" && word !== "beer") return false;
+  return SAFE_ALCOHOL_COMPOUNDS.some((c) => wordBoundaryIncludes(haystack, c));
+}
+
 function containsAny(haystack: string, needles: string[]): string | null {
   return (
     needles.find(
@@ -222,7 +281,8 @@ function containsAny(haystack: string, needles: string[]): string | null {
         wordBoundaryIncludes(haystack, n) &&
         !hasSafePlantCompound(haystack, n) &&
         !hasGlutenFreeQualifier(haystack, n) &&
-        !hasAnimalDairySourceCompound(haystack, n),
+        !hasAnimalDairySourceCompound(haystack, n) &&
+        !hasSafeAlcoholCompound(haystack, n),
     ) ?? null
   );
 }
@@ -240,16 +300,42 @@ function vegetarianOrVeganViolation(name: string, dietaryStyles: string[]): stri
   return null;
 }
 
+// Checkable subset only -- see the PORK_SYNONYMS/ALCOHOL_SYNONYMS comment
+// above for what's deliberately out of scope (slaughter method, kosher
+// meat/dairy separation).
+function halalViolation(name: string, dietaryStyles: string[]): string | null {
+  if (!dietaryStyles.includes("halal")) return null;
+  return containsAny(name, [...PORK_SYNONYMS, ...ALCOHOL_SYNONYMS]);
+}
+
+function kosherViolation(name: string, dietaryStyles: string[]): string | null {
+  if (!dietaryStyles.includes("kosher")) return null;
+  return containsAny(name, [...PORK_SYNONYMS, ...SHELLFISH_SYNONYMS]);
+}
+
 // Returns a human-readable reason the ingredient is unsafe/should be
 // excluded, or null if it passes every check this module knows about.
 // null does NOT mean "verified safe" in an absolute sense -- it means
 // "nothing here flagged it," same caveat as any keyword-based check.
+// Shared by isOpenEndedIngredientUnsafeFor's category loop below and
+// condimentRiskWarnings further down (extracted 2026-07-31 when the
+// latter was added) -- "does this profile's allergies/dietary styles
+// activate this synonym group at all," same word-boundary-and-plant-
+// modifier-aware check either caller needs.
+function userMentionsCategory(ctx: DietaryContext, group: { words: string[]; dietaryIntolerance?: string }): boolean {
+  const allergyWords = ctx.allergies.map(normalize).filter(Boolean);
+  const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
+  return (
+    allergyWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
+    (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance))
+  );
+}
+
 export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: DietaryContext): string | null {
   const name = normalize(ingredientName);
   const allergyWords = ctx.allergies.map(normalize).filter(Boolean);
   const dislikeWords = ctx.dislikes.map(normalize).filter(Boolean);
   const userWords = [...allergyWords, ...dislikeWords];
-  const intolerances = resolveIntolerances(ctx.dietaryStyles).map(normalize);
 
   for (const word of userWords) {
     if (wordBoundaryIncludes(name, word)) {
@@ -284,10 +370,7 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
     // with no actual dairy restriction. Same COMPOUND_SAFE_WORDS/
     // PLANT_MODIFIERS exception, just applied to the user's own word
     // instead of the ingredient name.
-    const userMentionedThisCategory =
-      allergyWords.some((w) => group.words.some((gw) => wordBoundaryIncludes(w, gw) && !hasSafePlantCompound(w, gw))) ||
-      (group.dietaryIntolerance !== undefined && intolerances.includes(group.dietaryIntolerance));
-    if (!userMentionedThisCategory) continue;
+    if (!userMentionsCategory(ctx, group)) continue;
     const hit = containsAny(name, group.alsoMatches);
     if (hit) {
       return `"${ingredientName}" contains "${hit}", matching an excluded category`;
@@ -298,6 +381,16 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
   if (dietHit) {
     const style = ctx.dietaryStyles.includes("vegan") ? "vegan" : "vegetarian";
     return `"${ingredientName}" contains "${dietHit}", not ${style}-compliant`;
+  }
+
+  const halalHit = halalViolation(name, ctx.dietaryStyles);
+  if (halalHit) {
+    return `"${ingredientName}" contains "${halalHit}", not halal-compliant`;
+  }
+
+  const kosherHit = kosherViolation(name, ctx.dietaryStyles);
+  if (kosherHit) {
+    return `"${ingredientName}" contains "${kosherHit}", not kosher-compliant`;
   }
 
   return null;
@@ -359,5 +452,72 @@ export function isRecipeTitleUnsafeFor(title: string, ctx: DietaryContext): stri
     return `title "${title}" contains "${dietHit}", not ${style}-compliant`;
   }
 
+  const halalHit = halalViolation(name, ctx.dietaryStyles);
+  if (halalHit) {
+    return `title "${title}" contains "${halalHit}", not halal-compliant`;
+  }
+
+  const kosherHit = kosherViolation(name, ctx.dietaryStyles);
+  if (kosherHit) {
+    return `title "${title}" contains "${kosherHit}", not kosher-compliant`;
+  }
+
   return null;
+}
+
+// Exported for orchestrate.ts's excludeIngredients construction -- merges
+// pork/alcohol/shellfish keywords into the SAME free-text-exclusion list a
+// user's own allergies/dislikes already flow through (see orchestrate.ts's
+// excludeIngredients), so Spoonacular's own search also avoids obviously-
+// tagged candidates. Deliberately reuses these exact lists rather than a
+// second hand-maintained copy in dietaryMapping.ts, to avoid the two
+// drifting out of sync (and dietaryMapping.ts importing this module would
+// create a circular import, since this module already imports
+// resolveIntolerances from dietaryMapping.ts).
+export function dietaryStyleExcludeKeywords(dietaryStyles: string[]): string[] {
+  const keywords = new Set<string>();
+  if (dietaryStyles.includes("halal")) {
+    for (const w of [...PORK_SYNONYMS, ...ALCOHOL_SYNONYMS]) keywords.add(w);
+  }
+  if (dietaryStyles.includes("kosher")) {
+    for (const w of [...PORK_SYNONYMS, ...SHELLFISH_SYNONYMS]) keywords.add(w);
+  }
+  return [...keywords];
+}
+
+// Persona audit 2026-07-31, finding #3: mealProposer.ts's safeProteinExamples
+// steers the "protein" role away from allergen-conflicting suggestions, but
+// nothing does the same for the "fixed" role (0-2 small garnish/condiment
+// items) -- a stacked-restriction profile whose blocked slots lean on one
+// cuisine (e.g. seitan stir-fry/gyro/fajita for vegan+soy) can keep reaching
+// for the exact condiment that's a natural flavoring for that cuisine (soy
+// sauce/tamari/miso) with only the general constraint text + self-check to
+// stop it -- the same "follows the concrete dish pattern over an abstract
+// constraint" failure mode already fixed for the protein role. Advisory
+// prompt-hinting only, same as safeProteinExamples -- the real gate remains
+// isOpenEndedIngredientUnsafeFor above; this can only reduce how often that
+// gate has to reject something, never substitute for it.
+const CONDIMENT_RISKS: Array<{ label: string; appliesTo: (ctx: DietaryContext) => boolean }> = [
+  { label: "soy sauce, tamari, or miso (contain soy)", appliesTo: (ctx) => userMentionsCategory(ctx, { words: SOY_SYNONYMS }) },
+  { label: "honey (not vegan)", appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") },
+  {
+    label: "Worcestershire sauce, fish sauce, or oyster sauce (contain fish/shellfish)",
+    appliesTo: (ctx) =>
+      ctx.dietaryStyles.includes("vegan") ||
+      ctx.dietaryStyles.includes("vegetarian") ||
+      userMentionsCategory(ctx, { words: FISH_SYNONYMS }) ||
+      userMentionsCategory(ctx, { words: SHELLFISH_SYNONYMS }),
+  },
+  {
+    label: "mayonnaise, aioli, or hollandaise (contain egg)",
+    appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") || userMentionsCategory(ctx, { words: EGG_SYNONYMS }),
+  },
+  {
+    label: "butter, cream, or parmesan (contain dairy)",
+    appliesTo: (ctx) => ctx.dietaryStyles.includes("vegan") || userMentionsCategory(ctx, { words: DAIRY_SYNONYMS, dietaryIntolerance: "dairy" }),
+  },
+];
+
+export function condimentRiskWarnings(ctx: DietaryContext): string[] {
+  return CONDIMENT_RISKS.filter((r) => r.appliesTo(ctx)).map((r) => r.label);
 }

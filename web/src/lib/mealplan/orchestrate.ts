@@ -16,12 +16,14 @@ import {
   mealTypeToSpoonacularType,
   MEALS_PER_WEEK,
   DAYS_PER_WEEK,
+  markKnownBad,
+  knownBadIdsFor,
   type MealSlotId,
   type MacroTargets,
   type MealType,
 } from "./targets";
 import { resolveDiet, resolveIntolerances, unsupportedDietaryStyles } from "./dietaryMapping";
-import { classifyTier, TOLERANCE_PCT, type MacroBounds, type ToleranceTier } from "./tolerance";
+import { classifyTier, TOLERANCE_PCT, wideOpenBounds, type MacroBounds, type ToleranceTier } from "./tolerance";
 import { rankCandidates, macroDeviationScore, type PantryItem, type RecipeCandidate, type RankedCandidate } from "./ranking";
 import {
   buildPantryRemainingTracker,
@@ -40,8 +42,10 @@ import {
   createAiComposeBudget,
   createBadFitSwapBudget,
   AI_COMPOSE_ACTION_COST,
+  MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT,
   createPlanRepairBudget,
   createSelectionAddonBudget,
+  type RetryBudget,
 } from "./retryBudget";
 import { resolveClaims, type ClaimedSlot } from "./claim";
 import {
@@ -52,6 +56,7 @@ import {
   dominantIncreaseGap,
   pickSlackSlots,
   nudgedBounds,
+  amountNeededFor,
   type MacroGapDirection,
 } from "./reconciliation";
 import { buildAddonForSlot, type SlotAddon, type IngredientMacroLookup, type FetchIngredientMacrosFn } from "./addon";
@@ -59,10 +64,19 @@ import { composeSnack, composedSnackTitle, allPoolIngredientNames } from "./snac
 import { lookupIngredientMacrosStatic } from "./staticIngredientMacros";
 import { filterSafeIngredientNames, type DietaryContext } from "./ingredientSafety";
 import { type PantryPriceContext } from "./pantryPricePreference";
-import { composeMealFromProposal, type GroundedIngredientData } from "./aiMealComposition";
+import {
+  composeMealFromProposalDetailed,
+  composeMealFromProposalBestEffort,
+  describeRejectionForFeedback,
+  bestKnownDensity,
+  PORTION_BOUNDS_G,
+  type GroundedIngredientData,
+  type CompositionRejection,
+  type MealProposal,
+} from "./aiMealComposition";
 import { proposeMealViaClaude, proposeMealsBatchViaClaude } from "./mealProposer";
-import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor } from "./openEndedIngredientSafety";
-import { critiquePlan, type PlanSlotSummary } from "./planCritic";
+import { anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, dietaryStyleExcludeKeywords } from "./openEndedIngredientSafety";
+import { critiquePlan, type PlanSlotSummary, type FlaggedSlot } from "./planCritic";
 import { shouldAcceptRepair } from "./planRepair";
 import { recipeCacheKey, isStale } from "./cacheKey";
 import { lookupIngredientMacrosCached } from "./ingredientMacroCache";
@@ -274,6 +288,17 @@ function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): 
 // amortized across every user hitting that combo.
 const CANDIDATES_PER_QUERY = 100;
 
+// Caps how many slots go into a single proposeMealsBatchViaClaude call
+// (2026-07-28, alongside createBadFitSwapBudget becoming adaptive) --
+// widening that budget means `eligible` can now genuinely hold many more
+// entries for a diet-restricted profile. mealProposer.ts's batch prompt
+// computes ONE shared "concentrate protein into fewer dishes" strategy
+// across the whole batch (its own maxSlotProteinG is batch-wide, not
+// per-chunk) -- dumping too many heterogeneous slots into one call dilutes
+// that guidance per-dish. Chunking keeps each call's guidance focused
+// without capping how many total slots can get repaired in a generation.
+const MAX_AI_COMPOSE_BATCH_SIZE = 4;
+
 export interface OrchestrateInput {
   userId: string;
   dailyTargets: MacroTargets;
@@ -303,10 +328,10 @@ export interface OrchestrateResult {
   // A flagged diet_violation the repair pass couldn't resolve even after
   // both the real-recipe swap attempt and the AI-composition fallback —
   // see the "Post-generation plan critique + repair" section below.
-  // Expected empty in the overwhelming majority of plans. No frontend
-  // consumer yet (see plan-critic-diet-violation-spec-2026-07-16.md,
-  // OQ-B) — this is the data shape for a follow-up warning banner.
-  unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }>;
+  // Expected empty in the overwhelming majority of plans. Surfaced as a
+  // real warning banner on /plan (PlanView.tsx) as of 2026-08-01 -- see
+  // data.ts's UnresolvedDietaryConcernView.
+  unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }>;
 }
 
 export async function orchestrateGeneration(input: OrchestrateInput): Promise<OrchestrateResult> {
@@ -315,7 +340,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
-  const excludeIngredients = [...input.allergies, ...input.dislikes];
+  const excludeIngredients = [...input.allergies, ...input.dislikes, ...dietaryStyleExcludeKeywords(input.dietaryStyles)];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
   // Quantity-aware pantry depletion (pantryRemaining.ts) starts as an
   // UNRESOLVED tracker (no identity-match/unit-conversion data yet) --
@@ -479,6 +504,19 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const exhaustionBudget = createRetryBudget();
   let retryQueriesUsed = 0;
 
+  // Retry-with-feedback instrumentation (2026-07-30) -- surfaced in the
+  // end-of-generation summary log below, same attachment point as
+  // retryQueriesUsed. Exists to answer, from real live runs rather than
+  // assumption: what actually rejects composeMealFromProposal (the
+  // rejection-kind breakdown), and does the bounded retry actually recover
+  // any of them (attempts vs. successes).
+  const aiComposeRejectionCounts: Partial<Record<CompositionRejection["kind"], number>> = {};
+  function recordAiComposeRejection(reason: CompositionRejection): void {
+    aiComposeRejectionCounts[reason.kind] = (aiComposeRejectionCounts[reason.kind] ?? 0) + 1;
+  }
+  let aiComposeRetryAttempts = 0;
+  let aiComposeRetrySuccesses = 0;
+
   // Exhaustion re-queries first (rare) — one attempt each, excluding every
   // recipe already claimed elsewhere in this plan. A quota/outage error
   // here stops further exhaustion retries (every remaining attempt would
@@ -603,6 +641,18 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   const addons = new Map<string, SlotAddon>();
   const selectionAddonBudget = createSelectionAddonBudget();
 
+  // Generation-scoped "known-bad" recipe tracking (2026-07-28) -- shared by
+  // every pass below that can replace a real recipe candidate (day
+  // reconciliation's Phase 2 requery, the protein-floor swap, the bad-fit
+  // AI-compose pass, and plan-repair). Live-confirmed bug this closes: a
+  // recipe correctly removed by one pass for being a bad fit had nothing
+  // stopping a LATER, independent pass from pulling it back in for a
+  // different slot from the same cached pool, since only "currently
+  // claimed elsewhere" was ever excluded -- never "already rejected this
+  // generation." See targets.ts's markKnownBad/knownBadIdsFor for why this
+  // is keyed by (id, Spoonacular type class) rather than bare id.
+  const excludedRecipeKeys = new Set<string>();
+
   // Only called from the initial pass below. Tried also calling this again
   // after every later reconciliation swap (to give a freshly-swapped pick a
   // fair shot at whatever gap it has) — live-confirmed July 20 2026 that
@@ -647,12 +697,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     const gap = dominantIncreaseGap(macroGapDirections(candidateAsTargets, toleranceBand(target, TOLERANCE_PCT.p10)));
     if (!gap || !trySpend(selectionAddonBudget, ADDON_ATTEMPT_COST)) return;
     retryQueriesUsed++;
+    // Aimed at the slot's true per-meal-type target, not just the p10 band
+    // edge used above to decide whether a gap is worth bothering with at
+    // all -- sizing to the band edge would leave a permanent residual on
+    // this macro (macroDeviationScore has no band-awareness, see
+    // reconciliation.ts), just burning more retry budget later to finish
+    // the job this addon could have closed now.
+    const neededAmount = amountNeededFor(candidateAsTargets[gap.macro], target[gap.macro]);
     const addon = await buildAddonForSlot(
       claimed.candidate.caloriesKcal,
       gap,
       lookupIngredientMacrosForAddon,
       dietaryCtx,
       pantryPriceCtx,
+      neededAmount,
+      claimed.slotId.dayIndex,
     );
     if (!addon) return;
     // Never-worse guard (found live + confirmed offline July 20 2026, via a
@@ -770,7 +829,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         if (!existing) break;
 
         const dayActualBefore = sumWithAddons(daySlots(), addons);
-        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx);
+        // Aimed at the true daily target, not just the ±5% band edge that
+        // triggered this loop -- same reasoning as Phase 0's addon-at-
+        // selection above (macroDeviationScore has no band-awareness).
+        const neededAmount = amountNeededFor(dayActualBefore[increaseGap.macro], input.dailyTargets[increaseGap.macro]);
+        const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, increaseGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount, targetSlotId.dayIndex);
         addonedThisDay.add(slotKey(targetSlotId));
         // Never-worse guard (found live + confirmed offline July 20 2026):
         // this pre-existing phase only ever checked "does this ingredient
@@ -855,7 +918,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
 
         const claimedIds = claimResult.claimed
           .filter((_, i) => i !== existingIndex)
-          .map((c) => c.candidate.id);
+          .map((c) => c.candidate.id)
+          .concat(knownBadIdsFor(slotId.mealType, excludedRecipeKeys));
         const slotTarget = mealTypeTargets[slotId.mealType];
         const bounds = nudgedBounds(slotTarget, gaps);
         const raw = await fetchCandidatesWithCache(
@@ -893,6 +957,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             // that no longer matches the actual deviation.
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existing.candidate.id, slotId.mealType);
             claimResult.claimed[existingIndex] = { slotId, candidate: pick, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any -- from addon-at-selection or an
@@ -964,7 +1029,11 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const existing = claimResult.claimed.find((c) => slotKey(c.slotId) === slotKey(slotId));
           addonedThisDay.add(slotKey(slotId));
           if (existing) {
-            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx);
+            // Aimed at the floor itself, not the full daily target -- this
+            // phase's job is only to clear PROTEIN_FLOOR_FRACTION, not push
+            // the meal all the way to its share of the day's protein target.
+            const neededAmount = amountNeededFor(existing.candidate.proteinG, proteinFloor);
+            const addon = await buildAddonForSlot(existing.candidate.caloriesKcal, floorGap, lookupIngredientMacrosForAddon, dietaryCtx, pantryPriceCtx, neededAmount, slotId.dayIndex);
             if (addon) addons.set(slotKey(slotId), addon);
           }
         }
@@ -980,7 +1049,8 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           retryQueriesUsed++;
           const claimedIds = claimResult.claimed
             .filter((c) => slotKey(c.slotId) !== slotKey(slotId))
-            .map((c) => c.candidate.id);
+            .map((c) => c.candidate.id)
+            .concat(knownBadIdsFor(mealType, excludedRecipeKeys));
           const slotTarget = mealTypeTargets[mealType];
           // [floorGap] only, not a broader gaps list -- this phase is a
           // protein-floor top-up specifically; the other 3 macros should
@@ -1003,6 +1073,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             const actualTier = classifyTier(pick, slotTarget) ?? "p30";
             const idx = claimResult.claimed.findIndex((c) => slotKey(c.slotId) === slotKey(slotId));
             releasePantryConsumption(rankOpts.pantryTracker, existingNow.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existingNow.candidate.id, mealType);
             claimResult.claimed[idx] = { slotId, candidate: pick, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, pick.ingredients);
             // The old add-on (if any) was sized against the pre-swap recipe's
@@ -1054,16 +1125,19 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // slot exactly as blocked as it already was — never partially applied,
   // never forces an unsafe or unrealistic result through.
   // Turns an already-obtained proposal (from either the batch or single-slot
-  // path below) into a claimable candidate, or null on any recoverable
-  // failure (safety/portion-realism/grounding) -- same "stays honestly
-  // blocked" contract as before batching was introduced. Shared by both
-  // paths so the grounding/pricing/tier math is identical regardless of
-  // which one produced the proposal.
-  async function composeProposalToCandidate(
+  // path below) into a claimable candidate, or the specific reason it was
+  // rejected -- retry-with-feedback (2026-07-30) needs that reason to tell
+  // Claude concretely what to fix; reason===null means the rejection was an
+  // infra-level failure (quota/outage), not a composition rejection, so
+  // there's nothing useful to feed back. Same "stays honestly blocked"
+  // contract as before batching was introduced. Shared by every path below
+  // so the grounding/pricing/tier math is identical regardless of which one
+  // produced the proposal.
+  async function composeProposalToCandidateDetailed(
     proposal: NonNullable<Awaited<ReturnType<typeof proposeMealViaClaude>>>,
     slotTarget: MacroTargets,
     key: string,
-  ): Promise<RankedCandidate | null> {
+  ): Promise<{ candidate: RankedCandidate | null; reason: CompositionRejection | null }> {
     // Wrapped July 16 2026 (comprehensive engine test) -- this grounds
     // every proposed ingredient via a real Spoonacular lookup, and used
     // to be the one unguarded call in this whole loop: a quota error here
@@ -1071,15 +1145,19 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // total generation failure upstream (same bug class as the snack-pool
     // fetch above, and the exact failure mode this file's July 15 fix to
     // the cascade/exhaustion/reconciliation phases never got extended to).
-    let composed;
+    let result;
     try {
-      composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+      result = await composeMealFromProposalDetailed(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
     } catch (err) {
       if (!isRecoverableSpoonacularError(err)) throw err;
       console.error(`[mealplan] AI composition grounding failed for ${key} (quota/outage), leaving slot blocked:`, err);
-      return null;
+      return { candidate: null, reason: null };
     }
-    if (!composed) return null; // safety/portion-realism/grounding failure -- stays honestly blocked
+    if (!result.ok) {
+      recordAiComposeRejection(result.reason);
+      return { candidate: null, reason: result.reason }; // safety/portion-realism/grounding failure -- stays honestly blocked
+    }
+    const composed = result.meal;
 
     const actualTier = classifyTier(
       { proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories },
@@ -1099,6 +1177,74 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
     const budgetCompliant =
       !pantryPriceCtx.budgetAware || pricePerServingCents === null || budgetPerMealUsd === null || pricePerServingCents <= budgetPerMealUsd * 100;
+
+    return {
+      candidate: {
+        id: syntheticAiMealId--,
+        title: composed.dishName,
+        imageUrl: null,
+        servings: 1,
+        proteinG: composed.totalProteinG,
+        caloriesKcal: composed.totalCalories,
+        carbsG: composed.totalCarbsG,
+        fatG: composed.totalFatG,
+        pricePerServingCents,
+        aggregateLikes: 0,
+        ingredients: composed.ingredients.map((i) => ({
+          id: i.spoonacularIngredientId,
+          name: i.ingredientName,
+          amount: i.amountG,
+          unit: "g",
+          metricAmount: i.amountG,
+          metricUnit: "g",
+        })),
+        score: 0,
+        budgetCompliant,
+        actualTier,
+        isFallbackOfLastResort: true,
+        aiComposed: true,
+        // Composed directly to target, not scaled from a fixed-size recipe.
+        scaleFactor: 1,
+      },
+      reason: null,
+    };
+  }
+
+  // Last-resort fallback (2026-07-30, "fill with the closest meal rather
+  // than leaving it open") -- called ONLY after composeProposalToCandidateDetailed
+  // has already failed on this EXACT proposal for a non-safety reason (see
+  // the call sites below, which never call this on an unsafe_ingredient or
+  // no_ingredients rejection -- there's nothing this can salvage from
+  // those). Free to call: reuses the SAME already-obtained proposal, no
+  // additional Claude call. Mirrors composeProposalToCandidateDetailed's
+  // candidate shape exactly; the only difference is which composer runs
+  // and that the approximation disclosure is carried onto the candidate.
+  async function composeProposalToCandidateBestEffort(
+    proposal: NonNullable<Awaited<ReturnType<typeof proposeMealViaClaude>>>,
+    slotTarget: MacroTargets,
+    key: string,
+  ): Promise<RankedCandidate | null> {
+    let result;
+    try {
+      result = await composeMealFromProposalBestEffort(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
+    } catch (err) {
+      if (!isRecoverableSpoonacularError(err)) throw err;
+      console.error(`[mealplan] best-effort AI composition grounding failed for ${key} (quota/outage), leaving slot blocked:`, err);
+      return null;
+    }
+    // Still unsafe, or genuinely nothing to build from -- stays honestly
+    // blocked, no further fallback exists past this one.
+    if (!result.ok) return null;
+    const composed = result.result.meal;
+
+    const actualTier = classifyTier({ proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories }, slotTarget) ?? "p30";
+    const pricePerServingCents = composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
+    const budgetCompliant =
+      !pantryPriceCtx.budgetAware || pricePerServingCents === null || budgetPerMealUsd === null || pricePerServingCents <= budgetPerMealUsd * 100;
+
+    if (result.result.isApproximate) {
+      console.log(`[mealplan] best-effort fallback used for ${key}: ${result.result.approximationNotes.join("; ")}`);
+    }
 
     return {
       id: syntheticAiMealId--,
@@ -1124,16 +1270,42 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       actualTier,
       isFallbackOfLastResort: true,
       aiComposed: true,
-      // Composed directly to target, not scaled from a fixed-size recipe.
       scaleFactor: 1,
+      isApproximate: result.result.isApproximate,
+      approximationNotes: result.result.approximationNotes,
     };
   }
 
-  // Single-slot path (the original, pre-batch mechanism) -- now also the
-  // fallback used if the batch call below fails or comes back malformed,
-  // so batching can never REDUCE resilience versus the old one-call-per-
-  // slot behavior, only improve on it when it works.
-  async function attemptSingleSlotAiCompose(slotId: MealSlotId, slotTarget: MacroTargets, key: string): Promise<RankedCandidate | null> {
+  // A rejection this shallow can never be salvaged by the best-effort
+  // fallback above -- unsafe_ingredient has no relaxed path by design
+  // (see composeMealFromProposalBestEffort's own comment), and
+  // no_ingredients means there was never any real data to build from in
+  // the first place. Every other kind is worth one best-effort attempt.
+  function canAttemptBestEffort(reason: CompositionRejection | null): boolean {
+    // title_ingredient_mismatch is a text-only problem -- best-effort only
+    // relaxes ingredient-amount realism and never touches dishName (see
+    // aiMealComposition.ts), so it can't fix this and would just re-surface
+    // the same mismatched title.
+    return (
+      reason !== null &&
+      reason.kind !== "unsafe_ingredient" &&
+      reason.kind !== "no_ingredients" &&
+      reason.kind !== "title_ingredient_mismatch"
+    );
+  }
+
+  // One full propose+compose attempt for a slot -- optionally carrying
+  // feedback from a PRIOR rejected attempt on this same slot
+  // (mealProposer.ts's priorAttemptFeedback), so a retry isn't a blind
+  // re-roll. Returns the same {candidate, reason} shape as
+  // composeProposalToCandidateDetailed for the same reason: callers need to
+  // know WHY a rejection happened, not just that it did.
+  async function proposeAndComposeForSlot(
+    slotId: MealSlotId,
+    slotTarget: MacroTargets,
+    key: string,
+    priorAttemptFeedback?: string,
+  ): Promise<{ candidate: RankedCandidate | null; reason: CompositionRejection | null; proposal: MealProposal | null }> {
     let proposal;
     try {
       proposal = await proposeMealViaClaude({
@@ -1143,13 +1315,85 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         allergies: input.allergies,
         dislikes: input.dislikes,
         pantryItemNames,
+        priorAttemptFeedback,
+        avoidDishNames: usedDishTitles,
       });
     } catch (err) {
-      console.error(`[mealplan] AI composition call failed for ${key}, leaving slot blocked:`, err);
-      return null;
+      console.error(
+        `[mealplan] AI composition call failed for ${key}${priorAttemptFeedback ? " (retry)" : ""}, leaving slot blocked:`,
+        err,
+      );
+      return { candidate: null, reason: null, proposal: null };
     }
-    if (!proposal) return null;
-    return composeProposalToCandidate(proposal, slotTarget, key);
+    if (!proposal) return { candidate: null, reason: null, proposal: null };
+    const result = await composeProposalToCandidateDetailed(proposal, slotTarget, key);
+    return { ...result, proposal };
+  }
+
+  // De-concentration mitigation (retry-with-feedback, 2026-07-30): a batch
+  // dish's OWN target can be Claude's deliberately concentrated per-dish
+  // allocation (see the aggregateTarget/ownTarget comment below), not the
+  // slot's plain even share. If a portion rejection's gap already exceeds
+  // what even the densest realistic real ingredient could deliver at this
+  // role's portion cap, retrying with the SAME concentrated target would
+  // just repeat the identical, structurally infeasible ask -- reset to the
+  // slot's own even share instead. A no-op for a non-batch attempt (where
+  // usedTarget and evenShareTarget are already the same object).
+  function deconcentrationAdjustedTarget(
+    usedTarget: MacroTargets,
+    evenShareTarget: MacroTargets,
+    reason: CompositionRejection,
+  ): MacroTargets {
+    if (reason.kind !== "portion_out_of_bounds" && reason.kind !== "portion_infeasible") return usedTarget;
+    const ceiling = (PORTION_BOUNDS_G[reason.role].max * bestKnownDensity(reason.role)) / 100;
+    return reason.gapNeeded > ceiling ? evenShareTarget : usedTarget;
+  }
+
+  // Bounded retry-with-feedback for a single slot, self-contained attempt-1
+  // + attempt-2 -- safe to call inline (no cross-slot ordering concern)
+  // since it only ever runs for one slot at a time outside the batch loop
+  // (tryAiComposeRepair below). The batch loop's own per-dish/per-chunk
+  // retries are handled separately (see pendingRetries) so an early slot's
+  // retry there can never starve a later slot's first attempt -- see the
+  // comment above that loop for why. Spends `budget` only for the retry;
+  // the first attempt is the caller's existing, already-established gate
+  // (or, for tryAiComposeRepair, deliberately ungated, matching its
+  // pre-existing unconditional-first-try behavior).
+  async function composeSlotViaAiWithRetry(
+    slotId: MealSlotId,
+    slotTarget: MacroTargets,
+    key: string,
+    budget: RetryBudget,
+  ): Promise<RankedCandidate | null> {
+    const first = await proposeAndComposeForSlot(slotId, slotTarget, key);
+    if (first.candidate) return first.candidate;
+    if (first.reason === null) return null; // infra-level failure -- no useful feedback to retry with, nothing to salvage either
+
+    let retry: Awaited<ReturnType<typeof proposeAndComposeForSlot>> | null = null;
+    if (trySpend(budget, AI_COMPOSE_ACTION_COST)) {
+      aiComposeRetryAttempts++;
+      const retryTarget = deconcentrationAdjustedTarget(slotTarget, slotTarget, first.reason);
+      const feedback = describeRejectionForFeedback(first.reason);
+      retry = await proposeAndComposeForSlot(slotId, retryTarget, key, feedback);
+      if (retry.candidate) {
+        aiComposeRetrySuccesses++;
+        return retry.candidate;
+      }
+    }
+
+    // Last resort (2026-07-30, "fill with the closest meal rather than
+    // leaving it open"): neither attempt produced a usable candidate.
+    // Try the relaxed composer on whichever proposal we actually have --
+    // the retry's (freshest, already informed by feedback) if one fired,
+    // else the original. Free: reuses already-obtained data, no
+    // additional Claude call. canAttemptBestEffort still refuses this for
+    // an unsafe-ingredient or no-data rejection, from either attempt.
+    const lastReason = retry?.reason ?? first.reason;
+    const lastProposal = retry?.proposal ?? first.proposal;
+    if (lastProposal && canAttemptBestEffort(lastReason)) {
+      return composeProposalToCandidateBestEffort(lastProposal, slotTarget, key);
+    }
+    return null;
   }
 
   // Applies an AI-composed result to its eligible slot -- either a NEW
@@ -1177,6 +1421,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
       // see pantry stock as more available than it truly is if this
       // AI-composed pick happens to use some of it too.
       commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
+      // Variety/repetition follow-up (2026-07-30): grows the avoid-list so
+      // a LATER AI-compose call in this same generation also steers away
+      // from what this one just picked.
+      usedDishTitles.push(candidate.title);
       return;
     }
     const existing = claimResult.claimed[entry.claimedIndex];
@@ -1184,8 +1432,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     const newScore = macroDeviationScore(candidate, entry.target);
     if (newScore < existingScore) {
       releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+      markKnownBad(excludedRecipeKeys, existing.candidate.id, entry.slotId.mealType);
       claimResult.claimed[entry.claimedIndex] = { slotId: entry.slotId, candidate, tier: candidate.actualTier ?? "p30" };
       commitPantryConsumption(rankOpts.pantryTracker, candidate.ingredients);
+      usedDishTitles.push(candidate.title);
     }
   }
 
@@ -1204,8 +1454,30 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // claimed (see the bad-fit pass below) -- distinguishes "genuinely
   // blocked, add a new claim" from "already claimed, only replace if
   // AI-compose demonstrably improves on it" in the result-handling below.
-  const aiComposeBudget = createAiComposeBudget();
-  const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number }> = [];
+  // Real count of blocked recipe slots this generation (free to compute —
+  // no API cost), feeding the adaptive budget below. Computed upfront, not
+  // incremented inside the loop below, so a mid-loop break from budget
+  // exhaustion can't undercount the slots never even reached.
+  const blockedRecipeSlotCount = [...blockedHints.keys()].filter((key) => {
+    const slotId = allSlots.find((s) => slotKey(s) === key);
+    return slotId && slotMechanism(slotId.mealType) === "recipe";
+  }).length;
+
+  // Variety/repetition follow-up (2026-07-30, same comprehensive audit that
+  // found the carb/protein-pool gaps): the plan critic independently
+  // flagged real dish-level repetition even on an UNRESTRICTED profile
+  // ("heavy repetition of the Seitan Stir-Fry with Rice and Broccoli
+  // lunch, 4 of 7 days") -- real recipes can't literally repeat (claim.ts
+  // already dedupes by id across the whole generation), so this has to be
+  // the AI-compose path proposing the same obvious dish repeatedly, since
+  // separate propose calls have no memory of each other. Seeded from every
+  // title already claimed by the time AI-compose starts (real recipes AND
+  // composed snacks), then grown as AI-compose itself claims more, so a
+  // LATER call in this same generation also avoids what an EARLIER
+  // AI-compose call already picked, not just what real-recipe search found.
+  const usedDishTitles: string[] = claimResult.claimed.map((c) => c.candidate.title);
+  const aiComposeBudget = createAiComposeBudget(blockedRecipeSlotCount);
+  const eligible: Array<{ key: string; slotId: MealSlotId; target: MacroTargets; claimedIndex?: number; budget: RetryBudget }> = [];
   // Genuinely blocked slots draw from their own existing, already-tuned
   // budget, unchanged from before this pass existed.
   for (const [key] of [...blockedHints.entries()]) {
@@ -1215,7 +1487,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     // than assume — this fallback is scoped to recipe-mechanism slots.
     if (!slotId || slotMechanism(slotId.mealType) !== "recipe") continue;
     if (!trySpend(aiComposeBudget, AI_COMPOSE_ACTION_COST)) break;
-    eligible.push({ key, slotId, target: mealTypeTargets[slotId.mealType] });
+    eligible.push({ key, slotId, target: mealTypeTargets[slotId.mealType], budget: aiComposeBudget });
   }
 
   // Widened trigger (2026-07-21 spec): a slot with at least one real
@@ -1238,16 +1510,57 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // detection itself (this loop, no API cost) found them every time. A
   // separate, smaller, additive budget guarantees this pass always gets a
   // real chance, regardless of how many slots are blocked that week.
-  const badFitSwapBudget = createBadFitSwapBudget();
+  // Sized to the REAL count of null-tier recipe slots found this generation
+  // (free to compute -- classifyTier returning null, no API cost) rather
+  // than a flat guess -- see retryBudget.ts's createBadFitSwapBudget for
+  // why (live-confirmed a diet-restricted profile can have far more than
+  // the "typical" 1-3 thin-pool slots the old flat budget assumed).
+  const nullTierRecipeCount = claimResult.claimed.filter(
+    (c) => slotMechanism(c.slotId.mealType) === "recipe" && c.candidate.actualTier === null,
+  ).length;
+  const badFitSwapBudget = createBadFitSwapBudget(nullTierRecipeCount);
   for (const [claimedIndex, c] of claimResult.claimed.entries()) {
     if (slotMechanism(c.slotId.mealType) !== "recipe") continue;
     if (c.candidate.actualTier !== null) continue;
     if (!trySpend(badFitSwapBudget, AI_COMPOSE_ACTION_COST)) break;
-    eligible.push({ key: slotKey(c.slotId), slotId: c.slotId, target: mealTypeTargets[c.slotId.mealType], claimedIndex });
+    eligible.push({ key: slotKey(c.slotId), slotId: c.slotId, target: mealTypeTargets[c.slotId.mealType], claimedIndex, budget: badFitSwapBudget });
   }
 
-  if (eligible.length > 0) {
-    const aggregateTarget = eligible.reduce<MacroTargets>(
+  // Retry-with-feedback (2026-07-30): rejections from pass 1 below are
+  // deferred here rather than retried inline, in the SAME order eligible
+  // was built, so a rejected early slot's retry can never spend budget a
+  // later slot still needs for its own FIRST attempt -- that ordering
+  // guarantee has priority over giving any single slot its second try
+  // sooner. Drained in one sweep after the whole chunked loop finishes.
+  const pendingRetries: Array<{
+    entry: (typeof eligible)[number];
+    reason: CompositionRejection;
+    usedTarget: MacroTargets;
+    proposal: MealProposal;
+  }> = [];
+
+  // Persona audit 2026-07-31, finding #3: pass 3 below used to call
+  // proposeAndComposeForSlot with no priorAttemptFeedback -- a blind
+  // re-roll even for a slot that already failed passes 1 and 2 for a
+  // known, specific reason. Tracks the freshest known CompositionRejection
+  // per slot key so pass 3's one remaining independent attempt is informed
+  // (same describeRejectionForFeedback plumbing pass 2 already uses), not
+  // a repeat of whatever doomed the earlier attempts. Only ever has an
+  // entry for a slot that actually reached pass 1/2 and got a REAL
+  // rejection reason -- a slot that never got an attempt at all (budget
+  // exhausted before eligible was even built) has no entry, and pass 3
+  // below falls back to today's blind-attempt behavior for it, unchanged.
+  const lastRejectionByKey = new Map<string, CompositionRejection>();
+
+  // Chunked into groups of MAX_AI_COMPOSE_BATCH_SIZE (2026-07-28) -- each
+  // chunk gets its own batch call/aggregateTarget/fallback, exactly as if
+  // it were the only group this generation, so a wider `eligible` (now
+  // possible with the adaptive bad-fit-swap budget above) can't dilute any
+  // one call's "concentrate protein" guidance across too many slots.
+  for (let chunkStart = 0; chunkStart < eligible.length; chunkStart += MAX_AI_COMPOSE_BATCH_SIZE) {
+    const chunk = eligible.slice(chunkStart, chunkStart + MAX_AI_COMPOSE_BATCH_SIZE);
+
+    const aggregateTarget = chunk.reduce<MacroTargets>(
       (sum, e) => ({
         calories: sum.calories + e.target.calories,
         proteinG: sum.proteinG + e.target.proteinG,
@@ -1260,20 +1573,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     let batchProposals: Awaited<ReturnType<typeof proposeMealsBatchViaClaude>> = null;
     try {
       batchProposals = await proposeMealsBatchViaClaude({
-        slots: eligible.map((e) => ({ mealType: e.slotId.mealType as "breakfast" | "lunch" | "dinner", target: e.target })),
+        slots: chunk.map((e) => ({ mealType: e.slotId.mealType as "breakfast" | "lunch" | "dinner", target: e.target })),
         aggregateTarget,
         dietaryStyles: input.dietaryStyles,
         allergies: input.allergies,
         dislikes: input.dislikes,
         pantryItemNames,
+        avoidDishNames: usedDishTitles,
       });
     } catch (err) {
       console.error(`[mealplan] batch AI composition call failed, falling back to per-slot:`, err);
     }
 
-    if (batchProposals && batchProposals.length === eligible.length) {
-      for (let i = 0; i < eligible.length; i++) {
-        const entry = eligible[i];
+    if (batchProposals && batchProposals.length === chunk.length) {
+      for (let i = 0; i < chunk.length; i++) {
+        const entry = chunk[i];
         // Sizes against THIS dish's own rescaled target (Claude's
         // deliberate per-dish allocation, corrected to sum exactly to the
         // aggregate) rather than the flat per-slot share -- this is what
@@ -1285,85 +1599,186 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // against entry.target (the slot's own real per-meal-type target),
         // not this internal rescaled allocation.
         const { proposal, target: ownTarget } = batchProposals[i];
-        const candidate = await composeProposalToCandidate(proposal, ownTarget, entry.key);
-        applyAiComposeResult(entry, candidate);
+        const { candidate, reason } = await composeProposalToCandidateDetailed(proposal, ownTarget, entry.key);
+        if (candidate) {
+          applyAiComposeResult(entry, candidate);
+        } else if (reason) {
+          // This dish's own proposal was rejected (safety/portion-realism/
+          // grounding failure) even though the rest of the batch succeeded --
+          // queue it for a fed-back retry (see pendingRetries above) instead
+          // of leaving the slot blocked outright or blindly re-rolling.
+          pendingRetries.push({ entry, reason, usedTarget: ownTarget, proposal });
+          lastRejectionByKey.set(entry.key, reason);
+        }
+        // reason === null (infra-level failure) -- nothing useful to retry
+        // with, slot stays honestly blocked, same as before this pass.
       }
     } else {
       // Batch attempt didn't produce a usable result (network error,
       // malformed tool call, wrong count) -- fall back to the original
-      // one-call-per-slot path for every slot still in this batch, exactly
+      // one-call-per-slot path for every slot still in this chunk, exactly
       // as if batching had never been attempted.
-      for (const entry of eligible) {
-        const candidate = await attemptSingleSlotAiCompose(entry.slotId, entry.target, entry.key);
-        applyAiComposeResult(entry, candidate);
+      for (const entry of chunk) {
+        const { candidate, reason, proposal } = await proposeAndComposeForSlot(entry.slotId, entry.target, entry.key);
+        if (candidate) {
+          applyAiComposeResult(entry, candidate);
+        } else if (reason && proposal) {
+          pendingRetries.push({ entry, reason, usedTarget: entry.target, proposal });
+          lastRejectionByKey.set(entry.key, reason);
+        }
       }
     }
   }
 
-  // Last-resort fallback for a flagged diet_violation with no real recipe
-  // alternative (added July 16 2026) — mirrors the AI-composition
-  // fallback above almost exactly, just scoped to a single already-
-  // claimed slot instead of an exhausted blockedHints entry, and returns
-  // null on ANY failure rather than partially applying anything, so the
-  // caller can fall through to disclosure (unresolvedDietaryConcerns)
-  // instead of guessing why it failed.
-  async function tryAiComposeRepair(slotId: MealSlotId, slotTarget: MacroTargets): Promise<RankedCandidate | null> {
-    let proposal;
-    try {
-      proposal = await proposeMealViaClaude({
-        mealType: slotId.mealType as "breakfast" | "lunch" | "dinner",
-        target: slotTarget,
-        dietaryStyles: input.dietaryStyles,
-        allergies: input.allergies,
-        dislikes: input.dislikes,
-        pantryItemNames,
-      });
-    } catch (err) {
-      console.error(`[mealplan] AI-composition repair call failed for ${slotKey(slotId)}:`, err);
-      return null;
+  // Pass 2: one fed-back retry per rejected slot, in the same order pass 1
+  // rejected them, each spending its OWN originating budget (aiCompose or
+  // bad-fit-swap) via the same trySpend already used for every attempt in
+  // this pass. Running this AFTER the entire chunked loop above (rather
+  // than inline per-chunk) is what gives every slot's first attempt
+  // priority over any slot's retry, regardless of chunk order.
+  for (const { entry, reason, usedTarget, proposal } of pendingRetries) {
+    let candidate: RankedCandidate | null = null;
+    let lastReason: CompositionRejection | null = reason;
+    let lastProposal: MealProposal = proposal;
+
+    if (trySpend(entry.budget, AI_COMPOSE_ACTION_COST)) {
+      aiComposeRetryAttempts++;
+      const retryTarget = deconcentrationAdjustedTarget(usedTarget, entry.target, reason);
+      const feedback = describeRejectionForFeedback(reason);
+      const retry = await proposeAndComposeForSlot(entry.slotId, retryTarget, entry.key, feedback);
+      candidate = retry.candidate;
+      if (candidate) aiComposeRetrySuccesses++;
+      // Keep whichever reason/proposal is freshest for the best-effort
+      // fallback below -- the retry's if it actually ran and produced one,
+      // else fall back to what pass 1 already gave us.
+      if (retry.reason !== null) lastReason = retry.reason;
+      if (retry.proposal) lastProposal = retry.proposal;
     }
-    if (!proposal) return null;
 
-    const composed = await composeMealFromProposal(proposal, slotTarget, dietaryCtx, groundIngredientForAiMeal);
-    if (!composed) return null; // safety/portion-realism/grounding failure -- never partially applied
+    // Keep the freshest known reason for this slot regardless of whether
+    // the retry above actually fired -- feeds pass 3's informed attempt
+    // below (lastRejectionByKey's own comment). lastReason is always
+    // non-null here: it starts as pendingRetries' own reason and is only
+    // ever reassigned to another non-null CompositionRejection.
+    lastRejectionByKey.set(entry.key, lastReason);
 
-    const actualTier =
-      classifyTier({ proteinG: composed.totalProteinG, caloriesKcal: composed.totalCalories }, slotTarget) ?? "p30";
-    const pricePerServingCents =
-      composed.totalEstimatedCostCents !== null ? Math.round(composed.totalEstimatedCostCents) : null;
-    const budgetCompliant =
-      !pantryPriceCtx.budgetAware ||
-      pricePerServingCents === null ||
-      budgetPerMealUsd === null ||
-      pricePerServingCents <= budgetPerMealUsd * 100;
+    // Last resort (2026-07-30, "fill with the closest meal rather than
+    // leaving it open"): the retry either didn't fire (budget exhausted)
+    // or also failed. Free -- reuses already-obtained data, no additional
+    // Claude call. Never fires for an unsafe-ingredient or no-data
+    // rejection; see canAttemptBestEffort's own comment.
+    if (!candidate && canAttemptBestEffort(lastReason)) {
+      candidate = await composeProposalToCandidateBestEffort(lastProposal, entry.target, entry.key);
+    }
+    applyAiComposeResult(entry, candidate);
+  }
 
-    return {
-      id: syntheticAiMealId--,
-      title: composed.dishName,
-      imageUrl: null,
-      servings: 1,
-      proteinG: composed.totalProteinG,
-      caloriesKcal: composed.totalCalories,
-      carbsG: composed.totalCarbsG,
-      fatG: composed.totalFatG,
-      pricePerServingCents,
-      aggregateLikes: 0,
-      ingredients: composed.ingredients.map((i) => ({
-        id: i.spoonacularIngredientId,
-        name: i.ingredientName,
-        amount: i.amountG,
-        unit: "g",
-        metricAmount: i.amountG,
-        metricUnit: "g",
-      })),
-      score: 0,
-      budgetCompliant,
-      actualTier,
-      isFallbackOfLastResort: true,
-      aiComposed: true,
-      // Composed directly to target, not scaled from a fixed-size recipe.
-      scaleFactor: 1,
-    };
+  // Pass 3 (2026-07-30, "fill with the closest meal rather than leaving it
+  // open"): any recipe-mechanism slot STILL in blockedHints at this point
+  // never got a first AI-compose attempt at all -- the eligibility loop
+  // that builds `eligible` above stops (`break`) the moment its own
+  // budget runs out, so every slot after that point in iteration order
+  // never entered the pipeline above, pass 2 included. Live-confirmed:
+  // an entire day's worth of slots blocked this way, not a rejection
+  // anywhere -- pass 2's best-effort fallback had nothing to salvage for
+  // them since they never got a proposal in the first place. A small,
+  // dedicated last-resort budget (sized to exactly what's left, one
+  // attempt each, no retry -- budget was already the problem) gives
+  // every remaining slot one real shot, going straight to best-effort on
+  // whatever that attempt produces rather than requiring a second perfect
+  // try. Real API cost (a genuine Claude call per remaining slot), so
+  // still bounded, just not zero -- see the equivalent tradeoff already
+  // accepted for tryAiComposeRepair's own small dedicated budget below.
+  const stillBlockedRecipeSlots = [...blockedHints.keys()]
+    .map((key) => allSlots.find((s) => slotKey(s) === key))
+    .filter((slotId): slotId is MealSlotId => !!slotId && slotMechanism(slotId.mealType) === "recipe");
+
+  if (stillBlockedRecipeSlots.length > 0) {
+    const lastResortBudget = createRetryBudget(AI_COMPOSE_ACTION_COST * stillBlockedRecipeSlots.length);
+    for (const slotId of stillBlockedRecipeSlots) {
+      const key = slotKey(slotId);
+      if (!trySpend(lastResortBudget, AI_COMPOSE_ACTION_COST)) break;
+      const slotTarget = mealTypeTargets[slotId.mealType];
+      // Informed, not blind, when a prior rejection reason is known for
+      // this slot (see lastRejectionByKey's own comment above) -- a slot
+      // that never got a pass-1 attempt at all (budget exhaustion, not a
+      // rejection) has no entry, so this is undefined and the call below
+      // behaves exactly as before for that case.
+      const priorReason = lastRejectionByKey.get(key);
+      const priorFeedback = priorReason ? describeRejectionForFeedback(priorReason) : undefined;
+      const attempt = await proposeAndComposeForSlot(slotId, slotTarget, key, priorFeedback);
+      let candidate = attempt.candidate;
+      if (!candidate && attempt.proposal && canAttemptBestEffort(attempt.reason)) {
+        candidate = await composeProposalToCandidateBestEffort(attempt.proposal, slotTarget, key);
+      }
+      applyAiComposeResult({ key, slotId, target: slotTarget }, candidate);
+    }
+  }
+
+  // Pass 4 (persona audit 2026-07-31, finding #3 -- "closest real recipe
+  // instead of an odd AI fallback"): any recipe-mechanism slot STILL
+  // blocked after every AI-compose attempt above. Live-tested before
+  // building this: for a real vegetarian+nut-allergy profile, Spoonacular
+  // genuinely has ZERO matches at the normal p30 (±30%) macro band for
+  // some meal types -- but 100+ real, genuinely-safe matches once ONLY the
+  // macro-band requirement is dropped (diet/intolerances/excludeIngredients
+  // stay exactly as they are -- confirmed live those are correct, not the
+  // problem; see this session's plan notes). So: one more real-recipe
+  // query, same safety-filtered fetchCandidatesWithCache path everything
+  // else already trusts, with macro bounds widened far past p30 instead of
+  // relaxing any safety filter. Ranked the same way as every other
+  // candidate (rankCandidates against the SLOT'S REAL target, not the
+  // widened bounds), so the closest-fitting real match wins regardless of
+  // how wide the fetch had to be. A candidate landing outside p30 already
+  // gets actualTier: null -> matchLabelFor already renders "Closest match
+  // -- slightly outside your targets (+Xg protein, +Y cal)" (cascade.ts),
+  // so this needs no new UI/disclosure work, just like the AI-compose
+  // best-effort path's isApproximate disclosure above.
+  const stillBlockedAfterAiCompose = [...blockedHints.keys()]
+    .map((key) => allSlots.find((s) => slotKey(s) === key))
+    .filter((slotId): slotId is MealSlotId => !!slotId && slotMechanism(slotId.mealType) === "recipe");
+
+  if (stillBlockedAfterAiCompose.length > 0) {
+    const relaxedBoundsBudget = createRetryBudget(RECIPE_ACTION_COST * stillBlockedAfterAiCompose.length);
+    for (const slotId of stillBlockedAfterAiCompose) {
+      const key = slotKey(slotId);
+      if (!trySpend(relaxedBoundsBudget, RECIPE_ACTION_COST)) break;
+      const slotTarget = mealTypeTargets[slotId.mealType];
+      // Effectively open -- no meaningful macro-band requirement left,
+      // only diet/intolerances/excludeIngredients/type (baked into the
+      // fetcher below) still gate what comes back.
+      const claimedIds = claimResult.claimed.map((c) => c.candidate.id);
+      const fetcher = makeFetcher(claimedIds, mealTypeToSpoonacularType(slotId.mealType));
+      let candidates: RecipeCandidate[];
+      try {
+        candidates = await fetcher(wideOpenBounds(slotTarget), "p30");
+      } catch (err) {
+        if (!isRecoverableSpoonacularError(err)) throw err;
+        console.error(`[mealplan] relaxed-bounds fallback fetch failed for ${key} (quota/outage), leaving slot blocked:`, err);
+        continue;
+      }
+      const ranked = rankCandidates(candidates, slotTarget, rankOpts);
+      applyAiComposeResult({ key, slotId, target: slotTarget }, ranked[0] ?? null);
+    }
+  }
+
+  // Last-resort fallback for a flagged diet_violation with no real recipe
+  // alternative (added July 16 2026) -- scoped to a single already-claimed
+  // slot instead of an exhausted blockedHints entry, and returns null on
+  // ANY failure rather than partially applying anything, so the caller can
+  // fall through to disclosure (unresolvedDietaryConcerns) instead of
+  // guessing why it failed. Now routed through composeSlotViaAiWithRetry
+  // (2026-07-30 retry-with-feedback) instead of hand-rolling its own
+  // propose+compose+build-candidate sequence -- this call site never had
+  // any budget gating before (always tried unconditionally, this is a
+  // rare, safety-critical repair, not a per-slot loop), so it gets a small
+  // local budget sized for exactly its own first attempt + one retry
+  // rather than sharing (and being starved by) the whole-generation
+  // AI-compose budget above, which has already been fully spent by the
+  // time this later repair pass runs.
+  async function tryAiComposeRepair(slotId: MealSlotId, slotTarget: MacroTargets): Promise<RankedCandidate | null> {
+    const repairBudget = createRetryBudget(AI_COMPOSE_ACTION_COST * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT);
+    return composeSlotViaAiWithRetry(slotId, slotTarget, slotKey(slotId), repairBudget);
   }
 
   // Slots a diet_violation flag couldn't be resolved for even after both
@@ -1373,7 +1788,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // unsupportedDietaryStyles (halal/kosher). Expected to be empty in the
   // overwhelming majority of plans; only ever populated for a genuine,
   // unresolvable safety flag, never for repetitive/macro_miss/other.
-  const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: string; note: string }> = [];
+  const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }> = [];
 
   // Post-generation plan critique + repair (built July 15 2026, extended
   // July 16 2026 with diet_violation) — the per-slot pipeline above never
@@ -1444,13 +1859,24 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         );
         const repairBudget = createPlanRepairBudget();
 
-        // diet_violation flags process first so the shared, capped repair
-        // budget can't let cosmetic (repetitive/macro_miss/other) repairs
-        // starve a genuine safety fix earlier in the list — safety
-        // shouldn't depend on array order.
-        const sortedFlags = [...critique.flaggedSlots].sort(
-          (a, b) => (a.reason === "diet_violation" ? 0 : 1) - (b.reason === "diet_violation" ? 0 : 1),
-        );
+        // Ranked, not a binary diet_violation-vs-not split -- live-tested
+        // 2026-08-01: the critic routinely flags EVERY occurrence of a
+        // repeated dish individually (5 separate "repetitive" flags for
+        // one dish repeated 5x, not one flag), which under the old binary
+        // sort could consume the ENTIRE shared budget on repetition alone,
+        // starving out a genuine macro_miss sitting later in the array.
+        // macro_miss now ranks ahead of repetitive/other for the same
+        // reason diet_violation already ranked first: a real, specific
+        // problem shouldn't lose its shot at the shared budget just
+        // because array order happened to put a pile of repetition flags
+        // first.
+        const FLAG_PRIORITY: Record<FlaggedSlot["reason"], number> = {
+          diet_violation: 0,
+          macro_miss: 1,
+          other: 2,
+          repetitive: 3,
+        };
+        const sortedFlags = [...critique.flaggedSlots].sort((a, b) => FLAG_PRIORITY[a.reason] - FLAG_PRIORITY[b.reason]);
 
         // Dedupes flags pointing at the same slot -- found July 16 2026
         // (comprehensive engine test): a critique response flagging the
@@ -1461,19 +1887,34 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
         // spending any budget, not just before acting, so a duplicate
         // costs nothing.
         const processedFlagSlots = new Set<string>();
+        // Same discipline, for the SAME underlying dish appearing at
+        // multiple different slots -- see FLAG_PRIORITY's comment above.
+        // Only the first occurrence of a given duplicated title actually
+        // spends budget; later occurrences of the identical title are
+        // skipped for free. Fixing one occurrence already reduces the
+        // duplicate count by one -- a genuine partial improvement -- even
+        // though it doesn't eliminate every repeat in a single pass, and
+        // it leaves the rest of the shared budget available for whatever
+        // else was flagged.
+        const repairedRepetitiveTitles = new Set<string>();
 
         for (const flag of sortedFlags) {
           const flagSlotKey = `${flag.dayIndex}-${flag.mealType}`;
           if (processedFlagSlots.has(flagSlotKey)) continue;
           processedFlagSlots.add(flagSlotKey);
 
-          if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
-
           const idx = claimResult.claimed.findIndex(
             (c) => c.slotId.dayIndex === flag.dayIndex && c.slotId.mealType === flag.mealType,
           );
           if (idx === -1) continue;
           const existing = claimResult.claimed[idx];
+
+          if (flag.reason === "repetitive") {
+            if (repairedRepetitiveTitles.has(existing.candidate.title)) continue;
+            repairedRepetitiveTitles.add(existing.candidate.title);
+          }
+
+          if (!trySpend(repairBudget, RECIPE_ACTION_COST)) break;
 
           // Snacks and AI-composed meals aren't swapped by this pass —
           // the critic is prompted not to flag composed snacks for
@@ -1485,7 +1926,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // time) but is disclosed rather than silently dropped.
           if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) {
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
             }
             continue;
           }
@@ -1493,8 +1934,16 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           const otherTitlesInPlan = claimResult.claimed.filter((_, i) => i !== idx).map((c) => c.candidate.title);
           // Excludes every recipe already used anywhere in the plan, not
           // just this slot's own — prevents the repair from accidentally
-          // trading one duplicate for a brand-new one elsewhere.
-          const excludeRecipeIds = claimResult.claimed.map((c) => c.candidate.id);
+          // trading one duplicate for a brand-new one elsewhere. Also
+          // excludes anything already removed elsewhere this generation for
+          // being a confirmed bad fit (excludedRecipeKeys) -- this is the
+          // exact site that live-confirmed a recipe correctly removed by
+          // the bad-fit-swap pass earlier could otherwise get pulled back
+          // in here, since diet_violation repairs bypass the macro check
+          // below by design and had no memory of what was already rejected.
+          const excludeRecipeIds = claimResult.claimed
+            .map((c) => c.candidate.id)
+            .concat(knownBadIdsFor(existing.slotId.mealType, excludedRecipeKeys));
           const slotTarget = mealTypeTargets[existing.slotId.mealType];
 
           let swapResult;
@@ -1515,7 +1964,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             if (!isRecoverableSpoonacularError(err)) throw err;
             console.error(`[mealplan] repair swap failed for day ${flag.dayIndex} ${flag.mealType}, keeping original:`, err);
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
             }
             continue;
           }
@@ -1532,19 +1981,21 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
               const composed = await tryAiComposeRepair(existing.slotId, slotTarget);
               if (composed) {
                 releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+                markKnownBad(excludedRecipeKeys, existing.candidate.id, existing.slotId.mealType);
                 claimResult.claimed[idx] = { slotId: existing.slotId, candidate: composed, tier: composed.actualTier ?? "p30" };
                 // AI-composed -- not scored against pantry, still
                 // committed so a later slot doesn't see stock as more
                 // available than it truly is (same rationale as
                 // applyAiComposeResult above).
                 commitPantryConsumption(rankOpts.pantryTracker, composed.ingredients);
+                usedDishTitles.push(composed.title);
                 addons.delete(slotKey(existing.slotId));
                 console.log(
                   `[mealplan] repair accepted (diet_violation, AI-composed) for day ${flag.dayIndex} ${flag.mealType}: ` +
                     `"${existing.candidate.title}" -> "${composed.title}"`,
                 );
               } else {
-                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType, note: flag.note });
+                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
                 console.error(
                   `[mealplan] no safe alternative found for flagged diet_violation, day ${flag.dayIndex} ${flag.mealType}: ${flag.note}`,
                 );
@@ -1567,6 +2018,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           if (accept) {
             const actualTier = swapResult.tier ?? existing.tier;
             releasePantryConsumption(rankOpts.pantryTracker, existing.candidate.ingredients);
+            markKnownBad(excludedRecipeKeys, existing.candidate.id, existing.slotId.mealType);
             claimResult.claimed[idx] = { slotId: existing.slotId, candidate: swapResult.candidate, tier: actualTier };
             commitPantryConsumption(rankOpts.pantryTracker, swapResult.candidate.ingredients);
             // A swapped recipe invalidates any add-on sized for the meal
@@ -1576,6 +2028,20 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             console.log(
               `[mealplan] repair accepted for day ${flag.dayIndex} ${flag.mealType} (${flag.reason}): ` +
                 `"${existing.candidate.title}" -> "${swapResult.candidate.title}"`,
+            );
+          } else {
+            // A real alternative was found and scored, but shouldAcceptRepair
+            // rejected it (not a meaningful improvement, or -- for a
+            // repetitive flag -- still a duplicate elsewhere in the plan).
+            // Previously silent: the flagged slot is kept exactly as
+            // generated, with zero trace anywhere that a repair was even
+            // attempted, let alone why it was abandoned -- live-confirmed
+            // 2026-08-01, a plan with 6 flagged slots produced zero log
+            // lines across the whole repair loop.
+            console.log(
+              `[mealplan] repair rejected for day ${flag.dayIndex} ${flag.mealType} (${flag.reason}): ` +
+                `"${existing.candidate.title}" (score ${oldScore.toFixed(2)}) kept over ` +
+                `"${swapResult.candidate.title}" (score ${newScore.toFixed(2)}) -- not a meaningful improvement`,
             );
           }
         }
@@ -1610,6 +2076,10 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
     `[mealplan] generation done: ${slots.length}/${MEALS_PER_WEEK} claimed, ${blockedSlots.length} blocked, ` +
       `retryQueriesUsed=${retryQueriesUsed}, reconciliation=${reconciliationStatus}, ` +
       `unresolvedDietaryConcerns=${unresolvedDietaryConcerns.length}`,
+  );
+  console.log(
+    `[mealplan] AI-compose retry-with-feedback: rejections=${JSON.stringify(aiComposeRejectionCounts)}, ` +
+      `retryAttempts=${aiComposeRetryAttempts}, retrySuccesses=${aiComposeRetrySuccesses}`,
   );
 
   return {
@@ -1850,7 +2320,7 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
 
   const diet = resolveDiet(input.dietaryStyles);
   const intolerances = resolveIntolerances(input.dietaryStyles);
-  const excludeIngredients = [...input.allergies, ...input.dislikes];
+  const excludeIngredients = [...input.allergies, ...input.dislikes, ...dietaryStyleExcludeKeywords(input.dietaryStyles)];
   const budgetPerMealUsd = input.weeklyBudgetUsd !== null ? input.weeklyBudgetUsd / MEALS_PER_WEEK : null;
 
   const admin = createAdminClient();

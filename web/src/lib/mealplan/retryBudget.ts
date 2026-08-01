@@ -39,6 +39,12 @@ export interface RetryBudget {
 export const RECIPE_ACTION_COST = 3;
 export const ADDON_ATTEMPT_COST = 1;
 
+// The real structural ceiling on recipe-mechanism slots in a week
+// (breakfast/lunch/dinner x 7 days; snacks are composed, not recipe-search
+// -- targets.ts's slotMechanism). Used as a defensive clamp, not a target:
+// no count of "slots needing repair" can ever legitimately exceed this.
+export const RECIPE_SLOTS_PER_WEEK = 21;
+
 // AI composition fallback (aiMealComposition.ts, July 15 2026) — real cost
 // is ~1 Claude call (a separate, non-Spoonacular cost not modeled here) +
 // up to 4 ingredient lookups (protein/carb/fat/one fixed garnish) at the
@@ -47,6 +53,16 @@ export const ADDON_ATTEMPT_COST = 1;
 // approximation, not meant to be exact, same honesty as the ratio above.
 export const AI_COMPOSE_ACTION_COST = 5;
 
+// Retry-with-feedback (2026-07-30): a slot's AI-compose proposal that gets
+// rejected inside composeMealFromProposal today gets zero second chance --
+// this caps how many total attempts (first try + retries) a single slot
+// can spend AI_COMPOSE_ACTION_COST on, so a retry can close a fixable
+// rejection without letting any one slot spend unboundedly. 2 = one first
+// attempt + one retry, not more -- matches this session's established
+// "bounded, not open-ended" discipline for every other retry mechanism in
+// this file.
+export const MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT = 2;
+
 export function createRetryBudget(total = RECIPE_ACTION_COST * 3): RetryBudget {
   return { remaining: total };
 }
@@ -54,13 +70,36 @@ export function createRetryBudget(total = RECIPE_ACTION_COST * 3): RetryBudget {
 // A separate, whole-generation (not per-day) budget for the AI composition
 // fallback — it only ever applies to slots still genuinely blocked after
 // the entire existing recipe-search + reconciliation pipeline has already
-// run, which is rare (a handful of slots at most in real plans seen so
-// far), so it doesn't need day-scoping the way reconciliation does. Sized
-// to attempt up to 10 blocked slots in one generation — comfortably above
-// every real blocked-count observed live so far (max 10), not an
-// arbitrary round number.
-export function createAiComposeBudget(): RetryBudget {
-  return { remaining: AI_COMPOSE_ACTION_COST * 10 };
+// run, so it doesn't need day-scoping the way reconciliation does.
+//
+// Adaptive since 2026-07-28 (was a flat 10 slots, sized off "comfortably
+// above every real blocked-count observed live so far" — that assumption
+// broke for a diet-restricted profile, same bug class as
+// createBadFitSwapBudget below, fixed the same session on that sibling
+// budget but missed here). Live-confirmed on a vegan+nut+soy-allergy
+// profile: 16 real blocked recipe slots in one week, but the flat 10-slot
+// cap let only 10 of them even attempt AI-compose — the other 6 never got
+// a try, not because AI-compose failed for them, purely because the
+// budget ran out first. `count` is the REAL number of blocked recipe
+// slots found this generation (free to compute, no API cost), same
+// "scale to the actual problem" fix as the sibling budget. Clamped at
+// RECIPE_SLOTS_PER_WEEK as a defensive ceiling, not because that many is
+// expected in practice.
+// Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count (2026-07-30, retry-
+// with-feedback): live-confirmed the exact count-sized budget above gave
+// every slot's FIRST attempt a spend, but left literally zero headroom for
+// ANY slot's retry -- the eligibility loop's own per-slot trySpend already
+// exhausts the budget down to 0 by the time the retry pass runs, so
+// orchestrate.ts's pass-2 sweep's trySpend structurally fails 100% of the
+// time regardless of how fixable the rejection was (live-observed: 2 real
+// composition rejections, 0 retry attempts). Sizing for the worst case
+// (every eligible slot needing both its attempts) restores the ordering
+// guarantee pass-2 actually relies on -- first attempts still spend first
+// and can never be starved by an earlier slot's retry, since pass 1 runs
+// to completion before pass 2 ever spends a unit -- while finally giving
+// retries the budget headroom to exist at all.
+export function createAiComposeBudget(count: number): RetryBudget {
+  return { remaining: AI_COMPOSE_ACTION_COST * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT * Math.min(count, RECIPE_SLOTS_PER_WEEK) };
 }
 
 // Bad-fit-but-claimed swap pass (2026-07-21 spec, widened AI-compose
@@ -70,14 +109,26 @@ export function createAiComposeBudget(): RetryBudget {
 // hit 14) could consume the whole thing before this pass ever got a
 // chance to run at all -- observed 3 times in a row, same 2 slots starved
 // every time, even though detection itself (free, no API cost) found
-// them reliably. Sized to 2 attempts: the offline cached-pool survey that
-// motivated this whole feature found ~11.5% of pools are "thin" (1-4
-// candidates), so a typical constrained plan has 1-3 such slots, not
-// more. Additive to the existing blocked-slot budget, not a reallocation
-// of it -- doesn't reduce coverage for the already-shipped, already-tuned
-// blocked-slot path.
-export function createBadFitSwapBudget(): RetryBudget {
-  return { remaining: AI_COMPOSE_ACTION_COST * 2 };
+// them reliably. Additive to the existing blocked-slot budget, not a
+// reallocation of it -- doesn't reduce coverage for the already-shipped,
+// already-tuned blocked-slot path.
+//
+// Adaptive since 2026-07-28 (was a flat 2 attempts, sized from an offline
+// survey finding ~11.5% of pools "thin" -- "a typical constrained plan has
+// 1-3 such slots, not more"). Live-confirmed that assumption breaks for a
+// diet-restricted profile: a vegetarian-cut generation had 6 real null-tier
+// slots in one week, and the flat budget let only 2 of them get repaired
+// (both succeeded when they got the chance -- the mechanism works, it just
+// didn't get enough tries). `count` is the REAL number of null-tier slots
+// found this generation (free to compute -- classifyTier returning null,
+// no API cost), so the budget scales to the actual problem instead of a
+// population-wide average. Clamped at RECIPE_SLOTS_PER_WEEK as a defensive
+// ceiling, not because that many is expected in practice.
+// Widened to MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT x count for the same reason
+// as createAiComposeBudget above (2026-07-30, retry-with-feedback) -- a
+// count-sized budget leaves zero headroom for any slot's retry.
+export function createBadFitSwapBudget(count: number): RetryBudget {
+  return { remaining: AI_COMPOSE_ACTION_COST * MAX_AI_COMPOSE_ATTEMPTS_PER_SLOT * Math.min(count, RECIPE_SLOTS_PER_WEEK) };
 }
 
 // Post-generation plan critique + repair (planCritic.ts/planRepair.ts,
@@ -108,7 +159,7 @@ export function createPlanRepairBudget(): RetryBudget {
 // stale addon on swap but leaves the slot addon-free rather than
 // re-rolling one.
 export function createSelectionAddonBudget(): RetryBudget {
-  return createRetryBudget(21);
+  return createRetryBudget(RECIPE_SLOTS_PER_WEEK);
 }
 
 // No partial spend: returns false (and leaves remaining untouched) if the

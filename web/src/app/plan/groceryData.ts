@@ -23,6 +23,7 @@ import {
 } from "@/lib/grocery/aggregate";
 import { resolveIdentityMatches } from "@/lib/grocery/identityMatch";
 import { resolveLineIdentityRemap } from "@/lib/grocery/lineIdentity";
+import { needsAiNameCheck, resolveIngredientName } from "@/lib/grocery/nameRepair";
 import { resolveConversionRateWithSource } from "@/lib/grocery/unitConversion";
 import {
   aisleCacheKey,
@@ -31,7 +32,7 @@ import {
   UNCATEGORIZED_AISLE,
 } from "@/lib/grocery/ingredientAisle";
 import { lookupIngredientPrice, type ReferenceQuantity } from "@/lib/tavily";
-import { lookupIngredientCost } from "@/lib/spoonacular";
+import { lookupIngredientCost, repairOrRejectIngredientName } from "@/lib/spoonacular";
 import { classifyUnit, toBaseAmount } from "@/lib/grocery/units";
 
 export interface GroceryLineView {
@@ -313,13 +314,40 @@ export async function getGroceryList(
     .select("name, spoonacular_ingredient_id, amount, unit")
     .eq("user_id", userId);
 
-  const slotIngredientLists: SlotIngredientEntry[][] = slotRows.map((row) =>
-    ((row.ingredients as RawSlotIngredient[] | null) ?? []).map((ing) => ({
-      id: ing.id,
-      name: ing.name,
-      metricAmount: ing.metricAmount,
-      metricUnit: ing.metricUnit,
-    })),
+  // Applied here too, not just at Spoonacular ingest time (spoonacular.ts's
+  // mapToCandidate) -- a plan generated/swapped BEFORE this filter existed
+  // already has a garbled name baked into its persisted `ingredients` jsonb
+  // (live-confirmed 2026-07-31: a real plan's grocery list kept rendering
+  // "101.2g to" across repeated fetches), and there's no migration to
+  // retroactively clean already-stored rows. Re-applying the same
+  // repair/reject at read time fixes every existing plan's list immediately
+  // without needing a swap or regeneration.
+  //
+  // A name that survives the fixed-pattern check above but is still
+  // suspiciously long goes through one more, AI-based pass (nameRepair.ts)
+  // for the residual free-text-shaped leaks no fixed pattern can catch
+  // (e.g. a whole recipe title) -- read time only, never at ingest, since
+  // ingest runs over every candidate recipe fetched during generation
+  // (mostly discarded) while this only ever processes a plan's ~35
+  // already-selected slots' worth of ingredients.
+  const slotIngredientLists: SlotIngredientEntry[][] = await Promise.all(
+    slotRows.map(async (row) => {
+      const entries = await Promise.all(
+        ((row.ingredients as RawSlotIngredient[] | null) ?? []).map(async (ing) => {
+          const tier1Name = repairOrRejectIngredientName(ing.name);
+          if (tier1Name === null) return null;
+          const finalName = needsAiNameCheck(tier1Name) ? await resolveIngredientName(tier1Name) : tier1Name;
+          if (finalName === null) return null;
+          return {
+            id: ing.id,
+            name: finalName,
+            metricAmount: ing.metricAmount,
+            metricUnit: ing.metricUnit,
+          };
+        }),
+      );
+      return entries.filter((entry): entry is SlotIngredientEntry => entry !== null);
+    }),
   );
 
   const addonEntries: AddonEntry[] = (addonRows ?? []).map((row) => ({

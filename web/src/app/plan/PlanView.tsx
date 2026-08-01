@@ -12,13 +12,14 @@ import {
 import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { prepNoteFor } from "@/lib/mealplan/staticIngredientMacros";
-import { generatePlan, swapMeal, getRecipeInstructions } from "./actions";
+import { generatePlan, swapMeal, getRecipeInstructions, getAiComposedRecipeInstructions } from "./actions";
 import type { BlockedSlotView, ComposedIngredientView, PlanSlotView, PlanView } from "./data";
 import { PantryPanel } from "./PantryPanel";
 import type { PantryItemView } from "./pantryData";
 import { GroceryList } from "./GroceryList";
 import type { GroceryLineView } from "./groceryData";
 import { fetchGroceryList } from "./groceryActions";
+import { pluralizeUnit } from "./unitFormatting";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -43,20 +44,23 @@ function formatServings(n: number): string {
   return `${rounded} ${rounded === 1 ? "serving" : "servings"}`;
 }
 
-// Composed snacks default to "Combine and eat — no cooking", but a handful
-// of pool ingredients (protein powder, chia/hemp seeds) aren't realistically
-// eaten as a bowl of dry powder/seeds -- swap in the specific prep note for
-// whichever ingredient needs one instead. At most one ingredient per snack
-// ever carries a note (protein-powder variants and chia/hemp seeds each
-// occupy a different, mutually exclusive composeSnack role), so there's
-// never a conflict between two notes.
+// Each pool ingredient's own prep note (if any) is now rendered inline next
+// to that ingredient (see the composedIngredients list in MealCard), not
+// dumped into a single bottom-of-card line -- with oats/edamame added to the
+// pool (2026-07-30) a snack can have TWO ingredients that each carry a note
+// (e.g. "10g oats — cook with water as oatmeal" AND "15g hemp seeds —
+// sprinkle over the oats"), so a footer that could only surface one note
+// silently dropped the other. This footer is now only the true "nothing
+// needs prep" fallback -- and specifically must NOT fire when any ingredient
+// already has a note, since some of those notes (oats) mean cooking IS
+// involved, contradicting a blanket "no cooking" claim.
 function composedSnackFooter(ingredients: ComposedIngredientView[] | null): string {
-  const hasOtherTrackedIngredients = (ingredients?.length ?? 0) > 1;
-  for (const ingredient of ingredients ?? []) {
-    const note = prepNoteFor(ingredient.name, "snack", hasOtherTrackedIngredients);
-    if (note) return `${note} — no cooking`;
-  }
-  return "Combine and eat — no cooking";
+  const list = ingredients ?? [];
+  const anyNote = list.some((ingredient, i) => {
+    const otherNames = list.filter((_, j) => j !== i).map((o) => o.name);
+    return prepNoteFor(ingredient.name, "snack", otherNames) !== null;
+  });
+  return anyNote ? "" : "Combine and eat — no cooking";
 }
 
 // Reconciliation runs per day server-side (orchestrate.ts) — this mirrors
@@ -249,6 +253,32 @@ export function PlanBoard({
         </div>
       )}
 
+      {plan && plan.unresolvedDietaryConcerns.length > 0 && (
+        // Ephemeral, same as blockedSlots -- orchestrate.ts's repair pass
+        // computes this in memory during generation but nothing persists
+        // it, so a reloaded plan can't recover it (see data.ts). A genuine
+        // diet_violation the repair pass tried and failed to fix even
+        // after a real swap attempt and the AI-composition fallback --
+        // expected empty in the overwhelming majority of plans, so this
+        // gets a visually distinct (not just muted-gray) warning treatment
+        // rather than blending in with routine plan-quality notes.
+        <div className="mt-4 rounded-lg border border-amber-600/40 bg-amber-50 p-4 dark:bg-amber-950/30">
+          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+            Couldn&apos;t fully resolve a dietary concern
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-300">
+            {plan.unresolvedDietaryConcerns.map((concern, i) => (
+              <li key={i}>
+                <span className="font-medium">
+                  {DAY_LABELS[concern.dayIndex]} {MEAL_TYPE_LABELS[concern.mealType]}:
+                </span>{" "}
+                {concern.note}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
 
       {usingCachedFallback && (
@@ -259,8 +289,19 @@ export function PlanBoard({
 
       {unsupportedStyles.length > 0 && (
         <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
-          {unsupportedStyles.map((s) => s.replace("_", " ")).join(" / ")} aren&apos;t enforced by our
-          recipe filters yet — please double-check ingredients.
+          {/* A single template literal, not JSX text wrapped across lines --
+              line-wrapped JSX text immediately after an expression silently
+              drops the leading space on compile (see MealCard's addon note
+              above for the same incident), rendering "halalaren't enforced"
+              with no space at all -- live-confirmed 2026-07-31.
+
+              Reworded the same day once openEndedIngredientSafety.ts's
+              halalViolation/kosherViolation shipped real pork/alcohol/
+              shellfish keyword exclusion -- "aren't enforced at all" was
+              no longer accurate, but neither is silently dropping the
+              disclaimer: it's a keyword check, not a certified/zabiha-
+              verified guarantee, so the caveat stays, just corrected. */}
+          {`${unsupportedStyles.map((s) => s.replace("_", " ")).join(" / ")}: recognized pork, alcohol, and shellfish are excluded automatically, but this is a keyword-based check, not a certified or zabiha-verified guarantee — please still double-check ingredients.`}
         </p>
       )}
 
@@ -313,6 +354,7 @@ export function PlanBoard({
                   key={key}
                   mealType={mealType}
                   slot={slot}
+                  mealPlanId={plan.id}
                   blockingHint={blocked?.blockingHint ?? null}
                   swapping={swappingKey === key}
                   onSwap={() => handleSwap(selectedDay, mealType)}
@@ -385,53 +427,102 @@ function MacroPill({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Placeholder for an AI-composed dish, which never has a real photo (2026-
+// 07-30 UI pass -- these cards used to render nothing at all in the image
+// slot, reading as noticeably plainer than every real-recipe card next to
+// them). A plain stroke icon, not a color emoji, to stay monochrome/
+// muted-toned like this app's other glyphs (✕/●/↗ below) rather than
+// introducing a jarring colorful element.
+function ComposedDishPlaceholder() {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-background text-muted">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="15" r="6" />
+        <path d="M9 4c0 1-1 1.2-1 2.2S9 7.4 9 8.4M12 3c0 1-1 1.2-1 2.2s1 1.2 1 2.2M15 4c0 1-1 1.2-1 2.2s1 1.2 1 2.2" />
+      </svg>
+    </div>
+  );
+}
+
 function MealCard({
   mealType,
   slot,
+  mealPlanId,
   blockingHint,
   swapping,
   onSwap,
 }: {
   mealType: MealType;
   slot: PlanSlotView | undefined;
+  mealPlanId: string;
   blockingHint: string | null;
   swapping: boolean;
   onSwap: () => void;
 }) {
   const [showRecipe, setShowRecipe] = useState(false);
-  // Only a real, non-composed recipe has ingredients/instructions worth a
-  // separate detail view — composed snacks/AI-composed meals already show
-  // everything they have (their flat ingredient list) directly on the card.
-  const hasRecipeDetail = !!slot && !slot.isComposed && slot.recipeId !== null;
+  // A real, non-composed recipe has ingredients/instructions worth a
+  // separate detail view via Spoonacular; an AI-composed MEAL now gets the
+  // same detail view too (2026-07-30), with instructions generated on
+  // demand instead of fetched -- see RecipeModal. A plain composed SNACK
+  // still doesn't: it already shows everything it has (its flat ingredient
+  // list + "no cooking" footer) directly on the card, nothing to expand.
+  const hasRecipeDetail = !!slot && !slot.isUnfilled && ((!slot.isComposed && slot.recipeId !== null) || slot.aiComposed);
+  // AI-composed meals never have a real photo (nothing was ever fetched or
+  // matched) -- shown with a placeholder instead of an empty slot, so the
+  // card doesn't read as noticeably plainer than a real-recipe card next
+  // to it. Composed snacks intentionally stay photo-free (they're not
+  // "a dish," just a quick assembled snack).
+  const showPlaceholderImage = !!slot && slot.aiComposed && !slot.imageUrl;
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface">
-      {slot?.imageUrl && (
+      {slot?.imageUrl ? (
         <div className="aspect-4/3 w-full shrink-0 bg-background">
           {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, not worth a next.config remotePatterns entry for a thumbnail */}
           <img src={slot.imageUrl} alt={slot.recipeTitle} loading="lazy" className="h-full w-full object-cover" />
         </div>
+      ) : (
+        showPlaceholderImage && (
+          <div className="aspect-4/3 w-full shrink-0">
+            <ComposedDishPlaceholder />
+          </div>
+        )
       )}
       <div className="flex flex-1 flex-col p-3">
         <p className="text-xs font-semibold tracking-wide text-muted uppercase">{MEAL_TYPE_LABELS[mealType]}</p>
 
-        {slot ? (
+        {slot && !slot.isUnfilled ? (
           <>
             <p className="mt-1 text-sm font-semibold text-foreground">{slot.recipeTitle}</p>
             {slot.matchLabel && <p className="mt-0.5 text-xs text-muted">{slot.matchLabel}</p>}
 
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <MacroPill>{Math.round(slot.calories)} cal</MacroPill>
-              <MacroPill>{Math.round(slot.proteinG)}g protein</MacroPill>
-              <MacroPill>{Math.round(slot.carbsG)}g carbs</MacroPill>
-              <MacroPill>{Math.round(slot.fatG)}g fat</MacroPill>
+              <MacroPill>{Math.round(slot.calories + (slot.addon?.caloriesKcal ?? 0))} cal</MacroPill>
+              <MacroPill>{Math.round(slot.proteinG + (slot.addon?.proteinG ?? 0))}g protein</MacroPill>
+              <MacroPill>{Math.round(slot.carbsG + (slot.addon?.carbsG ?? 0))}g carbs</MacroPill>
+              <MacroPill>{Math.round(slot.fatG + (slot.addon?.fatG ?? 0))}g fat</MacroPill>
             </div>
 
             {slot.isComposed ? (
               slot.composedIngredients && (
-                <p className="mt-2 text-xs text-muted">
-                  {slot.composedIngredients.map((i) => `${Math.round(i.amountG)}g ${i.name}`).join(" + ")}
-                </p>
+                <div className="mt-2 space-y-0.5">
+                  {slot.composedIngredients.map((ingredient, i) => {
+                    const otherNames = slot.composedIngredients!
+                      .filter((_, j) => j !== i)
+                      .map((other) => other.name);
+                    // AI-composed dishes' ingredients (e.g. "diced russet
+                    // potatoes") never match the fixed pool list below, so
+                    // this is a no-op for them -- only real snack-pool
+                    // ingredients (oats, chia/hemp seeds, etc.) get a note.
+                    const note = prepNoteFor(ingredient.name, "snack", otherNames);
+                    return (
+                      <p key={`${ingredient.name}-${i}`} className="text-xs text-muted">
+                        {`${Math.round(ingredient.amountG)}g ${ingredient.name}`}
+                        {note ? ` — ${note}` : ""}
+                      </p>
+                    );
+                  })}
+                </div>
               )
             ) : (
               slot.servings > 1 && (
@@ -455,10 +546,14 @@ function MealCard({
               // as-is -- see staticIngredientMacros.ts's prepNoteFor for why
               // the note only ever points at water or the meal this addon is
               // already attached to, never an untracked outside food.
-              <p className="mt-1 text-xs text-accent-2">
+              // Neutral (text-muted), not accent-2 (2026-07-30 UI pass) --
+              // this is a normal helpful note, same tone as the rest of the
+              // card's small text; the accent color read as a warning/error
+              // next to everything else, which it isn't.
+              <p className="mt-1 text-xs text-muted">
                 {`+ ${Math.round(slot.addon.amountG)}g ${slot.addon.ingredientName} to help hit this week's targets (${Math.round(slot.addon.caloriesKcal)} cal)`}
                 {(() => {
-                  const note = prepNoteFor(slot.addon.ingredientName, "addon", false);
+                  const note = prepNoteFor(slot.addon.ingredientName, "addon", []);
                   return note ? ` — ${note}` : "";
                 })()}
               </p>
@@ -492,10 +587,25 @@ function MealCard({
             </div>
           </>
         ) : (
-          <p className="mt-2 text-xs text-muted">{blockingHint ?? "No recipe matched this meal yet."}</p>
+          // Persona audit 2026-07-31, finding #3 (Phase 4): a persisted
+          // 'unfilled' slot (slot.isUnfilled) carries the honest reason
+          // directly in recipeTitle (see data.ts) -- takes priority over
+          // the ephemeral blockingHint prop, which only exists for the
+          // immediate post-generation render before this slot had a real
+          // row (both describe the same thing once persisted).
+          <p className="mt-2 text-xs text-muted">
+            {slot?.isUnfilled ? slot.recipeTitle : (blockingHint ?? "No recipe matched this meal yet.")}
+          </p>
         )}
       </div>
-      {showRecipe && slot && <RecipeModal slot={slot} onClose={() => setShowRecipe(false)} />}
+      {showRecipe && slot && (
+        <RecipeModal
+          key={`${mealPlanId}-${slot.dayIndex}-${slot.mealType}-${slot.recipeId}-${slot.aiComposed}`}
+          slot={slot}
+          mealPlanId={mealPlanId}
+          onClose={() => setShowRecipe(false)}
+        />
+      )}
     </div>
   );
 }
@@ -506,17 +616,26 @@ function MealCard({
 // every recipe in its corpus does). A modal (not inline expansion) keeps the
 // card grid's height uniform — an inline expansion would shove every other
 // card in the row down whenever one recipe's step list is long.
-function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => void }) {
+function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPlanId: string; onClose: () => void }) {
   const [instructions, setInstructions] = useState<{ steps: string[]; sourceUrl: string | null } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (slot.recipeId === null) return;
+    if (slot.recipeId === null && !slot.aiComposed) return;
     let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-    getRecipeInstructions(slot.recipeId).then((result) => {
+    // AI-composed meals get generated instructions (2026-07-30, on demand,
+    // cached server-side after the first open) instead of a Spoonacular
+    // fetch -- same {steps, error} shape either way, so the render logic
+    // below doesn't need to know which path produced it.
+    const fetchInstructions =
+      slot.aiComposed
+        ? getAiComposedRecipeInstructions({ mealPlanId, dayIndex: slot.dayIndex, mealType: slot.mealType }).then((result) => ({
+            ...result,
+            sourceUrl: null as string | null,
+          }))
+        : getRecipeInstructions(slot.recipeId!);
+    fetchInstructions.then((result) => {
       if (cancelled) return;
       setLoading(false);
       if (result.error) {
@@ -528,7 +647,7 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
     return () => {
       cancelled = true;
     };
-  }, [slot.recipeId]);
+  }, [slot.recipeId, slot.aiComposed, slot.dayIndex, slot.mealType, mealPlanId]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -547,11 +666,17 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
         className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
-        {slot.imageUrl && (
+        {slot.imageUrl ? (
           <div className="aspect-16/9 w-full shrink-0 bg-background">
             {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, same as the card thumbnail above */}
             <img src={slot.imageUrl} alt={slot.recipeTitle} className="h-full w-full object-cover" />
           </div>
+        ) : (
+          slot.aiComposed && (
+            <div className="aspect-16/9 w-full shrink-0">
+              <ComposedDishPlaceholder />
+            </div>
+          )
         )}
         <div className="overflow-y-auto p-4">
           <div className="flex items-start justify-between gap-3">
@@ -581,6 +706,24 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
                 {slot.recipeIngredients.map((ing, i) => (
                   <li key={i}>
                     {formatIngredientAmount(ing.amount, ing.unit)} {ing.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* AI-composed meals have no recipeIngredients (no real recipe
+              was ever fetched) -- same layout as the block above, reusing
+              the composedIngredients data already shown on the card
+              itself, just styled to match a real recipe's Ingredients
+              section (2026-07-30, "similar UI to real Spoonacular meals"). */}
+          {slot.aiComposed && slot.composedIngredients && slot.composedIngredients.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Ingredients</h3>
+              <ul className="mt-2 flex flex-col gap-1 text-sm text-foreground">
+                {slot.composedIngredients.map((ing, i) => (
+                  <li key={i}>
+                    {Math.round(ing.amountG)}g {ing.name}
                   </li>
                 ))}
               </ul>
@@ -628,5 +771,5 @@ function RecipeModal({ slot, onClose }: { slot: PlanSlotView; onClose: () => voi
 // cook would ever actually measure.
 function formatIngredientAmount(amount: number, unit: string): string {
   const rounded = Math.round(amount * 10) / 10;
-  return unit ? `${rounded} ${unit}` : `${rounded}`;
+  return unit ? `${rounded} ${pluralizeUnit(unit, rounded)}` : `${rounded}`;
 }

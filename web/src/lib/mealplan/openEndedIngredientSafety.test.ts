@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { isOpenEndedIngredientUnsafeFor, anyIngredientUnsafeFor, isRecipeTitleUnsafeFor, type DietaryContext } from "./openEndedIngredientSafety";
+import {
+  isOpenEndedIngredientUnsafeFor,
+  anyIngredientUnsafeFor,
+  isRecipeTitleUnsafeFor,
+  dietaryStyleExcludeKeywords,
+  condimentRiskWarnings,
+  type DietaryContext,
+} from "./openEndedIngredientSafety";
 
 const NONE: DietaryContext = { dietaryStyles: [], allergies: [], dislikes: [] };
 
@@ -354,6 +361,111 @@ describe("synonym and vegetarian/vegan keyword completeness (audit round 3, July
   });
 });
 
+// Persona audit 2026-07-31, live diet-filter test: bare "beef" doesn't catch
+// a recipe/title naming only the specific cut ("flank steak," "pot roast")
+// with no separate "beef"/"meat" word anywhere -- 3 real Spoonacular
+// recipes would have slipped past unflagged. Deliberately fully-qualified
+// cut names, not bare "steak"/"roast" (see NON_VEGETARIAN_KEYWORDS's own
+// comment for why those two bare words are NOT added -- real collision
+// risk with "cauliflower steak"/"roasted vegetables").
+describe("beef-cut/roast compounds (persona audit follow-up, 2026-07-31)", () => {
+  const VEGETARIAN: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
+
+  it("catches the exact real recipe titles/ingredients that slipped through live", () => {
+    expect(isRecipeTitleUnsafeFor("Marinated Flat Iron Steak", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Spinach and Gorgonzola Stuffed Flank Steak", VEGETARIAN)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Instant Pot Pressure Cooker Pot Roast", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("flank steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("flat iron steak", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("catches other common beef-cut and roast compounds", () => {
+    expect(isOpenEndedIngredientUnsafeFor("sirloin steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("ribeye steak", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roast beef sandwich", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("chuck roast", VEGETARIAN)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("prime rib", VEGETARIAN)).not.toBeNull();
+  });
+
+  it("does NOT flag a vegetable dish using the same 'steak'/'roasted' naming convention", () => {
+    // These are real, common vegetarian dish names -- bare "steak"/"roast"
+    // are deliberately NOT keywords for exactly this reason.
+    expect(isOpenEndedIngredientUnsafeFor("cauliflower steak", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("portobello steak", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roasted red peppers", VEGETARIAN)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("roasted vegetables", VEGETARIAN)).toBeNull();
+    expect(isRecipeTitleUnsafeFor("Cauliflower Steak with Chimichurri", VEGETARIAN)).toBeNull();
+  });
+});
+
+// Live-confirmed 2026-07-31 (persona audit): a "halal" profile got pork
+// (ham hocks, salt pork) and white wine served across a real generated
+// week -- halal/kosher had zero keyword coverage anywhere before this.
+describe("halal/kosher keyword enforcement (persona audit, 2026-07-31)", () => {
+  const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+  const KOSHER: DietaryContext = { dietaryStyles: ["kosher"], allergies: [], dislikes: [] };
+
+  it("catches the exact real violations found live: ham hocks, salt pork, white wine", () => {
+    expect(isOpenEndedIngredientUnsafeFor("ham hocks", HALAL)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("salt pork", HALAL)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("white wine", HALAL)).not.toBeNull();
+  });
+
+  it("catches pork and shellfish for kosher", () => {
+    expect(isOpenEndedIngredientUnsafeFor("bacon", KOSHER)).not.toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("shrimp", KOSHER)).not.toBeNull();
+  });
+
+  it("does not flag alcohol for kosher (not part of the checkable subset) or shellfish for halal", () => {
+    expect(isOpenEndedIngredientUnsafeFor("white wine", KOSHER)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("shrimp", HALAL)).toBeNull();
+  });
+
+  it("does not flag anything when neither style is set", () => {
+    expect(isOpenEndedIngredientUnsafeFor("ham hocks", NONE)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("white wine", NONE)).toBeNull();
+  });
+
+  it("does not false-positive on non-alcoholic 'beer' and 'wine' compounds", () => {
+    expect(isOpenEndedIngredientUnsafeFor("root beer", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("ginger beer", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("red wine vinegar", HALAL)).toBeNull();
+  });
+
+  it("does not false-positive on an unrelated ordinary ingredient", () => {
+    expect(isOpenEndedIngredientUnsafeFor("chickpeas", HALAL)).toBeNull();
+    expect(isOpenEndedIngredientUnsafeFor("chickpeas", KOSHER)).toBeNull();
+  });
+});
+
+describe("dietaryStyleExcludeKeywords", () => {
+  it("returns pork + alcohol words for halal", () => {
+    const words = dietaryStyleExcludeKeywords(["halal"]);
+    expect(words).toContain("pork");
+    expect(words).toContain("wine");
+    expect(words).not.toContain("shrimp");
+  });
+
+  it("returns pork + shellfish words for kosher", () => {
+    const words = dietaryStyleExcludeKeywords(["kosher"]);
+    expect(words).toContain("pork");
+    expect(words).toContain("shrimp");
+    expect(words).not.toContain("wine");
+  });
+
+  it("de-duplicates pork appearing in both when both styles are set", () => {
+    const words = dietaryStyleExcludeKeywords(["halal", "kosher"]);
+    expect(words.filter((w) => w === "pork")).toHaveLength(1);
+    expect(words).toContain("wine");
+    expect(words).toContain("shrimp");
+  });
+
+  it("returns an empty list when neither style is set", () => {
+    expect(dietaryStyleExcludeKeywords(["vegetarian"])).toEqual([]);
+    expect(dietaryStyleExcludeKeywords([])).toEqual([]);
+  });
+});
+
 describe("anyIngredientUnsafeFor", () => {
   it("returns a reason if any ingredient in the list is unsafe", () => {
     const ctx: DietaryContext = { dietaryStyles: ["vegetarian"], allergies: [], dislikes: [] };
@@ -426,5 +538,70 @@ describe("isRecipeTitleUnsafeFor", () => {
   it("is case-insensitive", () => {
     expect(isRecipeTitleUnsafeFor("HAM AND SWISS PANINI", VEGETARIAN)).not.toBeNull();
     expect(isRecipeTitleUnsafeFor("vegan CHICKEN nuggets", VEGETARIAN)).toBeNull();
+  });
+
+  it("catches the exact real recipe title that slipped through live (2026-07-31 persona audit)", () => {
+    const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+    expect(isRecipeTitleUnsafeFor("Cassoulet for 10", HALAL)).toBeNull(); // title alone names nothing unsafe -- confirms this needs the ingredient-level check, not a title-only gap
+    expect(isRecipeTitleUnsafeFor("Chicken Farfalle with Low-Fat Alfredo Sauce", HALAL)).toBeNull(); // same -- "white wine" was in the ingredient list, not the title
+  });
+
+  it("catches pork/alcohol named directly in a title for halal, and pork/shellfish for kosher", () => {
+    const HALAL: DietaryContext = { dietaryStyles: ["halal"], allergies: [], dislikes: [] };
+    const KOSHER: DietaryContext = { dietaryStyles: ["kosher"], allergies: [], dislikes: [] };
+    expect(isRecipeTitleUnsafeFor("Braised Pork Belly Ramen", HALAL)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Red Wine Braised Short Ribs", HALAL)).not.toBeNull();
+    expect(isRecipeTitleUnsafeFor("Bacon Wrapped Shrimp Skewers", KOSHER)).not.toBeNull();
+  });
+});
+
+// Persona audit 2026-07-31, finding #3: mealProposer.ts's "fixed" role
+// (garnishes/condiments) had zero safe-suggestion steering, unlike the
+// "protein" role's safeProteinExamples -- these warnings are advisory
+// prompt hints only, gated on the same synonym groups this file's real
+// safety gate already trusts, never a substitute for it.
+describe("condimentRiskWarnings", () => {
+  it("warns about soy sauce/tamari/miso for a soy allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["soy"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("soy sauce");
+    expect(warnings).toContain("tamari");
+    expect(warnings).toContain("miso");
+  });
+
+  it("warns about honey for a vegan profile but not a merely vegetarian one", () => {
+    const VEGAN: DietaryContext = { ...NONE, dietaryStyles: ["vegan"] };
+    const VEGETARIAN: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"] };
+    expect(condimentRiskWarnings(VEGAN).join(" ").toLowerCase()).toContain("honey");
+    expect(condimentRiskWarnings(VEGETARIAN).join(" ").toLowerCase()).not.toContain("honey");
+  });
+
+  it("warns about fish/oyster sauce for a vegetarian profile even with no explicit fish allergy", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("fish sauce");
+    expect(warnings).toContain("oyster sauce");
+  });
+
+  it("warns about mayonnaise/aioli for an egg allergy", () => {
+    const ctx: DietaryContext = { ...NONE, allergies: ["eggs"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("mayonnaise");
+    expect(warnings).toContain("aioli");
+  });
+
+  it("warns about butter/cream/parmesan for a dairy_free dietary style, not just a literal dairy allergy", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["dairy_free"] };
+    const warnings = condimentRiskWarnings(ctx).join(" ").toLowerCase();
+    expect(warnings).toContain("parmesan");
+  });
+
+  it("returns nothing for an unrestricted profile", () => {
+    expect(condimentRiskWarnings(NONE)).toEqual([]);
+  });
+
+  it("does not warn about soy for a profile with no soy restriction", () => {
+    const ctx: DietaryContext = { ...NONE, dietaryStyles: ["vegetarian"], allergies: ["nuts"] };
+    expect(condimentRiskWarnings(ctx).join(" ").toLowerCase()).not.toContain("soy sauce");
   });
 });

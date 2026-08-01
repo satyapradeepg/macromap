@@ -12,6 +12,7 @@ const MODEL = "claude-sonnet-5";
 
 import type { MacroTargets } from "./targets";
 import type { MealProposal, MealRole } from "./aiMealComposition";
+import { condimentRiskWarnings } from "./openEndedIngredientSafety";
 
 export interface ProposeMealInput {
   mealType: "breakfast" | "lunch" | "dinner";
@@ -20,6 +21,21 @@ export interface ProposeMealInput {
   allergies: string[];
   dislikes: string[];
   pantryItemNames: string[];
+  // Retry-with-feedback (2026-07-30): set only on a retry attempt for a
+  // slot whose first AI-compose attempt was rejected -- one plain-English
+  // sentence (aiMealComposition.ts's describeRejectionForFeedback) telling
+  // Claude concretely what went wrong last time, so the retry isn't just a
+  // blind re-roll of the same doomed proposal.
+  priorAttemptFeedback?: string;
+  // Variety/repetition follow-up (2026-07-30, same comprehensive audit
+  // that found the carb-pool/protein-pool gaps): dish titles already
+  // claimed elsewhere in THIS generation (real recipes and earlier
+  // AI-composed picks alike) -- live-confirmed the AI-compose path has no
+  // memory across separate propose calls, so the same obvious dish (e.g.
+  // "Seitan Stir-Fry with Rice and Broccoli") gets proposed repeatedly for
+  // similar targets even on an UNRESTRICTED profile, not just a
+  // corpus-scarce one.
+  avoidDishNames?: string[];
 }
 
 // constraintCheck (added 2026-07-22, stacked-safety investigation):
@@ -48,6 +64,25 @@ const CONSTRAINT_CHECK_FIELD = {
     "For EACH ingredient listed above, name it and explicitly confirm it does not conflict with any dietary style, allergy, or dislike stated in the prompt -- check hidden/derived forms too (seitan = wheat gluten, most protein powder = dairy or soy, cheese/yogurt/butter = dairy, almonds/cashews/walnuts = tree nuts, tofu/tempeh/edamame = soy). If you find a real conflict while writing this, go back and replace that ingredient above before finalizing -- never report a conflict here and submit the same ingredient anyway.",
 };
 
+// Persona audit 2026-07-31, finding #6: live-confirmed a real dish titled
+// "Tempeh and Broccoli Stir-Fry with Rice Noodles" whose actual
+// ingredients never included rice noodles at all -- traced via the
+// slot's own match_label, which DID correctly disclose a different drop
+// that same generation (tempeh's portion capped), proving the disclosure
+// mechanism works; there was simply nothing to disclose for rice noodles
+// because it was never proposed as an ingredient in the first place, just
+// named in the dish title. Same mechanical shape as CONSTRAINT_CHECK_FIELD
+// -- a REQUIRED schema field positioned AFTER `ingredients` (and before
+// constraintCheck) so it's generated as a genuine re-check of the
+// already-written title/ingredients, not filled in parallel with them.
+// Purely additive -- validateProposal never reads or enforces its
+// content, same as constraintCheck.
+const TITLE_INGREDIENT_CHECK_FIELD = {
+  type: "string",
+  description:
+    "Check the dish name above against the ingredients you just listed: does the name mention any specific ingredient, dish component, or preparation (e.g. \"Rice Noodles\", \"Melted Cheese\", \"with Bacon\") that is NOT actually one of your listed ingredients? If you find a mismatch while writing this, go back and revise the dish name above to remove that reference before finalizing -- never name something in the title that you didn't actually include as an ingredient.",
+};
+
 const PROPOSE_MEAL_TOOL = {
   name: "propose_meal",
   description: "Propose a real, realistic dish and its ingredient list to fill a meal slot.",
@@ -67,9 +102,10 @@ const PROPOSE_MEAL_TOOL = {
           required: ["name", "role"],
         },
       },
+      titleIngredientCheck: TITLE_INGREDIENT_CHECK_FIELD,
       constraintCheck: CONSTRAINT_CHECK_FIELD,
     },
-    required: ["dishName", "ingredients", "constraintCheck"],
+    required: ["dishName", "ingredients", "titleIngredientCheck", "constraintCheck"],
   },
 };
 
@@ -101,12 +137,28 @@ const PROPOSE_MEAL_TOOL = {
 // is a slight overestimate of the true remaining gap, not an exact match.
 const LENTILS_REALISTIC_PROTEIN_CEILING_G = 22;
 
+// Persona audit 2026-07-31, finding #5: live-confirmed real macro-deviation
+// data across a real vegetarian+nut-allergy week -- tempeh got suggested
+// (and picked) for demanding targets it structurally can't reach, missing
+// by as much as -15g protein on one dinner-scale target (~61g), the same
+// failure shape lentils were already fixed for above. Real density
+// verified live just now via Spoonacular's own ingredient database:
+// 18.54g protein/100g (id 16114). Within the realistic 280g portion cap
+// (aiMealComposition.ts's PORTION_BOUNDS_G.protein.max), that's a hard
+// ceiling of ~52g protein -- same "slight overestimate of the true
+// remaining gap, not an exact match" caveat as lentils' own ceiling above.
+const TEMPEH_REALISTIC_PROTEIN_CEILING_G = 52;
+
 const PROTEIN_EXAMPLES: Array<{
   name: string;
   conflictsWith: (ctx: { dietaryStyles: string[]; allergies: string[] }, targetProteinG?: number) => boolean;
 }> = [
   { name: "seitan", conflictsWith: (ctx) => ctx.dietaryStyles.includes("gluten_free") || ctx.allergies.some((a) => /wheat|gluten/i.test(a)) },
-  { name: "tempeh", conflictsWith: (ctx) => ctx.allergies.some((a) => /soy|soya/i.test(a)) },
+  {
+    name: "tempeh",
+    conflictsWith: (ctx, targetProteinG) =>
+      ctx.allergies.some((a) => /soy|soya/i.test(a)) || (targetProteinG !== undefined && targetProteinG > TEMPEH_REALISTIC_PROTEIN_CEILING_G),
+  },
   // Added July 16 2026, same live test as the tempeh fix above: once
   // tempeh/seitan/cheese/meat are all filtered out for a vegan+soy+nut+
   // dairy-restricted profile, "lentils" was the only example left --
@@ -150,27 +202,31 @@ export function safeProteinExamples(ctx: { dietaryStyles: string[]; allergies: s
 }
 
 export function buildPrompt(input: ProposeMealInput): string {
-  const { mealType, target, dietaryStyles, allergies, dislikes, pantryItemNames } = input;
+  const { mealType, target, dietaryStyles, allergies, dislikes, pantryItemNames, priorAttemptFeedback, avoidDishNames } = input;
+  const condimentWarnings = condimentRiskWarnings({ dietaryStyles, allergies, dislikes });
   return `Propose a realistic ${mealType} to hit these targets as closely as a normal-sized portion reasonably can:
 - ${Math.round(target.calories)} calories
 - ${Math.round(target.proteinG)}g protein
 - ${Math.round(target.carbsG)}g carbs
 - ${Math.round(target.fatG)}g fat
 
-Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
+Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free; if halal or kosher is listed below, that means no pork/bacon/ham and no alcohol/wine/beer/rum as an ingredient -- gelatin and marshmallows are frequently pork-derived, and a wine/beer-based sauce or marinade still counts even if it's "cooked off"; kosher additionally means no shellfish):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
 - Allergies (absolute, safety-critical -- think about hidden forms, not just the literal word): ${allergies.length ? allergies.join(", ") : "none"}
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
 
 ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuinely fit the dish, but never at the expense of the constraints above or of realism): ${pantryItemNames.join(", ")}` : ""}
 
+${avoidDishNames && avoidDishNames.length ? `Dishes already used elsewhere in this week's plan -- propose something meaningfully different, not another close variant of one of these: ${avoidDishNames.join(", ")}` : ""}
+
 Requirements for your proposal:
 1. Name a REAL, coherent, recognizable dish for ${mealType} -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
-2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
-3. The "protein" ingredient MUST be dense enough to plausibly hit the protein target within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it -- pick something that's actually protein-dense enough for how much protein is actually needed here. Concretely: most beans/legumes/lentils are only ~8-10g protein per 100g, capping out around 25g protein even at a generous 250-280g portion -- if the protein target above is meaningfully higher than that, a bean/legume/lentil source alone cannot get there no matter how it's portioned; reach for a denser option instead. Options that fit the constraints above for this meal: ${safeProteinExamples({ dietaryStyles, allergies }, target.proteinG).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
+2. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.${condimentWarnings.length ? ` For the "fixed" role specifically, do NOT reach for: ${condimentWarnings.join("; ")} -- these are common flavorings/garnishes that conflict with the constraints above, even though they may feel natural for some cuisines.` : ""}
+${priorAttemptFeedback ? `IMPORTANT -- your previous proposal for this exact slot was rejected: ${priorAttemptFeedback} Fix this specific problem in your new proposal below; don't just repeat the same choice.\n\n` : ""}3. The "protein" ingredient MUST be dense enough to plausibly hit the protein target within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it -- pick something that's actually protein-dense enough for how much protein is actually needed here. Concretely: most beans/legumes/lentils are only ~8-10g protein per 100g, capping out around 25g protein even at a generous 250-280g portion -- if the protein target above is meaningfully higher than that, a bean/legume/lentil source alone cannot get there no matter how it's portioned; reach for a denser option instead. Options that fit the constraints above for this meal: ${safeProteinExamples({ dietaryStyles, allergies }, target.proteinG).join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
 4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 5. Watch the carb budget, not just protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit the protein target on its own can easily blow the carb budget before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If the carb target is not generously larger than the protein target, prefer whichever option from the list in requirement 3 is protein-dense with the LEAST carbs of its own, so the carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve the carb budget well.
-6. Fill in "constraintCheck" LAST, after you've picked every ingredient above -- go through each one by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict while doing this, go back and swap that ingredient before submitting; never report a conflict in this field and submit the same ingredient anyway.`;
+6. Fill in "titleIngredientCheck" after picking every ingredient: re-read the dish name you gave above and confirm it doesn't name any ingredient, component, or preparation that isn't actually in your ingredients list (e.g. a title mentioning "Rice Noodles" or "Melted Cheese" that you never actually included). If you find a mismatch, go back and revise the dish name before finalizing.
+7. Fill in "constraintCheck" LAST, after you've picked every ingredient above -- go through each one by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict while doing this, go back and swap that ingredient before submitting; never report a conflict in this field and submit the same ingredient anyway.`;
 }
 
 export async function proposeMealViaClaude(input: ProposeMealInput): Promise<MealProposal | null> {
@@ -225,6 +281,9 @@ export interface ProposeMealsBatchInput {
   allergies: string[];
   dislikes: string[];
   pantryItemNames: string[];
+  // Variety/repetition follow-up (2026-07-30) -- same field/rationale as
+  // ProposeMealInput.avoidDishNames above, for the batch path.
+  avoidDishNames?: string[];
 }
 
 const PROPOSE_MEALS_BATCH_TOOL = {
@@ -256,9 +315,10 @@ const PROPOSE_MEALS_BATCH_TOOL = {
                 required: ["name", "role"],
               },
             },
+            titleIngredientCheck: TITLE_INGREDIENT_CHECK_FIELD,
             constraintCheck: CONSTRAINT_CHECK_FIELD,
           },
-          required: ["dishName", "targetCalories", "targetProteinG", "targetCarbsG", "targetFatG", "ingredients", "constraintCheck"],
+          required: ["dishName", "targetCalories", "targetProteinG", "targetCarbsG", "targetFatG", "ingredients", "titleIngredientCheck", "constraintCheck"],
         },
       },
     },
@@ -267,7 +327,7 @@ const PROPOSE_MEALS_BATCH_TOOL = {
 };
 
 export function buildBatchPrompt(input: ProposeMealsBatchInput): string {
-  const { slots, aggregateTarget, dietaryStyles, allergies, dislikes, pantryItemNames } = input;
+  const { slots, aggregateTarget, dietaryStyles, allergies, dislikes, pantryItemNames, avoidDishNames } = input;
   const slotLines = slots
     .map(
       (s, i) =>
@@ -283,6 +343,10 @@ export function buildBatchPrompt(input: ProposeMealsBatchInput): string {
   // by construction: might exclude lentils for a slot that would've been
   // fine with it, never the reverse.
   const maxSlotProteinG = Math.max(...slots.map((s) => s.target.proteinG));
+  // Same "fixed" role condiment/garnish steering as buildPrompt above --
+  // gated on the whole profile, not any one slot, since every dish in the
+  // batch shares the same dietary constraints.
+  const condimentWarnings = condimentRiskWarnings({ dietaryStyles, allergies, dislikes });
   // Computed once, reused below in both the concentration-guidance
   // paragraph and requirement 4 -- found live 2026-07-22 (stacked-safety
   // investigation) that the concentration-guidance paragraph hardcoded
@@ -309,22 +373,25 @@ The individual numbers above are each slot's own even share, but what actually m
 
 You do NOT need every single dish to hit its own individual share exactly -- each meal you propose has its OWN target fields (targetCalories/targetProteinG/targetCarbsG/targetFatG) that you set yourself, and THOSE are what actually get used, not the even share shown above. If a slot's own protein share is demanding for a normal single-meal portion (roughly above 50g), the most reliable strategy is to CONCENTRATE rather than spread evenly: pick the single densest protein source that's still safe for this profile (see the constraints below and the filtered options in requirement 4: ${proteinExamples.join(", ")}) for 1-2 of these dishes, set THEIR targetProteinG notably higher than that slot's even share, and set the REMAINING dishes' targetProteinG lower (leaning more on carbs/fat instead) -- their targetCalories should still add up sensibly with the lower protein. This is much more likely to produce realistic portions across the whole batch than asking every dish to independently hit a demanding number. Only aim for near-even targets across dishes if every slot's own share is already easily achievable. Every dish's targets, added together, should land close to the combined total above -- exact precision isn't required (it will be auto-corrected), but a genuinely deliberate allocation is.
 
-Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free):
+Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free; if halal or kosher is listed below, that means no pork/bacon/ham and no alcohol/wine/beer/rum as an ingredient -- gelatin and marshmallows are frequently pork-derived, and a wine/beer-based sauce or marinade still counts even if it's "cooked off"; kosher additionally means no shellfish):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
 - Allergies (absolute, safety-critical -- think about hidden forms, not just the literal word): ${allergies.length ? allergies.join(", ") : "none"}
 - Dislikes (avoid these ingredients entirely): ${dislikes.length ? dislikes.join(", ") : "none"}
 
 ${pantryItemNames.length ? `Pantry on hand (prefer using these where they genuinely fit a dish, but never at the expense of the constraints above or of realism): ${pantryItemNames.join(", ")}` : ""}
 
+${avoidDishNames && avoidDishNames.length ? `Dishes already used elsewhere in this week's plan -- every dish in this batch should be meaningfully different from these, and different from each other too: ${avoidDishNames.join(", ")}` : ""}
+
 Requirements for EACH proposal:
 1. Name a REAL, coherent, recognizable dish for its meal type -- not an arbitrary bag of ingredients. Someone should read the name and immediately picture a real meal.
 2. Set this dish's OWN targetCalories/targetProteinG/targetCarbsG/targetFatG deliberately (see the concentration guidance above) -- this is your real allocation for this specific dish, not a copy of the slot's even share.
-3. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.
+3. Pick exactly one ingredient for each of the "protein", "carb", and "fat" roles, plus 0-2 small "fixed" ones for realism (a vegetable side, a garnish, a spice) -- fixed ones don't need to hit any macro, just be a normal small serving.${condimentWarnings.length ? ` For the "fixed" role specifically, do NOT reach for: ${condimentWarnings.join("; ")} -- these are common flavorings/garnishes that conflict with the constraints above, even though they may feel natural for some cuisines.` : ""}
 4. Each "protein" ingredient MUST be dense enough to plausibly hit THIS DISH'S OWN targetProteinG (the number you set above, not the slot's even share) within a NORMAL single-meal portion (roughly 100-250g). Do not pick a low-density ingredient like plain tofu for a demanding protein target and expect a huge portion to make up for it. Concretely: most beans/legumes/lentils are only ~8-10g protein per 100g, capping out around 25g protein even at a generous 250-280g portion -- if a dish's own targetProteinG is meaningfully higher than that, a bean/legume/lentil source alone cannot get there no matter how it's portioned; reach for a denser option instead for that dish. Options that fit the constraints above: ${proteinExamples.join(", ")}. These are only starting points, not a fixed list -- the ingredient you pick must still respect every dietary style, allergy, and dislike listed above; never suggest one of these (or anything else) if it conflicts with a constraint above, even if it would otherwise be a great protein source.
 5. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 6. Watch each dish's own carb budget, not just its protein: a starchy legume or grain (lentils, quinoa, rice, beans) sized to hit a dish's targetProteinG on its own can easily blow that dish's targetCarbsG before the "carb" ingredient is even added -- e.g. enough lentils for 24g protein already carries ~50g of carbs. If a dish's carb allocation is not generously larger than its protein allocation, prefer whichever option from the list in requirement 4 is protein-dense with the LEAST carbs of its own for THAT dish, so its carb ingredient has real room left to contribute -- do not reach for a new option outside that already-filtered list just to solve this. Never let this reasoning override a constraint above -- re-check every ingredient you're about to pick against the dietary style, allergies, and dislikes listed above before finalizing, even if a conflicting one would otherwise solve a dish's carb budget well.
-7. Fill in each dish's "constraintCheck" LAST, after you've picked every ingredient for it -- go through each one by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict while doing this, go back and swap that ingredient before submitting; never report a conflict in this field and submit the same ingredient anyway.
-8. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
+7. Fill in each dish's "titleIngredientCheck" after picking its ingredients: re-read that dish's name and confirm it doesn't name any ingredient, component, or preparation that isn't actually in that dish's ingredients list (e.g. a title mentioning "Rice Noodles" or "Melted Cheese" that you never actually included). If you find a mismatch, go back and revise that dish's name before finalizing.
+8. Fill in each dish's "constraintCheck" LAST, after you've picked every ingredient for it -- go through each one by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict while doing this, go back and swap that ingredient before submitting; never report a conflict in this field and submit the same ingredient anyway.
+9. Return exactly ${slots.length} meals in the "meals" array, in the same order the slots were listed above.`;
 }
 
 // Pairs a validated proposal with its OWN per-dish target -- the thing

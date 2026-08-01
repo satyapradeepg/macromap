@@ -115,6 +115,28 @@ function namesOverlap(a: string, b: string): boolean {
   return wordBoundaryIncludes(a, b) || wordBoundaryIncludes(b, a);
 }
 
+// Grocery-duplicates investigation, 2026-07-31: real bug found live --
+// resolveLineIdentityRemap (lineIdentity.ts, LLM-confirmed) correctly
+// canonicalized "bell pepper" and "red pepper" to the same id, but
+// clusterByNameOverlap below (this id bucket's OWN plausibility re-check,
+// same purpose as the gluten/seitan-cutlets fix) then silently split them
+// right back apart, since neither name is a substring of the other --
+// undoing a real, already-confirmed identity match. Deliberately a
+// SEPARATE function from namesOverlap above, applied ONLY at
+// clusterByNameOverlap's one call site below, NOT folded into the shared
+// namesOverlap -- that function is also used by matchesPantryItem, where
+// this looser rule has a worse failure mode (a pantry "black pepper"
+// wrongly excluding a needed "bell pepper" from the shopping list
+// entirely, not just a display-line miscount) and doesn't have
+// clusterByNameOverlap's own belt to compensate. Same 2+-words-and-exact-
+// last-word-match scope as lineIdentity.ts's own copy of this rule.
+function sharesLastWord(a: string, b: string): boolean {
+  const wordsA = a.trim().split(/\s+/);
+  const wordsB = b.trim().split(/\s+/);
+  if (wordsA.length < 2 || wordsB.length < 2) return false;
+  return wordsA[wordsA.length - 1] === wordsB[wordsB.length - 1];
+}
+
 function matchesPantryItem(line: GroceryLine, item: PantryExclusionItem): boolean {
   if (item.spoonacularIngredientId !== null) {
     return line.ingredientId === item.spoonacularIngredientId;
@@ -270,6 +292,16 @@ function normalizeUnit(unit: string): string {
   return unit.toLowerCase().trim();
 }
 
+// Strips a single trailing "s" so mergeConvertibleLines' "other"-category
+// reconciliation (below) can recognize "clove"/"cloves", "serving"/
+// "servings" etc. as the same real unit -- never applied to a blank unit
+// (already handled separately) or used to compare two DIFFERENT words
+// (e.g. "clove" vs "slice" still correctly stay distinct, since their
+// stems differ too).
+function stemOtherUnit(normalizedUnit: string): string {
+  return normalizedUnit.endsWith("s") && normalizedUnit.length > 1 ? normalizedUnit.slice(0, -1) : normalizedUnit;
+}
+
 // Spoonacular's own extendedIngredients[].id is passed through unfiltered
 // by spoonacular.ts's mapToCandidate -- and it returns a non-positive
 // placeholder (confirmed live 2026-07-25: id -1 for "mayonaisse", a
@@ -295,6 +327,79 @@ function groupingKey(entry: FlatEntry): string {
   return isValidIngredientId(entry.id) ? `id:${entry.id}` : `name:${entry.name.toLowerCase().trim()}`;
 }
 
+// Reuses this file's own wordBoundaryIncludes/namesOverlap (already
+// defined above for pantry matching) -- decides whether two entries
+// sharing a Spoonacular ingredient id are even PLAUSIBLY the same
+// purchasable item before grouping/summing them at all. Spoonacular's own
+// ingredient-text parser can resolve a completely different mention to
+// an established product's id -- live-confirmed 2026-07-31: "gluten" (a
+// bread recipe's small vital-wheat-gluten additive, ~1.6 Tbsp) resolved
+// to id 93654, which Spoonacular's own /information endpoint confirms is
+// canonically "seitan cutlets" (category "meat substitute"). groupingKey
+// above trusts the id alone, so this silently summed that 1.6 Tbsp into
+// ~1.7kg of real seitan-cutlets servings from other meals, picked "Tbsp"
+// as the display unit for the combined pile, and labeled the whole
+// absurd result "gluten" (whichever entry happened to be first) --
+// rendered live as "122 Tbsps gluten". This is a cheap, zero-cost
+// plausibility gate: it can only ever SPLIT a group that would otherwise
+// merge, never merge one that wouldn't have -- a false split just leaves
+// two correctly-named separate lines instead of one combined line, same
+// "never do worse than the pre-fix all-or-nothing split" precedent as
+// the rest of this file.
+//
+// Re-partitions one groupingKey bucket into name-compatible clusters via
+// union-find over namesOverlap (same shape as lineIdentity.ts's
+// buildNameComponents) -- a bucket of entries that all share one exact
+// normalized name (the placeholder-id case) or all genuinely name-overlap
+// (the common, correct id case) comes back as a single cluster, a no-op.
+// Only a bucket like [gluten, seitan cutlets, seitan cutlets, ...] -- zero
+// word overlap between "gluten" and the rest -- splits into more than one.
+// Generic over FlatEntry (buildGroceryLines' input, pre-merge) AND
+// GroceryLine (mergeConvertibleLines' input, post-split) -- both carry a
+// plain `name` field, and BOTH stages independently group by ingredientId
+// from scratch, so both need this same gate. Fixing only buildGroceryLines
+// wasn't enough on its own: it correctly splits gluten/seitan cutlets into
+// two separate GroceryLines, but mergeConvertibleLines then re-groups
+// EVERY line by ingredientId again (its own independent pass, oblivious to
+// names), sees the same id 93654 on both, and merges them right back
+// together via the cross-category AI-density path -- live-confirmed this
+// exact double-merge while verifying the fix.
+function clusterByNameOverlap<T extends { name: string }>(entries: T[]): T[][] {
+  if (entries.length <= 1) return [entries];
+  const parent = entries.map((_, i) => i);
+  function find(x: number): number {
+    let root = x;
+    while (parent[root] !== root) root = parent[root];
+    let cur = x;
+    while (parent[cur] !== root) {
+      const next = parent[cur];
+      parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  }
+  function union(a: number, b: number) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  }
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const nameA = entries[i].name.toLowerCase();
+      const nameB = entries[j].name.toLowerCase();
+      if (namesOverlap(nameA, nameB) || sharesLastWord(nameA, nameB)) union(i, j);
+    }
+  }
+  const clusters = new Map<number, T[]>();
+  for (let i = 0; i < entries.length; i++) {
+    const root = find(i);
+    const existing = clusters.get(root);
+    if (existing) existing.push(entries[i]);
+    else clusters.set(root, [entries[i]]);
+  }
+  return [...clusters.values()];
+}
+
 export function buildGroceryLines(
   slotIngredientLists: SlotIngredientEntry[][],
   addonEntries: AddonEntry[],
@@ -309,16 +414,25 @@ export function buildGroceryLines(
     flat.push({ id: addon.ingredientId, name: addon.ingredientName, amount: addon.amountG, unit: "g" });
   }
 
-  const groups = new Map<string, FlatEntry[]>();
+  const rawGroups = new Map<string, FlatEntry[]>();
   for (const entry of flat) {
     const key = groupingKey(entry);
-    const existing = groups.get(key);
+    const existing = rawGroups.get(key);
     if (existing) existing.push(entry);
-    else groups.set(key, [entry]);
+    else rawGroups.set(key, [entry]);
+  }
+  // Re-partition each id-based bucket by name overlap before trusting it
+  // as one real ingredient -- see clusterByNameOverlap's comment. A
+  // placeholder-id bucket (already scoped to one exact normalized name)
+  // always comes back as a single cluster, so this is safe to apply
+  // universally rather than special-casing which buckets need it.
+  const groups: FlatEntry[][] = [];
+  for (const bucket of rawGroups.values()) {
+    groups.push(...clusterByNameOverlap(bucket));
   }
 
   const lines: GroceryLine[] = [];
-  for (const entries of groups.values()) {
+  for (const entries of groups) {
     const id = entries[0].id;
     const name = entries[0].name;
     const distinctUnits = new Set(entries.map((e) => normalizeUnit(e.unit)));
@@ -390,6 +504,7 @@ function groupForMerge(lines: GroceryLine[]): UnitMergeGroup[] {
   }
   return order
     .map((id) => groups.get(id)!)
+    .flatMap((group) => clusterByNameOverlap(group))
     .filter((group) => group.length > 1)
     .map(([target, ...rest]) => ({ target, rest }));
 }
@@ -448,10 +563,17 @@ export function mergeConvertibleLines(
     }
     groups.get(line.ingredientId)!.push(line);
   }
+  // Independent grouping pass from buildGroceryLines/groupForMerge above --
+  // re-applies the same name-overlap gate here too, or a same-id pair that
+  // buildGroceryLines correctly split apart (e.g. gluten vs. seitan
+  // cutlets) gets silently re-merged right back together by THIS pass,
+  // which otherwise only ever looks at ingredientId. Live-confirmed this
+  // exact double-merge while verifying the fix -- see clusterByNameOverlap's
+  // comment.
+  const clusters = order.flatMap((id) => clusterByNameOverlap(groups.get(id)!));
 
   const result: GroceryLine[] = [];
-  for (const id of order) {
-    const group = groups.get(id)!;
+  for (const group of clusters) {
     if (group.length === 1) {
       result.push(group[0]);
       continue;
@@ -481,9 +603,22 @@ export function mergeConvertibleLines(
         // "large") are deliberately NOT assumed equivalent -- a real size
         // difference -- and fall through to unresolved, same as "clove"
         // vs "slice" always has.
-        const targetIsBlank = normalizeUnit(target.unit) === "";
-        const lineIsBlank = normalizeUnit(line.unit) === "";
+        const targetNorm = normalizeUnit(target.unit);
+        const lineNorm = normalizeUnit(line.unit);
+        const targetIsBlank = targetNorm === "";
+        const lineIsBlank = lineNorm === "";
         if (targetIsBlank !== lineIsBlank) {
+          convertedAmount = line.totalAmount;
+        } else if (!targetIsBlank && !lineIsBlank && stemOtherUnit(targetNorm) === stemOtherUnit(lineNorm)) {
+          // Singular/plural spelling of the identical unit word (e.g.
+          // "clove" vs "cloves", "serving" vs "servings") -- found live
+          // 2026-07-27: a genuine 1:1
+          // unit, not a size difference like "medium" vs "large" or a
+          // different word entirely like "clove" vs "slice" (both still
+          // correctly fall through to unresolved below, since their stems
+          // differ). Same singular/plural asymmetry class already fixed
+          // for the dislike/allergy word-boundary matcher this same
+          // session -- this is the grocery-aggregation sibling of that fix.
           convertedAmount = line.totalAmount;
         }
       } else if (lineCategory === targetCategory) {
@@ -491,7 +626,7 @@ export function mergeConvertibleLines(
         const lineBase = toBaseAmount(line.totalAmount, line.unit)!;
         convertedAmount = lineBase.baseAmount / targetUnitBase.baseAmount;
       } else {
-        const resolved = crossCategoryRates.get(conversionKey(id, line.unit, target.unit));
+        const resolved = crossCategoryRates.get(conversionKey(target.ingredientId, line.unit, target.unit));
         if (resolved) {
           convertedAmount = line.totalAmount * resolved.rate;
           if (resolved.source === "ai_estimate") usedAiEstimate = true;

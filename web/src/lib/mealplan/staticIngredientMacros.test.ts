@@ -40,41 +40,57 @@ describe("staticIngredientMacros", () => {
 
 describe("prepNoteFor", () => {
   it("returns null for ingredients that are fine eaten as-is", () => {
-    for (const name of ["greek yogurt", "cottage cheese", "banana", "apple", "orange", "almonds", "peanut butter", "walnuts", "sunflower seed butter"]) {
-      expect(prepNoteFor(name, "snack", true)).toBeNull();
-      expect(prepNoteFor(name, "addon", false)).toBeNull();
+    for (const name of ["greek yogurt", "cottage cheese", "banana", "apple", "orange", "almonds", "peanut butter", "walnuts", "sunflower seed butter", "dates", "pumpkin seeds"]) {
+      expect(prepNoteFor(name, "snack", ["oats"])).toBeNull();
+      expect(prepNoteFor(name, "addon", [])).toBeNull();
     }
+  });
+
+  // 2026-07-30: oats/edamame both need real prep (cooking) before they're
+  // actually eaten in the sized raw amount -- same "isn't standalone" gap
+  // as protein powder above, missed for edamame until asked directly
+  // whether people actually snack on it.
+  it("tells oats to cook as oatmeal and edamame to steam/boil, both zero extra macros", () => {
+    expect(prepNoteFor("oats", "snack", ["hemp seeds"])).toBe("cook with water as oatmeal");
+    expect(prepNoteFor("edamame", "snack", ["almonds"])).toBe("steam or boil a few minutes");
   });
 
   it("tells protein powders to mix with water only, never milk (milk carries untracked macros)", () => {
     for (const name of ["protein powder", "pea protein powder"]) {
-      expect(prepNoteFor(name, "addon", false)).toBe("mix with water");
-      expect(prepNoteFor(name, "snack", true)).toBe("mix with water");
-      expect(prepNoteFor(name, "snack", false)).toBe("mix with water");
+      expect(prepNoteFor(name, "addon", [])).toBe("mix with water");
+      expect(prepNoteFor(name, "snack", ["banana"])).toBe("mix with water");
+      expect(prepNoteFor(name, "snack", [])).toBe("mix with water");
     }
   });
 
-  it("points chia/hemp seeds at something already tracked, not an outside food", () => {
+  // 2026-07-30: names the actual other ingredient(s) instead of the vague
+  // "the rest of this snack" -- with oats/edamame in the pool, a snack can
+  // have exactly one other named ingredient, not an ambiguous remainder
+  // (the real bug this replaces: "15g hemp seeds + 10g oats" rendering as
+  // "sprinkle over the rest of this snack", which also silently swallowed
+  // oats' own "cook with water as oatmeal" note in the old one-note footer).
+  it("points chia/hemp seeds at the actual other ingredient(s), not a vague 'rest of this snack'", () => {
     for (const name of ["chia seeds", "hemp seeds"]) {
-      expect(prepNoteFor(name, "addon", false)).toBe("sprinkle over your meal");
-      expect(prepNoteFor(name, "snack", true)).toBe("sprinkle over the rest of this snack");
+      expect(prepNoteFor(name, "addon", [])).toBe("sprinkle over your meal");
+      expect(prepNoteFor(name, "snack", ["oats"])).toBe("sprinkle over the oats");
+      expect(prepNoteFor(name, "snack", ["oats", "almonds"])).toBe("sprinkle over the oats and almonds");
     }
   });
 
   it("gives an honest, macro-accurate note when seeds are the ONLY ingredient in a snack", () => {
     // Chia genuinely gels in plain water (real chia-pudding prep, zero extra macros).
-    expect(prepNoteFor("chia seeds", "snack", false)).toBe("soak in water");
+    expect(prepNoteFor("chia seeds", "snack", [])).toBe("soak in water");
     // Hemp seeds have no equivalent zero-macro standalone prep -- doesn't
     // pretend one exists rather than silently suggesting an untracked pairing.
-    expect(prepNoteFor("hemp seeds", "snack", false)).toBe("best paired with a meal you're already having");
+    expect(prepNoteFor("hemp seeds", "snack", [])).toBe("best paired with a meal you're already having");
   });
 
   it("is case-insensitive and trims whitespace, same as lookupIngredientMacrosStatic", () => {
-    expect(prepNoteFor("Protein Powder", "addon", false)).toBe("mix with water");
-    expect(prepNoteFor("  chia seeds  ", "addon", false)).toBe("sprinkle over your meal");
+    expect(prepNoteFor("Protein Powder", "addon", [])).toBe("mix with water");
+    expect(prepNoteFor("  chia seeds  ", "addon", [])).toBe("sprinkle over your meal");
   });
 
   it("returns null for an unrecognized ingredient", () => {
-    expect(prepNoteFor("dragon fruit", "snack", true)).toBeNull();
+    expect(prepNoteFor("dragon fruit", "snack", ["oats"])).toBeNull();
   });
 });
