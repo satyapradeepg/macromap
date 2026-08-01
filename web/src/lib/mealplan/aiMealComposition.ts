@@ -168,13 +168,117 @@ function isRealisticAmount(amountG: number, bounds: { min: number; max: number }
   return Number.isFinite(amountG) && amountG >= bounds.min && amountG <= bounds.max;
 }
 
+const MAX_REFINEMENT_ROUNDS = 5;
+// A refined amount changing by less than this between rounds is treated as
+// converged -- half of sizeForGap's own 5g rounding granularity, so tighter
+// precision wouldn't survive that rounding anyway.
+const REFINEMENT_CONVERGENCE_EPSILON_G = 2.5;
+
+interface RoleAmounts {
+  proteinAmountG: number;
+  carbAmountG: number | null;
+  fatAmountG: number | null;
+}
+
+// Corrects the directional protein-overshoot limitation documented at
+// composeMealFromProposalDetailed's protein-sizing step below: that step
+// (and this function's own starting point) sizes protein against the FULL
+// remaining target before the carb/fat ingredients' own protein content is
+// known, then never revisits it -- a real logged case sized seitan for
+// 30.8g protein and landed at 38.5g actual (+25%) once bread's ~12g
+// protein/100g was counted (see this file's test suite). Each round here
+// re-solves all three roles against the OTHER TWO roles' actual (latest)
+// cross-contribution, which is exactly the missing information --
+// hand-verified against that same regression case: one round alone takes
+// protein from 38.5g to 30.75g actual, and a second round reproduces the
+// first exactly, confirming a stable fixed point rather than oscillation.
+//
+// Deliberately conservative about when to accept a refined round: if it
+// would push protein's own gap non-positive (nothing realistic left to
+// solve for a MANDATORY role) or push any role's amount outside its own
+// PORTION_BOUNDS_G, refinement stops immediately and returns the LAST
+// accepted amounts rather than that round's -- this can only ever match or
+// improve on the starting amounts, never introduce a rejection or an
+// unrealistic portion the starting sequential solve wouldn't already have
+// produced on its own.
+function refineRoleAmounts(
+  proteinLookup: GroundedIngredientData,
+  carbLookup: GroundedIngredientData,
+  fatLookup: GroundedIngredientData,
+  fixedAdjustedTarget: { proteinG: number; carbsG: number; fatG: number },
+  starting: RoleAmounts,
+): RoleAmounts {
+  let current = starting;
+
+  for (let round = 0; round < MAX_REFINEMENT_ROUNDS; round++) {
+    const carbAmt = current.carbAmountG ?? 0;
+    const fatAmt = current.fatAmountG ?? 0;
+
+    const proteinGap =
+      fixedAdjustedTarget.proteinG -
+      (carbLookup.proteinGPer100g / 100) * carbAmt -
+      (fatLookup.proteinGPer100g / 100) * fatAmt;
+    const proteinSized = sizeForGap(proteinLookup.proteinGPer100g, proteinGap);
+    if (!proteinSized || !isRealisticAmount(proteinSized.amountG, PORTION_BOUNDS_G.protein)) {
+      return current;
+    }
+
+    const carbGap =
+      fixedAdjustedTarget.carbsG -
+      (proteinLookup.carbsGPer100g / 100) * proteinSized.amountG -
+      (fatLookup.carbsGPer100g / 100) * fatAmt;
+    const carbSized = sizeForGap(carbLookup.carbsGPer100g, carbGap);
+    if (carbSized && !isRealisticAmount(carbSized.amountG, PORTION_BOUNDS_G.carb)) {
+      return current;
+    }
+
+    const fatGap =
+      fixedAdjustedTarget.fatG -
+      (proteinLookup.fatGPer100g / 100) * proteinSized.amountG -
+      (carbLookup.fatGPer100g / 100) * (carbSized?.amountG ?? 0);
+    const fatSized = sizeForGap(fatLookup.fatGPer100g, fatGap, PORTION_BOUNDS_G.fat.min);
+    if (fatSized && !isRealisticAmount(fatSized.amountG, PORTION_BOUNDS_G.fat)) {
+      return current;
+    }
+
+    const next: RoleAmounts = {
+      proteinAmountG: proteinSized.amountG,
+      carbAmountG: carbSized?.amountG ?? null,
+      fatAmountG: fatSized?.amountG ?? null,
+    };
+
+    const converged =
+      Math.abs(next.proteinAmountG - current.proteinAmountG) < REFINEMENT_CONVERGENCE_EPSILON_G &&
+      Math.abs((next.carbAmountG ?? 0) - (current.carbAmountG ?? 0)) < REFINEMENT_CONVERGENCE_EPSILON_G &&
+      Math.abs((next.fatAmountG ?? 0) - (current.fatAmountG ?? 0)) < REFINEMENT_CONVERGENCE_EPSILON_G;
+
+    current = next;
+    if (converged) break;
+  }
+
+  return current;
+}
+
+// minAmountG defaults to the universal MIN_INGREDIENT_AMOUNT_G floor, so
+// every existing caller (protein/carb, whose own PORTION_BOUNDS_G.min --
+// 20/15 -- already sits above it) is completely unaffected. Fat's own
+// PORTION_BOUNDS_G.min (3g) is BELOW this universal floor, though -- found
+// live 2026-08-01 auditing fat under-delivery: a fat gap of, say, 5-9g
+// (5g of olive oil is a completely normal amount) was silently dropped
+// entirely by this function's own 10g gate, before the caller's
+// isRealisticAmount(amountG, PORTION_BOUNDS_G.fat) check ever got a chance
+// to see it and correctly accept it -- PORTION_BOUNDS_G.fat.min=3 has been
+// unreachable dead code for the fat role specifically since it was set.
+// Passing PORTION_BOUNDS_G.fat.min explicitly at the fat-role call sites
+// lets a real, non-negligible small fat amount through instead.
 function sizeForGap(
   macroPer100g: number,
   gapNeeded: number,
+  minAmountG: number = MIN_INGREDIENT_AMOUNT_G,
 ): { amountG: number } | null {
   if (macroPer100g <= 0 || gapNeeded <= 0) return null;
   const amountG = Math.floor(((gapNeeded / macroPer100g) * 100) / 5) * 5;
-  if (amountG < MIN_INGREDIENT_AMOUNT_G) return null;
+  if (amountG < minAmountG) return null;
   return { amountG };
 }
 
@@ -202,6 +306,40 @@ function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): 
     estimatedCostCents: lookup.estimatedCostCentsPer100g !== null ? lookup.estimatedCostCentsPer100g * scale : null,
   };
 }
+
+// Exact inverse of toComposedIngredient's linear scaling -- reconstructs an
+// already-composed item's per-100g density without a second fetch. Used by
+// composeMealFromProposalBestEffort's refinement pass (below) to reuse
+// round 0's already-fetched ingredient data for the same purpose
+// refineRoleAmounts already serves the strict composer.
+function reverseTo100g(item: ComposedMealIngredient): GroundedIngredientData {
+  const scale = item.amountG / 100;
+  return {
+    id: item.spoonacularIngredientId,
+    name: item.ingredientName,
+    caloriesPer100g: item.caloriesKcal / scale,
+    proteinGPer100g: item.proteinG / scale,
+    carbsGPer100g: item.carbsG / scale,
+    fatGPer100g: item.fatG / scale,
+    estimatedCostCentsPer100g: item.estimatedCostCents !== null ? item.estimatedCostCents / scale : null,
+  };
+}
+
+// Placeholder density for a role composeMealFromProposalBestEffort's own
+// relaxations already dropped (missing proposal, failed lookup, gap already
+// closed) before refinement runs -- an all-zero density contributes nothing
+// to any cross-term (amount x 0 = 0) and always fails refineRoleAmounts'
+// own density<=0 guard, so a role that starts absent here stays absent
+// through every refinement round rather than being revived.
+const ZERO_DENSITY: GroundedIngredientData = {
+  id: 0,
+  name: "",
+  caloriesPer100g: 0,
+  proteinGPer100g: 0,
+  carbsGPer100g: 0,
+  fatGPer100g: 0,
+  estimatedCostCentsPer100g: null,
+};
 
 // Tagged reason for each way composeMealFromProposalDetailed can reject a
 // proposal -- lets a caller (orchestrate.ts's retry-with-feedback) tell
@@ -461,17 +599,19 @@ export async function composeMealFromProposalDetailed(
     remainingFat -= item.fatG;
   }
 
-  // Known, accepted limitation (same shape as composeSnack's): protein is
-  // sized here against the FULL remaining target without knowing the
-  // carb/fat roles' own protein content yet (e.g. bread genuinely has
-  // ~12g protein/100g) -- so real total protein can land meaningfully
-  // over target even though this role's own sizing is correct. Carbs/fat
-  // ARE corrected for cross-contributions in the other direction (each
-  // later role subtracts what earlier roles already contributed). Live
-  // example (July 15 2026): seitan sized for a 30.8g protein target, real
-  // total came out to 38.5g (+25%) once bread's own protein was counted --
-  // an overshoot, not a shortfall, and still a real improvement over
-  // rejecting the slot outright.
+  // Constant target for refineRoleAmounts below -- captured now, before
+  // protein/carb/fat sizing mutates remainingProtein/Carbs/Fat in place.
+  const fixedAdjustedTarget = { proteinG: remainingProtein, carbsG: remainingCarbs, fatG: remainingFat };
+
+  // Starting point only -- protein is sized here against the FULL remaining
+  // target without yet knowing the carb/fat roles' own protein content
+  // (e.g. bread genuinely has ~12g protein/100g), so real total protein can
+  // land meaningfully over target even though this role's own sizing is
+  // individually correct. Carbs/fat ARE corrected for cross-contributions
+  // in the other direction (each later role subtracts what earlier roles
+  // already contributed) -- this asymmetry is exactly what the
+  // refineRoleAmounts pass after the fat role below corrects, using the
+  // same real ingredient densities already fetched here, no extra lookups.
   const proteinLookup = await fetchIngredientMacros(proteinProposed.name);
   if (!proteinLookup) {
     return { ok: false, reason: { kind: "ingredient_not_found", role: "protein", ingredientName: proteinProposed.name } };
@@ -497,10 +637,8 @@ export async function composeMealFromProposalDetailed(
       },
     };
   }
-  const proteinItem = toComposedIngredient(proteinLookup, proteinSized.amountG);
-  composed.push(proteinItem);
-  remainingCarbs -= proteinItem.carbsG;
-  remainingFat -= proteinItem.fatG;
+  remainingCarbs -= (proteinLookup.carbsGPer100g / 100) * proteinSized.amountG;
+  remainingFat -= (proteinLookup.fatGPer100g / 100) * proteinSized.amountG;
 
   const carbLookup = await fetchIngredientMacros(carbProposed.name);
   if (!carbLookup) {
@@ -533,16 +671,14 @@ export async function composeMealFromProposalDetailed(
         },
       };
     }
-    const carbItem = toComposedIngredient(carbLookup, carbSized.amountG);
-    composed.push(carbItem);
-    remainingFat -= carbItem.fatG;
+    remainingFat -= (carbLookup.fatGPer100g / 100) * carbSized.amountG;
   }
 
   const fatLookup = await fetchIngredientMacros(fatProposed.name);
   if (!fatLookup) {
     return { ok: false, reason: { kind: "ingredient_not_found", role: "fat", ingredientName: fatProposed.name } };
   }
-  const fatSized = sizeForGap(fatLookup.fatGPer100g, remainingFat);
+  const fatSized = sizeForGap(fatLookup.fatGPer100g, remainingFat, PORTION_BOUNDS_G.fat.min);
   // Unlike protein/carb, the fat role is allowed to contribute NOTHING --
   // remainingFat can already be <=0 once protein/carb's own fat is
   // counted (same as composeSnack's existing behavior). Only an
@@ -562,7 +698,27 @@ export async function composeMealFromProposalDetailed(
         },
       };
     }
-    composed.push(toComposedIngredient(fatLookup, fatSized.amountG));
+  }
+
+  // Refines the three amounts above (the "round 0" sequential solve) to
+  // correct protein's directional overshoot -- see refineRoleAmounts' own
+  // comment. Can only match or improve on round 0: it stops and returns
+  // round 0's amounts unchanged the moment any refined amount would fall
+  // outside a role's realistic bounds, so nothing rejected above can become
+  // rejected here, and nothing accepted above can become unrealistic here.
+  const refined = refineRoleAmounts(proteinLookup, carbLookup, fatLookup, fixedAdjustedTarget, {
+    proteinAmountG: proteinSized.amountG,
+    carbAmountG: carbSized?.amountG ?? null,
+    fatAmountG: fatSized?.amountG ?? null,
+  });
+
+  const proteinItem = toComposedIngredient(proteinLookup, refined.proteinAmountG);
+  composed.push(proteinItem);
+  if (refined.carbAmountG !== null) {
+    composed.push(toComposedIngredient(carbLookup, refined.carbAmountG));
+  }
+  if (refined.fatAmountG !== null) {
+    composed.push(toComposedIngredient(fatLookup, refined.fatAmountG));
   }
 
   // Second, final title check against the ACTUAL composed ingredients --
@@ -714,6 +870,10 @@ export async function composeMealFromProposalBestEffort(
     remainingFat -= item.fatG;
   }
 
+  // Constant target for the refinement pass after the three relaxedRoleItem
+  // calls below -- captured now, before their own sequential sizing starts.
+  const fixedAdjustedTarget = { proteinG: remainingProtein, carbsG: remainingCarbs, fatG: remainingFat };
+
   // Shared relaxed handling for a single core (protein/carb/fat) role --
   // grounds the ingredient, then sizes it with every failure mode
   // degrading instead of rejecting. Returns null only when there's
@@ -755,6 +915,14 @@ export async function composeMealFromProposalBestEffort(
 
     const sized = sizeForGap(density, remaining);
     if (!sized) {
+      // Retry with this role's OWN, more permissive floor before falling
+      // back to "not dense enough" -- see sizeForGap's own comment. A no-op
+      // for protein/carb (bounds.min 20/15, already above the universal
+      // floor sizeForGap defaulted to just above); only ever rescues a real,
+      // small-but-legitimate fat amount (bounds.min=3) that the universal
+      // 10g floor would otherwise have silently dropped.
+      const rescued = bounds.min < MIN_INGREDIENT_AMOUNT_G ? sizeForGap(density, remaining, bounds.min) : null;
+      if (rescued) return toComposedIngredient(lookup, rescued.amountG);
       if (optional) return null; // matches the strict composer's "allowed to contribute nothing" exception exactly -- not a compromise
       notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
       return toComposedIngredient(lookup, bounds.min);
@@ -786,20 +954,64 @@ export async function composeMealFromProposalBestEffort(
     return toComposedIngredient(lookup, amountG);
   }
 
-  const proteinItem = await relaxedRoleItem(proteinProposed, "protein", remainingProtein, false);
+  let notesBefore = notes.length;
+  let proteinItem = await relaxedRoleItem(proteinProposed, "protein", remainingProtein, false);
+  const proteinWasRelaxed = notes.length > notesBefore;
   if (proteinItem) {
-    composed.push(proteinItem);
     remainingCarbs -= proteinItem.carbsG;
     remainingFat -= proteinItem.fatG;
   }
 
-  const carbItem = await relaxedRoleItem(carbProposed, "carb", remainingCarbs, true);
+  notesBefore = notes.length;
+  let carbItem = await relaxedRoleItem(carbProposed, "carb", remainingCarbs, true);
+  const carbWasRelaxed = notes.length > notesBefore;
   if (carbItem) {
-    composed.push(carbItem);
     remainingFat -= carbItem.fatG;
   }
 
-  const fatItem = await relaxedRoleItem(fatProposed, "fat", remainingFat, true);
+  notesBefore = notes.length;
+  let fatItem = await relaxedRoleItem(fatProposed, "fat", remainingFat, true);
+  const fatWasRelaxed = notes.length > notesBefore;
+
+  // Same directional protein-overshoot correction as the strict composer's
+  // refineRoleAmounts (see that function's own comment) -- requires only
+  // protein (the role that actually needs correcting; if it's absent there
+  // is nothing to refine regardless), AND that none of the three roles
+  // already needed a relaxedRoleItem note above (a clamp, a minimum-portion
+  // substitution, "isn't dense enough"). Refining a role's amount after its
+  // own note already described a specific clamped/substituted number would
+  // make that note stale -- e.g. "needed 345g, capped at a realistic 280g
+  // instead" would misdescribe a refined 255g result. Scoping refinement to
+  // the case nothing needed that kind of note keeps every note accurate to
+  // the FINAL delivered amount; a proposal that already needed one of these
+  // relaxations keeps its pre-refinement amount and wording unchanged.
+  //
+  // A carb/fat role dropped by one of relaxedRoleItem's OTHER relaxations
+  // (missing proposal, failed lookup, gap already closed -- none of which
+  // describe a specific amount refinement could invalidate) gets a
+  // zero-density placeholder instead of being excluded from refinement
+  // entirely -- ZERO_DENSITY contributes nothing to any cross-term (amount
+  // x 0 = 0) and its own sizeForGap call inside refineRoleAmounts always
+  // returns null (density<=0 guard), so a genuinely-absent role stays
+  // absent through every round rather than being revived.
+  // Densities for a present role are reconstructed from round 0's own item
+  // (reverseTo100g), not re-fetched -- the exact same real ingredient data,
+  // no extra lookup.
+  if (proteinItem && !proteinWasRelaxed && !carbWasRelaxed && !fatWasRelaxed) {
+    const refined = refineRoleAmounts(
+      reverseTo100g(proteinItem),
+      carbItem ? reverseTo100g(carbItem) : ZERO_DENSITY,
+      fatItem ? reverseTo100g(fatItem) : ZERO_DENSITY,
+      fixedAdjustedTarget,
+      { proteinAmountG: proteinItem.amountG, carbAmountG: carbItem?.amountG ?? null, fatAmountG: fatItem?.amountG ?? null },
+    );
+    proteinItem = toComposedIngredient(reverseTo100g(proteinItem), refined.proteinAmountG);
+    carbItem = carbItem && refined.carbAmountG !== null ? toComposedIngredient(reverseTo100g(carbItem), refined.carbAmountG) : null;
+    fatItem = fatItem && refined.fatAmountG !== null ? toComposedIngredient(reverseTo100g(fatItem), refined.fatAmountG) : null;
+  }
+
+  if (proteinItem) composed.push(proteinItem);
+  if (carbItem) composed.push(carbItem);
   if (fatItem) composed.push(fatItem);
 
   if (composed.length === 0) {
