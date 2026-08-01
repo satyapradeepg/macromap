@@ -1790,6 +1790,22 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // unresolvable safety flag, never for repetitive/macro_miss/other.
   const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }> = [];
 
+  // The critic (planCritic.ts) is prompted for one short, plain sentence,
+  // but that's not enforced by the API -- live-confirmed 2026-08-01: a
+  // genuinely rambling, self-contradictory note ("...but check:... actually
+  // flagging for repetition... not diet violation.") reached this exact
+  // disclosure banner verbatim, reading like the model's own internal
+  // deliberation rather than a verdict. This is the only place flag.note
+  // is ever shown to the user (server logs elsewhere keep the raw text,
+  // which is fine for debugging) -- anything too long to plausibly be
+  // "one sentence" falls back to a clean, static message instead.
+  const MAX_DISCLOSED_NOTE_LENGTH = 140;
+  function toDisclosedNote(note: string): string {
+    const trimmed = note.trim();
+    if (trimmed.length > 0 && trimmed.length <= MAX_DISCLOSED_NOTE_LENGTH) return trimmed;
+    return "This meal may not fully match your dietary restrictions -- please check its ingredients before eating it.";
+  }
+
   // Post-generation plan critique + repair (built July 15 2026, extended
   // July 16 2026 with diet_violation) — the per-slot pipeline above never
   // sees the whole week at once, so it structurally can't notice cross-
@@ -1926,7 +1942,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
           // time) but is disclosed rather than silently dropped.
           if (slotMechanism(existing.slotId.mealType) !== "recipe" || existing.candidate.aiComposed) {
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: toDisclosedNote(flag.note) });
             }
             continue;
           }
@@ -1964,7 +1980,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
             if (!isRecoverableSpoonacularError(err)) throw err;
             console.error(`[mealplan] repair swap failed for day ${flag.dayIndex} ${flag.mealType}, keeping original:`, err);
             if (flag.reason === "diet_violation") {
-              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
+              unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: toDisclosedNote(flag.note) });
             }
             continue;
           }
@@ -1995,7 +2011,7 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
                     `"${existing.candidate.title}" -> "${composed.title}"`,
                 );
               } else {
-                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: flag.note });
+                unresolvedDietaryConcerns.push({ dayIndex: flag.dayIndex, mealType: flag.mealType as MealType, note: toDisclosedNote(flag.note) });
                 console.error(
                   `[mealplan] no safe alternative found for flagged diet_violation, day ${flag.dayIndex} ${flag.mealType}: ${flag.note}`,
                 );

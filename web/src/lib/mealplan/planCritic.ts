@@ -83,7 +83,17 @@ const CRITIQUE_PLAN_TOOL = {
             dayIndex: { type: "number", description: "0-6, Monday=0" },
             mealType: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack1", "snack2"] },
             reason: { type: "string", enum: ["repetitive", "macro_miss", "diet_violation", "other"] },
-            note: { type: "string", description: "One sentence on why this slot was flagged." },
+            // Live-confirmed 2026-08-01: without this much explicit
+            // constraint, the model sometimes wrote its own deliberation
+            // into this field instead of a conclusion (hedging, "but
+            // check...", second-guessing its own `reason` mid-sentence) --
+            // this can end up shown directly to the user for
+            // diet_violation flags, so it needs to read as a finished
+            // verdict, not a reasoning trace.
+            note: {
+              type: "string",
+              description: "ONE short, plain, declarative sentence (under 20 words) stating your conclusion, written for an end user to read directly. State only the final verdict -- never your reasoning process, never a hedge or self-correction (no 'but', 'actually', 'let me reconsider', 'on second thought'). If you're not confident enough to state a clear verdict, don't flag this slot at all.",
+            },
           },
           required: ["dayIndex", "mealType", "reason", "note"],
         },
@@ -112,7 +122,7 @@ ${rows}
 
 Flag only slots genuinely worth regenerating -- a dish appearing twice in a week of 35 meals isn't automatically a problem, but 4+ times likely is. Don't flag composed snacks for repetition; the fixed ingredient pool means some repetition there is expected and already accounted for elsewhere. Focus repetition flags on real recipes (breakfast/lunch/dinner).
 
-Also check every meal's actual ingredient list (shown above, not just its title) against the dietary style, allergies, and dislikes listed above -- titles are sometimes misleading (a recipe can be titled after an ingredient it doesn't actually contain), so base your judgment on the ingredients, not the name. Flag any meal whose real ingredients violate one of them as diet_violation -- for example, a hidden animal product, a non-obvious allergen, or a foreign-language ingredient name that a simple keyword scan could plausibly miss (e.g. "nam pla," "dashi," "suet"). Note: "gluten" or "vital wheat gluten" listed as an ingredient is a plant-derived wheat protein (the same base ingredient seitan is made from) -- it is NOT an animal product, and is not a vegan/vegetarian/dairy violation; only flag it as a concern for an explicitly gluten-free dietary style or a wheat/gluten allergy. Be specific in the note about which ingredient and which restriction it violates. Don't flag a meal you're not reasonably confident about -- false alarms cost a swap, but so does silence, so when genuinely uncertain about a real animal product or allergen, flag it.`;
+Also check every meal's actual ingredient list (shown above, not just its title) against the dietary style, allergies, and dislikes listed above -- titles are sometimes misleading (a recipe can be titled after an ingredient it doesn't actually contain), so base your judgment on the ingredients, not the name. Flag any meal whose real ingredients violate one of them as diet_violation -- for example, a hidden animal product, a non-obvious allergen, or a foreign-language ingredient name that a simple keyword scan could plausibly miss (e.g. "nam pla," "dashi," "suet"). Note: "gluten" or "vital wheat gluten" listed as an ingredient is a plant-derived wheat protein (the same base ingredient seitan is made from) -- it is NOT an animal product, and is not a vegan/vegetarian/dairy violation; only flag it as a concern for an explicitly gluten-free dietary style or a wheat/gluten allergy. Be specific in the note about which ingredient and which restriction it violates -- but state it as a plain conclusion, not a running deliberation. Reach your verdict first, then write the note; don't think out loud in the note field itself. Don't flag a meal you're not reasonably confident about -- false alarms cost a swap, but so does silence, so when genuinely uncertain about a real animal product or allergen, flag it. If after weighing it you don't think it's actually a violation, don't flag it as diet_violation at all -- flagging something as diet_violation and then arguing against your own flag in the note is worse than not flagging it.`;
 }
 
 export async function critiquePlan(input: CritiquePlanInput): Promise<PlanCritique | null> {
