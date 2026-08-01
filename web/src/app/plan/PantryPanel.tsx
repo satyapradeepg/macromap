@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { addPantryItem, removePantryItem } from "./pantryActions";
 import type { PantryItemView } from "./pantryData";
 
@@ -89,58 +91,58 @@ export function PantryPanel({
                 )}
                 {item.quantityText && <span className="text-muted"> ({item.quantityText})</span>}
               </span>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 onClick={() => handleRemove(item.id)}
                 disabled={removingId === item.id}
-                className="text-xs font-semibold text-muted disabled:opacity-60"
+                className="px-0 py-0 text-xs"
               >
                 {removingId === item.id ? "Removing…" : "Remove"}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       )}
 
       <form onSubmit={handleAdd} className="mt-3 flex flex-wrap gap-2">
-        <input
+        <Input
+          size="sm"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Ingredient (e.g. chicken breast)"
           required
-          className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+          className="flex-1"
         />
-        <input
+        <Input
+          size="sm"
           type="number"
           step="any"
           min="0"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           placeholder="Qty"
-          className="w-20 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+          className="w-20"
         />
-        <input
+        <Input
+          size="sm"
           type="text"
           value={unit}
           onChange={(e) => setUnit(e.target.value)}
           placeholder="Unit (g, lb, can…)"
-          className="w-32 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+          className="w-32"
         />
-        <input
+        <Input
+          size="sm"
           type="text"
           value={quantityText}
           onChange={(e) => setQuantityText(e.target.value)}
           placeholder="Note (optional)"
-          className="w-32 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground"
+          className="w-32"
         />
-        <button
-          type="submit"
-          disabled={adding || !name.trim()}
-          className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-60"
-        >
+        <Button type="submit" variant="primary" disabled={adding || !name.trim()} className="px-3 py-1.5">
           {adding ? "Adding…" : "Add"}
-        </button>
+        </Button>
       </form>
 
       {error && <p className="mt-2 text-xs text-red-500">{error}</p>}

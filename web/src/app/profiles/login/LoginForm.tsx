@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { checkCredentials } from "./actions";
 
 export function LoginForm() {
@@ -26,7 +28,7 @@ export function LoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <input
+      <Input
         type="text"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
@@ -34,25 +36,19 @@ export function LoginForm() {
         autoFocus
         required
         autoComplete="username"
-        className="rounded border px-3 py-2"
       />
-      <input
+      <Input
         type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         placeholder="Password"
         required
         autoComplete="current-password"
-        className="rounded border px-3 py-2"
       />
       {error && <p className="text-sm text-red-600">{error}</p>}
-      <button
-        type="submit"
-        disabled={submitting}
-        className="rounded border px-3 py-2 disabled:opacity-50"
-      >
+      <Button type="submit" variant="primary" disabled={submitting}>
         {submitting ? "Checking…" : "Enter"}
-      </button>
+      </Button>
     </form>
   );
 }

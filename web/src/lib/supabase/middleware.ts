@@ -1,12 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-// Refreshes the Supabase session on every request and bootstraps a guest
-// session for first-time visitors. PRD 7.1: users can complete Steps 1-4
-// (Onboarding -> Grocery List) with no account; the signup wall is at Step 5
-// (Track). Supabase anonymous auth gives that guest a real user id from the
-// first request, so upgrading to a permanent account at Step 5 links the
-// same row instead of needing a manual data-migration step.
+// Refreshes the Supabase session on every request. No-login guest bootstrap
+// (PRD 7.1) is disabled: signInAnonymously() ran on every unauthenticated
+// request with no way to distinguish real visitors from platform health
+// probes, which kept Supabase's anonymous-auth rate limit permanently
+// exhausted (99% of container logs, continuous since 2026-07-26).
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 

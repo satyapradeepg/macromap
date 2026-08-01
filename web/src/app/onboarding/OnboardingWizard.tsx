@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Pill } from "@/components/ui/Pill";
 import {
   ACTIVITY_MULTIPLIERS,
   AGE_RANGE,
@@ -276,11 +279,11 @@ export function OnboardingWizard() {
                 }}
               />
             </div>
-            <input
+            <Input
               type="number"
               value={weightInput}
               onChange={(e) => setWeightInput(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              className="mt-1"
             />
           </div>
 
@@ -320,38 +323,36 @@ export function OnboardingWizard() {
             </div>
             {heightUnit === "ftin" ? (
               <div className="mt-1 flex gap-2">
-                <input
+                <Input
                   type="number"
                   value={heightFeet}
                   onChange={(e) => setHeightFeet(e.target.value)}
                   placeholder="ft"
-                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
                 />
-                <input
+                <Input
                   type="number"
                   value={heightInches}
                   onChange={(e) => setHeightInches(e.target.value)}
                   placeholder="in"
-                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
                 />
               </div>
             ) : (
-              <input
+              <Input
                 type="number"
                 value={heightCmInput}
                 onChange={(e) => setHeightCmInput(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+                className="mt-1"
               />
             )}
           </div>
 
           <div>
             <label className="text-sm font-semibold text-muted">Age</label>
-            <input
+            <Input
               type="number"
               value={age}
               onChange={(e) => setAge(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              className="mt-1"
             />
           </div>
 
@@ -364,18 +365,14 @@ export function OnboardingWizard() {
             </p>
             <div className="mt-1 grid grid-cols-2 gap-2">
               {(["male", "female"] as BiologicalSex[]).map((s) => (
-                <button
+                <Pill
                   key={s}
-                  type="button"
+                  active={biologicalSex === s}
                   onClick={() => setBiologicalSex(s)}
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${
-                    biologicalSex === s
-                      ? "border-accent bg-accent text-white"
-                      : "border-border text-muted"
-                  }`}
+                  className="text-center capitalize"
                 >
                   {s}
-                </button>
+                </Pill>
               ))}
             </div>
           </div>
@@ -391,7 +388,7 @@ export function OnboardingWizard() {
                   (e.target.value || null) as ActivityLevel | null,
                 )
               }
-              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
             >
               <option value="" disabled>
                 Select…
@@ -408,31 +405,23 @@ export function OnboardingWizard() {
             <label className="text-sm font-semibold text-muted">Goal</label>
             <div className="mt-1 grid grid-cols-3 gap-2">
               {GOAL_OPTIONS.map((o) => (
-                <button
+                <Pill
                   key={o.value}
-                  type="button"
+                  active={goal === o.value}
                   onClick={() => setGoal(o.value)}
-                  className={`rounded-lg border px-2 py-2 text-center text-sm font-semibold ${
-                    goal === o.value
-                      ? "border-accent bg-accent text-white"
-                      : "border-border text-muted"
-                  }`}
+                  className="text-center"
                 >
                   {o.emoji} {o.label}
-                </button>
+                </Pill>
               ))}
             </div>
           </div>
 
           {step1Error && <p className="text-sm text-red-500">{step1Error}</p>}
 
-          <button
-            type="button"
-            onClick={handleCalculate}
-            className="mt-2 w-full rounded-lg bg-accent px-4 py-3 font-semibold text-white"
-          >
+          <Button variant="primary" onClick={handleCalculate} className="mt-2 w-full py-3">
             Calculate my macros
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="mt-8 flex flex-col gap-5">
@@ -457,14 +446,17 @@ export function OnboardingWizard() {
             </label>
             <div className="mt-1 flex flex-wrap gap-2">
               {DIETARY_STYLE_OPTIONS.map((option) => (
-                <Chip
+                <Pill
                   key={option}
-                  label={option.replace("_", " ")}
+                  size="sm"
                   active={dietaryStyles.includes(option)}
                   onClick={() =>
                     setDietaryStyles(toggleInArray(option, dietaryStyles))
                   }
-                />
+                  className="capitalize"
+                >
+                  {option.replace("_", " ")}
+                </Pill>
               ))}
             </div>
           </div>
@@ -475,22 +467,25 @@ export function OnboardingWizard() {
             </label>
             <div className="mt-1 flex flex-wrap gap-2">
               {ALLERGY_PRESET_OPTIONS.map((option) => (
-                <Chip
+                <Pill
                   key={option}
-                  label={option}
+                  size="sm"
                   active={allergyPresets.includes(option)}
                   onClick={() =>
                     setAllergyPresets(toggleInArray(option, allergyPresets))
                   }
-                />
+                  className="capitalize"
+                >
+                  {option}
+                </Pill>
               ))}
             </div>
-            <input
+            <Input
               type="text"
               value={otherAllergies}
               onChange={(e) => setOtherAllergies(e.target.value)}
               placeholder="Other allergies, comma separated"
-              className="mt-2 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              className="mt-2"
             />
           </div>
 
@@ -498,12 +493,12 @@ export function OnboardingWizard() {
             <label className="text-sm font-semibold text-muted">
               Dislikes
             </label>
-            <input
+            <Input
               type="text"
               value={dislikes}
               onChange={(e) => setDislikes(e.target.value)}
               placeholder="e.g. Brussels sprouts, cilantro"
-              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+              className="mt-1"
             />
           </div>
 
@@ -512,23 +507,23 @@ export function OnboardingWizard() {
               <label className="text-sm font-semibold text-muted">
                 Weekly budget (optional)
               </label>
-              <input
+              <Input
                 type="number"
                 value={weeklyBudget}
                 onChange={(e) => setWeeklyBudget(e.target.value)}
                 placeholder="$"
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+                className="mt-1"
               />
             </div>
             <div>
               <label className="text-sm font-semibold text-muted">
                 Zip code
               </label>
-              <input
+              <Input
                 type="text"
                 value={zipCode}
                 onChange={(e) => setZipCode(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground"
+                className="mt-1"
               />
             </div>
           </div>
@@ -536,21 +531,17 @@ export function OnboardingWizard() {
           {saveError && <p className="text-sm text-red-500">{saveError}</p>}
 
           <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setStep(1)}
-              className="rounded-lg border border-border px-4 py-3 font-semibold text-muted"
-            >
+            <Button variant="secondary" onClick={() => setStep(1)} className="py-3">
               Back
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="primary"
               onClick={handleSave}
               disabled={saving}
-              className="flex-1 rounded-lg bg-accent px-4 py-3 font-semibold text-white disabled:opacity-60"
+              className="flex-1 py-3"
             >
               {saving ? "Saving…" : "Looks good"}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -599,34 +590,12 @@ function NumberField({
       <label className="text-xs font-semibold tracking-wide text-muted uppercase">
         {label}
       </label>
-      <input
+      <Input
         type="number"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-foreground"
+        className="mt-1 font-mono"
       />
     </div>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${
-        active ? "border-accent bg-accent text-white" : "border-border text-muted"
-      }`}
-    >
-      {label}
-    </button>
   );
 }

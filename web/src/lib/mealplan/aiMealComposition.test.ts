@@ -59,24 +59,75 @@ describe("composeMealFromProposal", () => {
     const seitanItem = meal!.ingredients.find((i) => i.ingredientName === "seitan cutlets")!;
     expect(seitanItem.amountG).toBeGreaterThanOrEqual(20);
     expect(seitanItem.amountG).toBeLessThanOrEqual(280);
-    // Close to the real spike's computed result (140g).
-    expect(seitanItem.amountG).toBe(140);
-    // Carbs land close to target. Protein overshoots ~25% because the
-    // carb role (bread) has real protein content of its own that isn't
-    // subtracted back out of the protein role's sizing -- same known,
-    // accepted directional limitation as composeSnack's greedy algorithm.
-    // Fat lands well under target: by the time protein+carb are sized,
-    // only ~5.7g of fat gap remains, needing ~5g of oil -- which rounds
-    // BELOW MIN_INGREDIENT_AMOUNT_G (10g) and is correctly skipped rather
-    // than force an amount too small to be a sensible real add-on (same
-    // rule as addon.ts). A real, disclosed limitation of this specific
-    // composition, not a bug -- comparable in size to deviations already
-    // seen on real Spoonacular "closest match" picks elsewhere in this
-    // pipeline.
+    // 100g, not the naive sequential solve's 140g -- refineRoleAmounts
+    // (aiMealComposition.ts) corrects seitan's amount downward once bread's
+    // own ~12g protein/100g is counted, instead of sizing protein against
+    // the full target and never revisiting it. Verified by hand: this
+    // converges in one refinement round (a second round reproduces the
+    // same 100g/70g exactly, confirming a stable fixed point).
+    expect(seitanItem.amountG).toBe(100);
+    // Protein now lands almost exactly on target (was 38.5, +25% over,
+    // before this refinement pass existed). By the time protein+carb are
+    // sized, the remaining fat gap needs only ~5g of oil -- a completely
+    // normal real amount (a teaspoon is ~4.5g), and now included: sizeForGap
+    // is passed PORTION_BOUNDS_G.fat.min (3g) at this call site instead of
+    // the universal MIN_INGREDIENT_AMOUNT_G (10g), which used to silently
+    // drop this same real, non-negligible amount before this fix (found
+    // live 2026-08-01 auditing fat under-delivery -- PORTION_BOUNDS_G.fat's
+    // own documented 3g floor had been unreachable dead code for this exact
+    // reason since it was set).
+    const oilItem = meal!.ingredients.find((i) => i.ingredientName === "olive oil");
+    expect(oilItem).toBeDefined();
+    expect(oilItem!.amountG).toBe(5);
+    expect(meal!.totalProteinG).toBeCloseTo(30.75, 1);
+    expect(meal!.totalCarbsG).toBeCloseTo(35.1, 1);
+    expect(meal!.totalFatG).toBeCloseTo(8.8, 1);
+  });
+
+  // Isolated fat-floor boundary check (2026-08-01) -- pure single-macro
+  // fixtures (zero cross-contamination) so the fat gap at oil's turn is
+  // exactly target.fatG, no refineRoleAmounts interaction to account for.
+  it("includes a small-but-real fat amount (3-9g) the universal 10g floor used to silently drop", async () => {
+    const pureProtein: GroundedIngredientData = { id: 1, name: "pure protein", caloriesPer100g: 400, proteinGPer100g: 100, carbsGPer100g: 0, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const pureCarb: GroundedIngredientData = { id: 2, name: "pure carb", caloriesPer100g: 400, proteinGPer100g: 0, carbsGPer100g: 100, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const proposal: MealProposal = {
+      dishName: "Test Dish",
+      ingredients: [
+        { name: "pure protein", role: "protein" },
+        { name: "pure carb", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    // 6g fat gap -> oil (100g fat/100g) needs 6g, floored to nearest 5g = 5g
+    // -- above fat's own 3g floor, below the universal 10g one this fixes.
+    const target = { calories: 300, proteinG: 20, carbsG: 20, fatG: 6 };
+    const fetcher = lookupFrom({ "pure protein": pureProtein, "pure carb": pureCarb, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, target, NONE, fetcher);
+    expect(meal).not.toBeNull();
+    const oilItem = meal!.ingredients.find((i) => i.ingredientName === "olive oil");
+    expect(oilItem).toBeDefined();
+    expect(oilItem!.amountG).toBe(5);
+  });
+
+  it("still correctly drops fat when the gap is genuinely negligible, below fat's own 3g floor", async () => {
+    const pureProtein: GroundedIngredientData = { id: 1, name: "pure protein", caloriesPer100g: 400, proteinGPer100g: 100, carbsGPer100g: 0, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const pureCarb: GroundedIngredientData = { id: 2, name: "pure carb", caloriesPer100g: 400, proteinGPer100g: 0, carbsGPer100g: 100, fatGPer100g: 0, estimatedCostCentsPer100g: null };
+    const proposal: MealProposal = {
+      dishName: "Test Dish",
+      ingredients: [
+        { name: "pure protein", role: "protein" },
+        { name: "pure carb", role: "carb" },
+        { name: "olive oil", role: "fat" },
+      ],
+    };
+    // 2g fat gap -> even at oil's 100g/100g density, 2g floors to 0 -- below
+    // PORTION_BOUNDS_G.fat.min (3g) too, so this stays a genuine drop, not
+    // a regression of the fix above.
+    const target = { calories: 300, proteinG: 20, carbsG: 20, fatG: 2 };
+    const fetcher = lookupFrom({ "pure protein": pureProtein, "pure carb": pureCarb, "olive oil": oil });
+    const meal = await composeMealFromProposal(proposal, target, NONE, fetcher);
+    expect(meal).not.toBeNull();
     expect(meal!.ingredients.find((i) => i.ingredientName === "olive oil")).toBeUndefined();
-    expect(meal!.totalProteinG).toBeCloseTo(38.5, 0);
-    expect(meal!.totalCarbsG).toBeCloseTo(34.4, 0);
-    expect(meal!.totalFatG).toBeCloseTo(4.1, 0);
   });
 
   it("rejects the whole composition when the chosen protein source needs an unrealistic portion (the tofu case)", async () => {
@@ -649,6 +700,21 @@ describe("composeMealFromProposalBestEffort", () => {
     if (!result.ok) throw new Error("expected success");
     expect(result.result.isApproximate).toBe(false);
     expect(result.result.approximationNotes).toEqual([]);
+    // Same fixture as composeMealFromProposal's protein-accuracy test above
+    // -- confirms the same refineRoleAmounts correction applies here too
+    // (100g seitan / ~30.75g protein, not the naive sequential solve's
+    // 140g / 38.5g), silently, with no approximation note needed since
+    // refining sizing math isn't a compromise the user needs disclosed.
+    const seitanItem = result.result.meal.ingredients.find((i) => i.ingredientName === "seitan cutlets")!;
+    expect(seitanItem.amountG).toBe(100);
+    expect(result.result.meal.totalProteinG).toBeCloseTo(30.75, 1);
+    // Also picks up the fat-floor fix (sizeForGap now passed
+    // PORTION_BOUNDS_G.fat.min=3 at this call site too, via
+    // relaxedRoleItem's rescue retry) -- olive oil's ~5g gap used to be
+    // silently dropped by the universal 10g floor, now correctly included.
+    const oilItem = result.result.meal.ingredients.find((i) => i.ingredientName === "olive oil");
+    expect(oilItem).toBeDefined();
+    expect(oilItem!.amountG).toBe(5);
   });
 
   it("relaxes a duplicate role by keeping only the first ingredient, instead of rejecting", async () => {
