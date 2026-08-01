@@ -54,7 +54,9 @@ jobs:
               supabase-service-role-key="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
               anthropic-api-key="${{ secrets.ANTHROPIC_API_KEY }}" \
               spoonacular-api-key="${{ secrets.SPOONACULAR_API_KEY }}" \
-              tavily-api-key="${{ secrets.TAVILY_API_KEY }}"
+              tavily-api-key="${{ secrets.TAVILY_API_KEY }}" \
+              access-username="${{ secrets.ACCESS_USERNAME }}" \
+              access-password="${{ secrets.ACCESS_PASSWORD }}"
           az containerapp update \
             --resource-group rg-students-platform \
             --name ca-${{ vars.STUDENT }} \
@@ -62,7 +64,9 @@ jobs:
               SUPABASE_SERVICE_ROLE_KEY=secretref:supabase-service-role-key \
               ANTHROPIC_API_KEY=secretref:anthropic-api-key \
               SPOONACULAR_API_KEY=secretref:spoonacular-api-key \
-              TAVILY_API_KEY=secretref:tavily-api-key
+              TAVILY_API_KEY=secretref:tavily-api-key \
+              ACCESS_USERNAME=secretref:access-username \
+              ACCESS_PASSWORD=secretref:access-password
 
       - name: Deploy to Container App
         run: |
