@@ -221,8 +221,13 @@ export function commaSwapFallback(query: string): string | null {
 // descriptor risk profile as the rest of this list -- slicing doesn't
 // change a food's per-100g macros, so dropping it is safe the same way
 // dropping "steamed"/"roasted" is.
+// "diced" added 2026-08-01, live-confirmed on user2's (vegan, soy allergy)
+// generated plan: "russet potatoes, diced" returned zero results even after
+// commaSwapFallback's reorder ("diced russet potatoes" also zero) -- same
+// shape/cut risk profile as "sliced" already here, dicing doesn't change
+// per-100g macros either.
 const PREP_PREFIXES = [
-  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced",
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced",
 ];
 
 // Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
@@ -236,7 +241,14 @@ const PREP_PREFIXES = [
 // comment on glutenFreeQualifierStripFallback below for the class of risk
 // this deliberately avoids: a qualifier that names a genuinely different
 // product must NOT be added to this list).
-const TRAILING_DESCRIPTORS = ["strips", "crumbles"];
+//
+// "crumbled" and "diced" added 2026-08-01 alongside PREP_PREFIXES above --
+// same live-confirmed failure, but in the comma-separated form ("seitan,
+// crumbled") rather than a bare trailing word ("seitan crumbles"). The
+// adjective form matches this same trailing regex (there's whitespace
+// right after the comma), which is why the fix belongs here and not in a
+// new list.
+const TRAILING_DESCRIPTORS = ["strips", "crumbles", "crumbled", "diced"];
 
 export function prefixStripFallback(query: string): string | null {
   const trimmed = query.trim();
@@ -250,7 +262,12 @@ export function prefixStripFallback(query: string): string | null {
   for (const suffix of TRAILING_DESCRIPTORS) {
     const match = new RegExp(`\\s+${suffix}$`, "i").exec(trimmed);
     if (match) {
-      const rest = trimmed.slice(0, match.index).trim();
+      // Live-confirmed 2026-08-01: slicing off just the whitespace+suffix
+      // can leave a dangling comma ("seitan, crumbled" -> "seitan,"), and
+      // Spoonacular's search tolerance for a trailing comma is inconsistent
+      // ("russet potatoes," matches, "seitan," doesn't) -- strip it instead
+      // of relying on that.
+      const rest = trimmed.slice(0, match.index).replace(/,\s*$/, "").trim();
       return rest || null;
     }
   }

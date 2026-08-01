@@ -179,6 +179,22 @@ describe("prefixStripFallback", () => {
     // this file being a one-shot retry, not a multi-pass rewrite.
     expect(prefixStripFallback("sliced bacon strips")).toBe("bacon strips");
   });
+
+  // Added 2026-08-01, live-confirmed on user2's (vegan, soy allergy)
+  // generated plan: neither the original comma-form query nor
+  // commaSwapFallback's reorder matched Spoonacular's search for either of
+  // these two real dropped ingredients.
+  it("strips a leading 'diced' prefix", () => {
+    expect(prefixStripFallback("diced russet potatoes")).toBe("russet potatoes");
+  });
+
+  it("strips a trailing 'diced' descriptor and the leftover comma", () => {
+    expect(prefixStripFallback("russet potatoes, diced")).toBe("russet potatoes");
+  });
+
+  it("strips a trailing 'crumbled' descriptor and the leftover comma", () => {
+    expect(prefixStripFallback("seitan, crumbled")).toBe("seitan");
+  });
 });
 
 // Sibling gap to audit item #1, live-confirmed 2026-07-22 (stacked-safety
