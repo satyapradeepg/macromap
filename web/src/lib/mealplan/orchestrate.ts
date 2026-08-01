@@ -249,6 +249,24 @@ function sumWithAddons(claimed: ClaimedSlot[], addons: Map<string, SlotAddon>): 
   return total;
 }
 
+// The critic (planCritic.ts) is prompted for one short, plain sentence,
+// but that's not enforced by the API -- live-confirmed 2026-08-01: a
+// genuinely rambling, self-contradictory note ("...but check:... actually
+// flagging for repetition... not diet violation.") reached the
+// unresolvedDietaryConcerns disclosure banner verbatim, reading like the
+// model's own internal deliberation rather than a verdict. This is the
+// only place flag.note is ever shown to the user (server logs elsewhere
+// keep the raw text, which is fine for debugging) -- anything too long to
+// plausibly be "one sentence" falls back to a clean, static message
+// instead. Module-level (not a closure) and exported so it's directly
+// unit-testable without exercising the whole generation pipeline.
+export const MAX_DISCLOSED_NOTE_LENGTH = 140;
+export function toDisclosedNote(note: string): string {
+  const trimmed = note.trim();
+  if (trimmed.length > 0 && trimmed.length <= MAX_DISCLOSED_NOTE_LENGTH) return trimmed;
+  return "This meal may not fully match your dietary restrictions -- please check its ingredients before eating it.";
+}
+
 // All slots of the SAME meal type share an identical target (targets.ts's
 // MEAL_TYPE_SHARE — breakfast/lunch/dinner now get different shares of the
 // daily total, not an even 1/3 each), so each meal-type's query's
@@ -1789,22 +1807,6 @@ export async function orchestrateGeneration(input: OrchestrateInput): Promise<Or
   // overwhelming majority of plans; only ever populated for a genuine,
   // unresolvable safety flag, never for repetitive/macro_miss/other.
   const unresolvedDietaryConcerns: Array<{ dayIndex: number; mealType: MealType; note: string }> = [];
-
-  // The critic (planCritic.ts) is prompted for one short, plain sentence,
-  // but that's not enforced by the API -- live-confirmed 2026-08-01: a
-  // genuinely rambling, self-contradictory note ("...but check:... actually
-  // flagging for repetition... not diet violation.") reached this exact
-  // disclosure banner verbatim, reading like the model's own internal
-  // deliberation rather than a verdict. This is the only place flag.note
-  // is ever shown to the user (server logs elsewhere keep the raw text,
-  // which is fine for debugging) -- anything too long to plausibly be
-  // "one sentence" falls back to a clean, static message instead.
-  const MAX_DISCLOSED_NOTE_LENGTH = 140;
-  function toDisclosedNote(note: string): string {
-    const trimmed = note.trim();
-    if (trimmed.length > 0 && trimmed.length <= MAX_DISCLOSED_NOTE_LENGTH) return trimmed;
-    return "This meal may not fully match your dietary restrictions -- please check its ingredients before eating it.";
-  }
 
   // Post-generation plan critique + repair (built July 15 2026, extended
   // July 16 2026 with diet_violation) — the per-slot pipeline above never
