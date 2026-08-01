@@ -2,6 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
 import { createPersona, deletePersona, switchPersona } from "./actions";
 
 export interface PersonaRow {
@@ -63,72 +66,70 @@ export function Dashboard({ personas }: { personas: PersonaRow[] }) {
 
   return (
     <main className="mx-auto w-full max-w-2xl px-6 py-12">
-      <h1 className="mb-1 text-lg font-semibold">Your profiles</h1>
+      <h1 className="mb-1 text-lg font-semibold text-foreground">Your profiles</h1>
       <p className="mb-6 text-sm text-muted">
         Choose a profile to continue, or create a new one. Each profile has
         its own plan, pantry, and grocery list.
       </p>
 
       <form onSubmit={handleCreate} className="mb-6 flex gap-2">
-        <input
+        <Input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="e.g. vegan_soy_allergy"
           required
-          className="flex-1 rounded border px-3 py-2"
         />
-        <button
-          type="submit"
-          disabled={isPending}
-          className="rounded border px-3 py-2 disabled:opacity-50"
-        >
+        <Button type="submit" variant="primary" disabled={isPending} className="shrink-0">
           {isPending ? "Creating…" : "New profile"}
-        </button>
+        </Button>
       </form>
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
-      <ul className="divide-y">
+      <div className="flex flex-col gap-3">
         {personas.length === 0 && (
-          <li className="py-4 text-sm text-muted">No test profiles yet.</li>
+          <p className="text-sm text-muted">No test profiles yet.</p>
         )}
         {personas.map((p) => {
           const isRowPending = pending?.id === p.id;
           return (
-            <li key={p.id} className="flex items-center justify-between py-3">
-              <div>
-                <p className="font-medium">{p.label}</p>
+            <Card
+              key={p.id}
+              className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0 break-words">
+                <p className="font-medium text-foreground">{p.label}</p>
                 <p className="text-xs text-muted">
                   last used {new Date(p.last_used_at).toLocaleString()}
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="primary"
                   onClick={() => handleSwitch(p.id, "/plan")}
                   disabled={isRowPending}
-                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
                 >
                   {isRowPending && pending.action === "switch" ? "Switching…" : "Switch"}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
                   onClick={() => handleSwitch(p.id, "/onboarding")}
                   disabled={isRowPending}
-                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
                 >
                   {isRowPending && pending.action === "edit" ? "Opening…" : "Edit"}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="destructive"
                   onClick={() => handleDelete(p.id, p.label)}
                   disabled={isRowPending}
-                  className="rounded border px-3 py-1 text-sm text-red-600 disabled:opacity-50"
                 >
                   {isRowPending && pending.action === "delete" ? "Deleting…" : "Delete"}
-                </button>
+                </Button>
               </div>
-            </li>
+            </Card>
           );
         })}
-      </ul>
+      </div>
     </main>
   );
 }

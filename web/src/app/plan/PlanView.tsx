@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Pill } from "@/components/ui/Pill";
 import {
   MEAL_TYPES,
   DAYS_PER_WEEK,
@@ -223,14 +225,9 @@ export function PlanBoard({
     <main className="mx-auto w-full min-w-0 max-w-3xl px-6 py-16">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Your meal plan</h1>
-        <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={generating}
-          className="rounded-lg bg-accent px-4 py-2 font-semibold text-white disabled:opacity-60"
-        >
+        <Button variant="primary" onClick={handleGenerate} disabled={generating}>
           {generating ? "Generating…" : plan ? "Regenerate" : "Generate my meal plan"}
-        </button>
+        </Button>
       </div>
 
       {plan && (
@@ -325,21 +322,17 @@ export function PlanBoard({
               const status = dayStatus(plan, dayIndex);
               const isSelected = dayIndex === selectedDay;
               return (
-                <button
+                <Pill
                   key={dayIndex}
-                  type="button"
+                  active={isSelected}
                   onClick={() => setSelectedDay(dayIndex)}
-                  className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                    isSelected
-                      ? "border-accent bg-accent text-white"
-                      : "border-border bg-surface text-muted"
-                  }`}
+                  className="flex shrink-0 items-center gap-1.5"
                 >
                   {label}
                   {status === "within_band" && (
                     <span className={isSelected ? "text-white" : "text-accent-2"}>●</span>
                   )}
-                </button>
+                </Pill>
               );
             })}
           </div>
@@ -567,22 +560,18 @@ function MealCard({
               </span>
               <div className="flex gap-2">
                 {hasRecipeDetail && (
-                  <button
-                    type="button"
-                    onClick={() => setShowRecipe(true)}
-                    className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted"
-                  >
+                  <Button variant="secondary" onClick={() => setShowRecipe(true)} className="px-2 py-1 text-xs">
                     Recipe
-                  </button>
+                  </Button>
                 )}
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
                   onClick={onSwap}
                   disabled={swapping}
-                  className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted disabled:opacity-60"
+                  className="px-2 py-1 text-xs"
                 >
                   {swapping ? "Swapping…" : "Swap"}
-                </button>
+                </Button>
               </div>
             </div>
           </>
