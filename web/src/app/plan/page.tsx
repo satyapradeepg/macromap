@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { requireGateCookie } from "../profiles/gate";
 import { LogoutBar } from "../LogoutBar";
 import { getMostRecentPlan } from "./data";
 import { getPantryItems } from "./pantryData";
@@ -13,16 +12,12 @@ import { PlanBoard } from "./PlanView";
 // this route (OQ7/OQ6).
 export const maxDuration = 60;
 
-// requireGateCookie() reads ACCESS_USERNAME/ACCESS_PASSWORD (plain
-// process.env, no dynamic API) before ever calling cookies() -- without
-// forcing dynamic, Next.js's static optimizer can permanently bake in a
-// build-time 404 (those vars are runtime-only, unset at Docker build time)
-// regardless of the real running environment. See /profiles/page.tsx.
+// Access is enforced in middleware.ts (HTTP Basic Auth) before this page
+// ever renders. Kept dynamic since it's always rendered per-session, never
+// a build-time snapshot.
 export const dynamic = "force-dynamic";
 
 export default async function PlanPage() {
-  await requireGateCookie();
-
   const supabase = await createClient();
   const {
     data: { user },
