@@ -15,6 +15,15 @@
 #   AZURE_SUBSCRIPTION_ID  — shared
 #   ACR_NAME               — the shared registry name
 #   STUDENT                — your roster name (also your app + hostname)
+#   APP_BASE_URL           — this app's real deployed URL (Auth0 needs this,
+#                            e.g. https://macromap.apps.human-angle.com)
+#
+# Auth0 migration (0034_auth0_identity_swap.sql) added four new SECRETS that
+# must be set via `gh secret set` before this workflow will produce a working
+# deploy — without them every login attempt fails in production:
+#   AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_SECRET
+# Also update the Auth0 Application's Allowed Callback/Logout URLs to include
+# APP_BASE_URL, not just localhost, before the first real deploy under this.
 name: deploy
 on:
   push:
@@ -55,8 +64,10 @@ jobs:
               anthropic-api-key="${{ secrets.ANTHROPIC_API_KEY }}" \
               spoonacular-api-key="${{ secrets.SPOONACULAR_API_KEY }}" \
               tavily-api-key="${{ secrets.TAVILY_API_KEY }}" \
-              access-username="${{ secrets.ACCESS_USERNAME }}" \
-              access-password="${{ secrets.ACCESS_PASSWORD }}"
+              auth0-domain="${{ secrets.AUTH0_DOMAIN }}" \
+              auth0-client-id="${{ secrets.AUTH0_CLIENT_ID }}" \
+              auth0-client-secret="${{ secrets.AUTH0_CLIENT_SECRET }}" \
+              auth0-secret="${{ secrets.AUTH0_SECRET }}"
           az containerapp update \
             --resource-group rg-students-platform \
             --name ca-${{ vars.STUDENT }} \
@@ -65,8 +76,11 @@ jobs:
               ANTHROPIC_API_KEY=secretref:anthropic-api-key \
               SPOONACULAR_API_KEY=secretref:spoonacular-api-key \
               TAVILY_API_KEY=secretref:tavily-api-key \
-              ACCESS_USERNAME=secretref:access-username \
-              ACCESS_PASSWORD=secretref:access-password
+              AUTH0_DOMAIN=secretref:auth0-domain \
+              AUTH0_CLIENT_ID=secretref:auth0-client-id \
+              AUTH0_CLIENT_SECRET=secretref:auth0-client-secret \
+              AUTH0_SECRET=secretref:auth0-secret \
+              APP_BASE_URL=${{ vars.APP_BASE_URL }}
 
       - name: Deploy to Container App
         run: |

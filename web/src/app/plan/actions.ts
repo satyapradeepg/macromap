@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 import {
   orchestrateGeneration,
   swapSlotCandidate,
@@ -73,9 +74,7 @@ export interface GeneratePlanResult {
 
 export async function generatePlan(): Promise<GeneratePlanResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return {
@@ -415,9 +414,7 @@ export async function recomputeWeeklyActual(supabase: SupabaseClient, mealPlanId
 
 export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return {
@@ -458,6 +455,17 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
     .filter((s) => !(s.day_index === input.dayIndex && s.meal_type === input.mealType))
     .map((s) => (s.ingredients as CandidateIngredient[] | null) ?? []);
 
+  // Snack-only: this specific slot's own current ingredients, so a swap
+  // never coincidentally recomposes to the exact same combo (see
+  // swapSlotCandidate's composed-snack path / composeSnack's avoidNames).
+  // Meaningless for a recipe slot -- passed through regardless, unused there.
+  const currentSlot = (existingSlots ?? []).find(
+    (s) => s.day_index === input.dayIndex && s.meal_type === input.mealType,
+  );
+  const currentIngredientNames = ((currentSlot?.ingredients as CandidateIngredient[] | null) ?? []).map(
+    (i) => i.name,
+  );
+
   const dailyTargets: MacroTargets = {
     calories: profile.daily_calories,
     proteinG: profile.daily_protein_g,
@@ -480,6 +488,7 @@ export async function swapMeal(input: SwapMealInput): Promise<SwapMealResult> {
       excludeRecipeIds,
       pantryItems,
       pantryTracker,
+      currentIngredientNames,
     });
   } catch (err) {
     if (err instanceof SpoonacularQuotaError || err instanceof SpoonacularRequestError) {
@@ -595,10 +604,7 @@ export interface GetRecipeInstructionsResult {
 // only gates on "an active session exists" (same defensive check as
 // swapMeal/generatePlan) rather than checking slot ownership.
 export async function getRecipeInstructions(recipeId: number): Promise<GetRecipeInstructionsResult> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { steps: [], sourceUrl: null, error: "No active session — refresh the page and try again." };
@@ -635,9 +641,7 @@ export async function getAiComposedRecipeInstructions(
   input: GetAiComposedRecipeInstructionsInput,
 ): Promise<GetAiComposedRecipeInstructionsResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { steps: [], error: "No active session — refresh the page and try again." };

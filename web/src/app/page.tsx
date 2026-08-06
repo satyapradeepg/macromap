@@ -1,24 +1,23 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 
-// A returning persona (profile already exists -- onboarding done) skips the
-// pitch and goes straight to their plan, mirroring plan/page.tsx's own
-// profile check in reverse. Only a visitor with no active persona session
-// (including right after "Switch profile") sees the copy below.
+// A returning, already-onboarded user skips the pitch and goes straight to
+// their plan; a logged-in user who hasn't finished onboarding yet continues
+// there instead. Only a visitor with no Auth0 session at all sees the copy
+// below -- there's no self-serve signup, so their only path forward is
+// "Log in" with an account that already exists.
 export default async function Home() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (user) {
+    const supabase = await createClient();
     const { data: profile } = await supabase
       .from("profiles")
       .select("id")
       .eq("id", user.id)
       .maybeSingle();
-    if (profile) redirect("/plan");
+    redirect(profile ? "/plan" : "/onboarding");
   }
 
   return (
@@ -62,15 +61,21 @@ export default async function Home() {
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-4">
-          <Link
-            href="/profiles"
+          {/* Plain <a>, not <Link>: /auth/login immediately redirects to
+              Auth0's own origin, and Link's client-side RSC-payload
+              prefetch fetch() can't follow a cross-origin redirect (CORS
+              blocks it, logging 3 console errors before Next falls back to
+              a real navigation) -- a real browser navigation from the
+              first click sidesteps that fetch entirely. */}
+          <a
+            href="/auth/login"
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-accent-2"
           >
-            Build my plan
+            Log in
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12h14M13 6l6 6-6 6" />
             </svg>
-          </Link>
+          </a>
         </div>
 
         <div className="mt-16 grid gap-7 border-t border-border pt-8 sm:grid-cols-3">

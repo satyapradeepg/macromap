@@ -1,15 +1,14 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
-import { listTestPersonas } from "@/lib/mcpOps/listTestPersonas";
-import { getPersonaPlan } from "@/lib/mcpOps/getPersonaPlan";
+import { getUserPlan } from "@/lib/mcpOps/getUserPlan";
 import { checkSpoonacularQuota } from "@/lib/mcpOps/checkSpoonacularQuota";
 
-// Private ops route — read-only Supabase admin tools for debugging (list test
-// personas, inspect a persona's generated plan, check Spoonacular quota).
-// Deliberately does NOT expose persona deletion (irreversible; keep that on
-// the existing /profiles UI or the Supabase dashboard, not an agent-callable
-// tool). Gated by OPS_MCP_TOKEN — unset by default, so every call 401s until
-// that's deliberately configured.
+// Private ops route — read-only Supabase admin tools for debugging (inspect
+// a user's generated plan, check Spoonacular quota). Deliberately does NOT
+// expose account deletion (irreversible; keep that on /account's own
+// confirmed delete-account action, not an agent-callable tool). Gated by
+// OPS_MCP_TOKEN — unset by default, so every call 401s until that's
+// deliberately configured.
 
 function textResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -25,35 +24,18 @@ function errorResult(err: unknown) {
 const rawHandler = createMcpHandler(
   (server) => {
     server.registerTool(
-      "list_test_personas",
+      "get_user_plan",
       {
-        title: "List test personas",
+        title: "Get user plan",
         description:
-          "List all test personas in the live Supabase project (label, persona_user_id, created_at, last_used_at).",
-        inputSchema: z.object({}),
-      },
-      async () => {
-        try {
-          return textResult(await listTestPersonas());
-        } catch (err) {
-          return errorResult(err);
-        }
-      },
-    );
-
-    server.registerTool(
-      "get_persona_plan",
-      {
-        title: "Get persona plan",
-        description:
-          "Fetch a test persona's most recent generated meal plan (targets/actuals/reconciliation status) plus its meal slots, by persona label.",
+          "Fetch a user's most recent generated meal plan (targets/actuals/reconciliation status) plus its meal slots, by their Auth0 subject id (profiles.id).",
         inputSchema: z.object({
-          label: z.string().describe('The test persona\'s label, e.g. "user1".'),
+          userId: z.string().describe('The Auth0 subject id, e.g. "auth0|64f2a1b3c4d5e6f7a8b9c0d1".'),
         }),
       },
-      async ({ label }) => {
+      async ({ userId }) => {
         try {
-          return textResult(await getPersonaPlan(label));
+          return textResult(await getUserPlan(userId));
         } catch (err) {
           return errorResult(err);
         }

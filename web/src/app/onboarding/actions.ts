@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 import type { ActivityLevel, BiologicalSex, Goal } from "@/lib/tdee";
 
 export interface SaveProfileInput {
@@ -25,9 +26,7 @@ export async function saveProfile(
   input: SaveProfileInput,
 ): Promise<{ error: string | null }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { error: "No active session — refresh the page and try again." };

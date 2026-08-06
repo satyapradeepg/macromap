@@ -119,13 +119,25 @@ function pickFromPool(
   varietySeed: number,
   pool: Record<string, IngredientMacroLookup>,
   ctx: PantryPriceContext,
+  avoidNames: string[] = [],
 ): string | null {
   const available = INGREDIENT_POOL[role]
     .filter((name) => pool[name] !== undefined)
     .map((name) => ({ name, costCentsPer100g: pool[name].estimatedCostCentsPer100g }));
   if (available.length === 0) return null;
   const { ordered, preferredCount } = rankByPantryAndPrice(available, ctx);
-  return ordered[varietySeed % preferredCount].name;
+  const pick = ordered[varietySeed % preferredCount].name;
+  // A manual "Swap" on a snack should always change SOMETHING when an
+  // alternative genuinely exists -- found live: the swap path's
+  // Date.now()-derived seed can coincidentally land back on whichever
+  // option is already shown (a real risk when preferredCount is small for
+  // a restrictive diet), reading to the user as "Swap did nothing." Step
+  // to the next option instead of silently repeating it; generation's own
+  // call site never passes avoidNames, so this is a no-op there.
+  if (avoidNames.includes(pick) && preferredCount > 1) {
+    return ordered[(varietySeed + 1) % preferredCount].name;
+  }
+  return pick;
 }
 
 export interface ComposedIngredient {
@@ -222,12 +234,13 @@ export function composeSnack(
   pool: Record<string, IngredientMacroLookup>,
   varietySeed: number,
   ctx: PantryPriceContext = { pantryItemNames: [], budgetAware: false },
+  avoidNames: string[] = [],
 ): ComposedSnack {
   const ingredients: ComposedIngredient[] = [];
   let remainingCarbs = target.carbsG;
   let remainingFat = target.fatG;
 
-  const proteinName = pickFromPool("protein", varietySeed, pool, ctx);
+  const proteinName = pickFromPool("protein", varietySeed, pool, ctx, avoidNames);
   const proteinLookup = proteinName ? pool[proteinName] : undefined;
   const proteinItem = proteinLookup
     ? sizeIngredientForGap(proteinLookup, proteinLookup.proteinGPer100g, target.proteinG, remainingFat)
@@ -238,7 +251,7 @@ export function composeSnack(
     remainingFat -= proteinItem.fatG;
   }
 
-  const carbName = pickFromPool("carb", varietySeed, pool, ctx);
+  const carbName = pickFromPool("carb", varietySeed, pool, ctx, avoidNames);
   const carbLookup = carbName ? pool[carbName] : undefined;
   const carbItem = carbLookup
     ? sizeIngredientForGap(carbLookup, carbLookup.carbsGPer100g, remainingCarbs, remainingFat)
@@ -248,7 +261,7 @@ export function composeSnack(
     remainingFat -= carbItem.fatG;
   }
 
-  const fatName = pickFromPool("fat", varietySeed, pool, ctx);
+  const fatName = pickFromPool("fat", varietySeed, pool, ctx, avoidNames);
   const fatLookup = fatName ? pool[fatName] : undefined;
   const fatItem = fatLookup ? sizeIngredientForGap(fatLookup, fatLookup.fatGPer100g, remainingFat) : null;
   if (fatItem) {

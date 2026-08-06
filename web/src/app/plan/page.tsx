@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 import { LogoutBar } from "../LogoutBar";
 import { getMostRecentPlan } from "./data";
 import { getPantryItems } from "./pantryData";
@@ -12,19 +13,18 @@ import { PlanBoard } from "./PlanView";
 // this route (OQ7/OQ6).
 export const maxDuration = 60;
 
-// Access is enforced in middleware.ts (HTTP Basic Auth) before this page
-// ever renders. Kept dynamic since it's always rendered per-session, never
-// a build-time snapshot.
+// Login is enforced in proxy.ts (Auth0 session check) before this page ever
+// renders -- the `!user` branch below is a defensive fallback, not the real
+// gate. Kept dynamic since it's always rendered per-session, never a
+// build-time snapshot.
 export const dynamic = "force-dynamic";
 
 export default async function PlanPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/onboarding");
+    redirect("/auth/login");
   }
 
   const { data: profile } = await supabase
@@ -44,7 +44,7 @@ export default async function PlanPage() {
 
   return (
     <>
-      <LogoutBar showBackToProfiles />
+      <LogoutBar />
       <PlanBoard
         initialPlan={initialPlan}
         dietaryStyles={profile.dietary_styles ?? []}

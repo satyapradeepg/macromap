@@ -179,8 +179,17 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
               <div key={aisle}>
                 <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{aisle}</h3>
                 <ul className="mt-1.5 flex flex-col gap-1.5">
-                  {aisleLines.map((line) => (
-                    <li key={lineKey(line)} className="flex items-center justify-between gap-3 text-sm text-foreground">
+                  {aisleLines.map((line, index) => (
+                    // Index appended: lineKey() (ingredientId+unit) is a
+                    // deliberately coarser key for price-override lookups,
+                    // not a render-uniqueness guarantee -- a manual-combine
+                    // split or a shared synthetic placeholder id (e.g. -1
+                    // for composed ingredients with no real Spoonacular id)
+                    // can legitimately produce two distinct lines with the
+                    // same lineKey(), which React then sees as duplicate
+                    // keys. onOverride below still keys the actual price
+                    // state by lineKey() alone, unaffected by this.
+                    <li key={`${lineKey(line)}-${index}`} className="flex items-center justify-between gap-3 text-sm text-foreground">
                       <span>
                         {formatAmount(line.totalAmount, line.unit)} {line.name}
                         {line.needsManualCombine && (

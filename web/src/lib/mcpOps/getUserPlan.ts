@@ -1,27 +1,22 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export async function getPersonaPlan(label: string) {
+// Takes the Auth0 subject id directly (profiles.id / meal_plans.user_id,
+// migration 0034) -- there's no more label->id indirection now that
+// test_personas is gone. Grab the id from the Auth0 dashboard's Users list.
+export async function getUserPlan(userId: string) {
   const admin = createAdminClient();
-
-  const { data: persona, error: personaError } = await admin
-    .from("test_personas")
-    .select("persona_user_id")
-    .eq("label", label)
-    .maybeSingle();
-  if (personaError) throw new Error(`persona lookup failed: ${personaError.message}`);
-  if (!persona) throw new Error(`no test persona with label "${label}"`);
 
   const { data: plan, error: planError } = await admin
     .from("meal_plans")
     .select(
       "id, weekly_target_calories, weekly_target_protein_g, weekly_target_carbs_g, weekly_target_fat_g, weekly_actual_calories, weekly_actual_protein_g, weekly_actual_carbs_g, weekly_actual_fat_g, reconciliation_status, generated_at",
     )
-    .eq("user_id", persona.persona_user_id)
+    .eq("user_id", userId)
     .order("generated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (planError) throw new Error(`plan lookup failed: ${planError.message}`);
-  if (!plan) return { persona: label, plan: null, slots: [] };
+  if (!plan) return { userId, plan: null, slots: [] };
 
   const { data: slots, error: slotsError } = await admin
     .from("meal_plan_slots")
@@ -30,5 +25,5 @@ export async function getPersonaPlan(label: string) {
     .order("day_index", { ascending: true });
   if (slotsError) throw new Error(`slots lookup failed: ${slotsError.message}`);
 
-  return { persona: label, plan, slots: slots ?? [] };
+  return { userId, plan, slots: slots ?? [] };
 }

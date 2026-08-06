@@ -7,6 +7,7 @@
 // nothing here talks to Spoonacular directly.
 
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 import type { PantryItemView } from "./pantryData";
 
 export interface AddPantryItemInput {
@@ -27,9 +28,7 @@ export interface AddPantryItemResult {
 
 export async function addPantryItem(input: AddPantryItemInput): Promise<AddPantryItemResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { item: null, error: "No active session — refresh the page and try again." };
@@ -81,9 +80,7 @@ export async function addPantryItem(input: AddPantryItemInput): Promise<AddPantr
 
 export async function removePantryItem(id: string): Promise<{ error: string | null }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { error: "No active session — refresh the page and try again." };
