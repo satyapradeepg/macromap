@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Pill } from "@/components/ui/Pill";
@@ -25,6 +25,7 @@ import {
 } from "@/lib/units";
 import type { DietaryStyle } from "@/lib/mealplan/dietaryMapping";
 import { saveProfile } from "./actions";
+import { generatePlan } from "@/app/plan/actions";
 
 const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
   { value: "sedentary", label: "Sedentary" },
@@ -68,24 +69,66 @@ function toggleInArray(value: string, list: string[]): string[] {
     : [...list, value];
 }
 
-export function OnboardingWizard() {
+export interface OnboardingInitialProfile {
+  weightKg: number;
+  heightCm: number;
+  age: number;
+  biologicalSex: BiologicalSex;
+  activityLevel: ActivityLevel;
+  goal: Goal;
+  dailyCalories: number;
+  dailyProteinG: number;
+  dailyCarbsG: number;
+  dailyFatG: number;
+  dietaryStyles: string[];
+  allergies: string[];
+  dislikes: string[];
+  weeklyBudgetUsd: number | null;
+  zipCode: string | null;
+}
+
+// initialProfile turns this into an edit form for an already-onboarded user
+// (/account) instead of a fresh-signup wizard (/onboarding) -- saveProfile
+// upserts by user id either way, so the only difference is what the fields
+// start out showing.
+export function OnboardingWizard({
+  initialProfile,
+}: {
+  initialProfile?: OnboardingInitialProfile;
+} = {}) {
   const [step, setStep] = useState<1 | 2>(1);
+
+  const initialHeightFtIn = initialProfile
+    ? cmToFeetInches(initialProfile.heightCm)
+    : { feet: 5, inches: 11 };
+  const initialAllergyPresets =
+    initialProfile?.allergies.filter((a) =>
+      (ALLERGY_PRESET_OPTIONS as readonly string[]).includes(a),
+    ) ?? [];
+  const initialOtherAllergies =
+    initialProfile?.allergies
+      .filter((a) => !(ALLERGY_PRESET_OPTIONS as readonly string[]).includes(a))
+      .join(", ") ?? "";
 
   // Step 1 (F1) state
   const [weightUnit, setWeightUnit] = useState<WeightUnit>("lbs");
-  const [weightInput, setWeightInput] = useState("185");
+  const [weightInput, setWeightInput] = useState(
+    initialProfile ? String(Math.round(kgToLbs(initialProfile.weightKg))) : "185",
+  );
   const [heightUnit, setHeightUnit] = useState<HeightUnit>("ftin");
-  const [heightFeet, setHeightFeet] = useState("5");
-  const [heightInches, setHeightInches] = useState("11");
-  const [heightCmInput, setHeightCmInput] = useState("180");
-  const [age, setAge] = useState("26");
+  const [heightFeet, setHeightFeet] = useState(String(initialHeightFtIn.feet));
+  const [heightInches, setHeightInches] = useState(String(initialHeightFtIn.inches));
+  const [heightCmInput, setHeightCmInput] = useState(
+    initialProfile ? String(Math.round(initialProfile.heightCm)) : "180",
+  );
+  const [age, setAge] = useState(initialProfile ? String(initialProfile.age) : "26");
   const [biologicalSex, setBiologicalSex] = useState<BiologicalSex | null>(
-    null,
+    initialProfile?.biologicalSex ?? null,
   );
   const [activityLevel, setActivityLevel] = useState<ActivityLevel | null>(
-    null,
+    initialProfile?.activityLevel ?? null,
   );
-  const [goal, setGoal] = useState<Goal | null>(null);
+  const [goal, setGoal] = useState<Goal | null>(initialProfile?.goal ?? null);
   const [step1Error, setStep1Error] = useState<string | null>(null);
 
   // Metric snapshot taken when Step 1 is submitted, reused on final save
@@ -97,20 +140,36 @@ export function OnboardingWizard() {
 
   // Step 2 (F1 review + F2) state. Targets pre-fill from the calculation but
   // are editable — PRD 7.3 F1: "user can nudge any value manually."
-  const [calories, setCalories] = useState("");
-  const [protein, setProtein] = useState("");
-  const [carbs, setCarbs] = useState("");
-  const [fat, setFat] = useState("");
-  const [dietaryStyles, setDietaryStyles] = useState<string[]>([]);
-  const [allergyPresets, setAllergyPresets] = useState<string[]>([]);
-  const [otherAllergies, setOtherAllergies] = useState("");
-  const [dislikes, setDislikes] = useState("");
-  const [weeklyBudget, setWeeklyBudget] = useState("");
-  const [zipCode, setZipCode] = useState("");
+  const [calories, setCalories] = useState(
+    initialProfile ? String(initialProfile.dailyCalories) : "",
+  );
+  const [protein, setProtein] = useState(
+    initialProfile ? String(initialProfile.dailyProteinG) : "",
+  );
+  const [carbs, setCarbs] = useState(
+    initialProfile ? String(initialProfile.dailyCarbsG) : "",
+  );
+  const [fat, setFat] = useState(initialProfile ? String(initialProfile.dailyFatG) : "");
+  const [dietaryStyles, setDietaryStyles] = useState<string[]>(
+    initialProfile?.dietaryStyles ?? [],
+  );
+  const [allergyPresets, setAllergyPresets] = useState<string[]>(initialAllergyPresets);
+  const [otherAllergies, setOtherAllergies] = useState(initialOtherAllergies);
+  const [dislikes, setDislikes] = useState(initialProfile?.dislikes.join(", ") ?? "");
+  const [weeklyBudget, setWeeklyBudget] = useState(
+    initialProfile?.weeklyBudgetUsd != null ? String(initialProfile.weeklyBudgetUsd) : "",
+  );
+  const [zipCode, setZipCode] = useState(initialProfile?.zipCode ?? "");
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [alsoGenerate, setAlsoGenerate] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+
+  const router = useRouter();
+  const [continuing, startContinuing] = useTransition();
 
   function handleCalculate() {
     const weightKg =
@@ -212,12 +271,42 @@ export function OnboardingWizard() {
       zipCode: zipCode.trim() || null,
     });
 
-    setSaving(false);
     if (result.error) {
+      setSaving(false);
       setSaveError(result.error);
-    } else {
-      setSaved(true);
+      return;
     }
+
+    if (alsoGenerate) {
+      setSaving(false);
+      setGenerating(true);
+      const genResult = await generatePlan();
+      setGenerating(false);
+      if (genResult.error) {
+        // Profile itself did save -- just surface the generation failure
+        // and fall back to the manual "Continue" link below, rather than
+        // losing the save.
+        setGenerateError(genResult.error);
+        setSaved(true);
+        return;
+      }
+      router.push("/plan");
+      return;
+    }
+
+    setSaving(false);
+    setSaved(true);
+  }
+
+  if (generating) {
+    return (
+      <main className="mx-auto w-full min-w-0 max-w-md px-6 py-24 text-center">
+        <h1 className="text-2xl font-bold">Generating your meal plan…</h1>
+        <p className="mt-2 text-muted">
+          This can take a minute, especially with dietary restrictions.
+        </p>
+      </main>
+    );
   }
 
   if (saved) {
@@ -228,12 +317,19 @@ export function OnboardingWizard() {
           {calories} kcal · {protein}g protein · {carbs}g carbs · {fat}g fat,
           daily.
         </p>
-        <Link
-          href="/plan"
-          className="mt-6 inline-block rounded-lg bg-accent px-4 py-2 font-semibold text-white"
+        {generateError && (
+          <p className="mt-2 text-sm text-red-500">
+            Couldn&apos;t generate a new meal plan automatically: {generateError}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={continuing}
+          onClick={() => startContinuing(() => router.push("/plan"))}
+          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 font-semibold text-white disabled:opacity-50"
         >
-          Continue to your meal plan
-        </Link>
+          {continuing ? "Loading…" : "Continue to your meal plan"}
+        </button>
       </main>
     );
   }
@@ -527,6 +623,16 @@ export function OnboardingWizard() {
               />
             </div>
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={alsoGenerate}
+              onChange={(e) => setAlsoGenerate(e.target.checked)}
+              className="h-4 w-4 rounded border-border"
+            />
+            Also generate a new meal plan with these targets
+          </label>
 
           {saveError && <p className="text-sm text-red-500">{saveError}</p>}
 

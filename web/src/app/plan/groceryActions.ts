@@ -7,6 +7,7 @@
 // pricing live in groceryData.ts.
 
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/identity";
 import { getGroceryList, basisForUnit, type GroceryLineView } from "./groceryData";
 import { toBaseAmount } from "@/lib/grocery/units";
 
@@ -22,9 +23,7 @@ export interface FetchGroceryListResult {
 
 export async function fetchGroceryList(planId: string): Promise<FetchGroceryListResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { lines: [], error: "No active session — refresh the page and try again." };
@@ -61,9 +60,7 @@ export interface OverrideGroceryPriceInput {
 // applied to the Tavily path in groceryData.ts's resolvePricedLines.
 export async function overrideGroceryPrice(input: OverrideGroceryPriceInput): Promise<{ error: string | null }> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     return { error: "No active session — refresh the page and try again." };

@@ -122,8 +122,9 @@ function composedSnackCandidate(
   id: number,
   pantryPriceCtx: PantryPriceContext,
   budgetPerMealUsd: number | null,
+  avoidNames: string[] = [],
 ): RankedCandidate | null {
-  const composed = composeSnack(target, pool, varietySeed, pantryPriceCtx);
+  const composed = composeSnack(target, pool, varietySeed, pantryPriceCtx, avoidNames);
   if (composed.ingredients.length === 0) return null;
 
   // Real cost now available (staticIngredientMacros.ts, retrofitted July
@@ -2293,6 +2294,10 @@ export interface SwapSlotInput {
   // alone, with no other-slot consumption committed either -- today's
   // original boolean-only behavior, never a regression for any caller.
   pantryTracker?: PantryRemainingTracker;
+  // Snack-only: the currently-shown snack's ingredient names, so a swap
+  // never coincidentally recomposes to the exact same combo (see
+  // composeSnack's avoidNames). Meaningless/unused for recipe slots.
+  currentIngredientNames?: string[];
 }
 
 export interface SwapSlotResult {
@@ -2323,7 +2328,15 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
       pantryItemNames: input.pantryItems.map((p) => p.name),
       budgetAware: input.tier === "pro" && swapBudgetPerMealUsd !== null,
     };
-    const candidate = composedSnackCandidate(perMeal, pool, varietySeed, -1, swapPantryPriceCtx, swapBudgetPerMealUsd);
+    const candidate = composedSnackCandidate(
+      perMeal,
+      pool,
+      varietySeed,
+      -1,
+      swapPantryPriceCtx,
+      swapBudgetPerMealUsd,
+      input.currentIngredientNames ?? [],
+    );
     if (!candidate) {
       return {
         candidate: null,

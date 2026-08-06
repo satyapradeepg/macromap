@@ -614,6 +614,13 @@ function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPl
   const [instructions, setInstructions] = useState<{ steps: string[]; sourceUrl: string | null } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Bumped by the Retry button to re-run the fetch effect below -- a
+  // "recipe details unavailable" result is usually just a transient
+  // Spoonacular rate-limit/outage hitting right after a heavy-traffic
+  // generation, not a permanent gap (see recipeInstructions.ts's own
+  // comment); retrying this one recipe shouldn't require regenerating the
+  // whole plan.
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     if (slot.recipeId === null && !slot.aiComposed) return;
@@ -641,7 +648,7 @@ function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPl
     return () => {
       cancelled = true;
     };
-  }, [slot.recipeId, slot.aiComposed, slot.dayIndex, slot.mealType, mealPlanId]);
+  }, [slot.recipeId, slot.aiComposed, slot.dayIndex, slot.mealType, mealPlanId, retryCount]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -727,7 +734,22 @@ function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPl
           <div className="mt-4">
             <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Instructions</h3>
             {loading && <p className="mt-2 text-sm text-muted">Loading…</p>}
-            {!loading && loadError && <p className="mt-2 text-sm text-muted">{loadError}</p>}
+            {!loading && loadError && (
+              <div className="mt-2 flex items-center gap-3">
+                <p className="text-sm text-muted">{loadError}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoading(true);
+                    setLoadError(null);
+                    setRetryCount((c) => c + 1);
+                  }}
+                  className="shrink-0 text-sm font-semibold text-accent hover:underline"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {!loading && !loadError && instructions && instructions.steps.length > 0 && (
               <ol className="mt-2 flex flex-col gap-2 text-sm text-foreground">
                 {instructions.steps.map((step, i) => (

@@ -1,28 +1,33 @@
-// Real end-to-end smoke test against a deployed MacroMap environment.
+// Real end-to-end smoke test against a running MacroMap environment,
+// exercising the actual Auth0 login flow (migration
+// 0034_auth0_identity_swap.sql replaced Basic Auth + the /profiles
+// picker + Supabase Auth entirely -- see that migration's header comment
+// for the full architecture). Not wired into CI: it needs a real,
+// persistent test account's real credentials, and (lightly) mutates that
+// account's profile/plan data. Run by hand after any change touching
+// proxy.ts, lib/auth0.ts, lib/identity.ts, lib/supabase/server.ts, or the
+// account/onboarding/plan Server Actions.
 //
-// This exists because two real bugs (a stale comment-only edit that left
-// removed code running, and a gate cookie scoped to the wrong path) both
-// slipped past tsc/eslint/vitest and curl-based verification on 2026-08-01
-// -- neither approach exercises a real authenticated browser session, which
-// is the only thing that actually caught either bug. Run this by hand after
-// any change touching middleware.ts, the persona-switcher, or auth/cookies
-// in general. Not wired into CI: it mutates real data (creates + deletes a
-// throwaway persona) and needs real deployed credentials.
+// Deliberately does NOT test account deletion -- that's destructive to the
+// one persistent test account this script depends on for every other run.
+// Verified manually once during the Auth0 migration itself (real Auth0
+// user deletion confirmed via a subsequent failed login attempt); if that
+// path needs re-testing, do it by hand against a disposable account, not
+// via this script.
 //
 // Usage:
-//   E2E_BASE_URL=https://macromap.apps.human-angle.com \
-//   E2E_USERNAME=... E2E_PASSWORD=... \
+//   E2E_BASE_URL=http://localhost:3000 \
+//   E2E_EMAIL=... E2E_PASSWORD=... \
 //   node scripts/e2e-smoke.mjs
 
 import { chromium } from "playwright";
 
-const BASE = process.env.E2E_BASE_URL ?? "https://macromap.apps.human-angle.com";
-const USERNAME = process.env.E2E_USERNAME;
+const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+const EMAIL = process.env.E2E_EMAIL;
 const PASSWORD = process.env.E2E_PASSWORD;
-const LABEL = `e2e-smoke-${Date.now()}`;
 
-if (!USERNAME || !PASSWORD) {
-  console.error("Set E2E_USERNAME and E2E_PASSWORD (the deployed ACCESS_USERNAME/ACCESS_PASSWORD).");
+if (!EMAIL || !PASSWORD) {
+  console.error("Set E2E_EMAIL and E2E_PASSWORD (a real Auth0 test account's credentials).");
   process.exit(1);
 }
 
@@ -32,96 +37,116 @@ function check(label, ok, extra) {
   console.log(`[${ok ? "OK" : "FAIL"}] ${label}${extra ? " -- " + extra : ""}`);
 }
 
+async function login(page) {
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle" });
+  await page.getByText("Log in", { exact: true }).click();
+  const usernameField = page.locator('input[name="username"], input[type="email"], input#username');
+  await usernameField.first().waitFor({ timeout: 10000 });
+  await usernameField.first().fill(EMAIL);
+  await page.locator('input[name="password"], input[type="password"], input#password').first().fill(PASSWORD);
+  await page.locator('button[type="submit"]').first().click();
+  await page.waitForURL((url) => url.origin === BASE, { timeout: 20000 });
+}
+
 async function main() {
   const browser = await chromium.launch();
 
-  // 1. Homepage must be reachable with NO credentials at all.
+  // 1. Homepage must be reachable with NO session at all.
   {
     const anonContext = await browser.newContext();
     const anonPage = await anonContext.newPage();
     const res = await anonPage.goto(`${BASE}/`, { waitUntil: "networkidle" });
-    check("homepage reachable with no Basic Auth credentials", res.status() === 200, `status=${res.status()}`);
+    check("homepage reachable with no Auth0 session", res.status() === 200, `status=${res.status()}`);
     await anonContext.close();
   }
 
-  // 2. /profiles must 401 with NO credentials.
+  // 2. /plan and /account must redirect to Auth0 login with no session.
   {
     const anonContext = await browser.newContext();
     const anonPage = await anonContext.newPage();
-    const res = await anonPage.goto(`${BASE}/profiles`, { waitUntil: "domcontentloaded" });
-    check("/profiles requires Basic Auth when no credentials given", res.status() === 401, `status=${res.status()}`);
+    await anonPage.goto(`${BASE}/plan`, { waitUntil: "networkidle" });
+    check("/plan redirects to Auth0 login when logged out", anonPage.url().includes("auth0.com"), anonPage.url());
+    await anonPage.goto(`${BASE}/account`, { waitUntil: "networkidle" });
+    check("/account redirects to Auth0 login when logged out", anonPage.url().includes("auth0.com"), anonPage.url());
     await anonContext.close();
   }
 
-  // 3. Everything below uses a context with valid Basic Auth credentials.
-  const context = await browser.newContext({ httpCredentials: { username: USERNAME, password: PASSWORD } });
+  // 3. Everything below uses a real authenticated session.
+  const context = await browser.newContext();
   const page = await context.newPage();
-  page.on("dialog", (d) => d.accept()); // confirm() on Delete
 
   try {
-    await page.goto(`${BASE}/profiles`, { waitUntil: "networkidle" });
-    check("/profiles reachable with valid Basic Auth credentials", page.url() === `${BASE}/profiles`);
+    await login(page);
+    check("login redirects to a real app page (/plan or /onboarding), not an error", /\/plan$|\/onboarding$/.test(page.url()), page.url());
 
-    // Create a disposable persona
-    await page.getByPlaceholder(/vegan_soy_allergy/i).fill(LABEL);
-    await page.getByRole("button", { name: /New profile/i }).click();
-    await page.waitForURL(`${BASE}/onboarding`, { timeout: 15000 });
-    check("create persona -> /onboarding", page.url() === `${BASE}/onboarding`);
+    // If landed on /onboarding, this test account has no profile yet --
+    // complete a minimal onboarding so the rest of the checks have a plan
+    // to work with. If already onboarded (the normal case for a reused
+    // persistent test account), this is skipped entirely.
+    if (page.url() === `${BASE}/onboarding`) {
+      const numberInputs = page.locator('input[type="number"]');
+      await numberInputs.nth(0).fill("170");
+      await numberInputs.nth(1).fill("5");
+      await numberInputs.nth(2).fill("9");
+      await numberInputs.nth(3).fill("29");
+      await page.getByRole("button", { name: "Male", exact: true }).click();
+      await page.locator("select").selectOption({ index: 1 });
+      await page.getByRole("button", { name: "⚖️ Maintain", exact: true }).click();
+      await page.getByRole("button", { name: "Calculate my macros", exact: true }).click();
+      await page.waitForTimeout(1000);
+      await page.getByRole("button", { name: "Looks good", exact: true }).click();
+      await page.waitForTimeout(1500);
+      await page.getByText("Continue to your meal plan", { exact: false }).click();
+      await page.waitForURL(`${BASE}/plan`, { timeout: 15000 });
+    }
+    check("on /plan with a real session", page.url() === `${BASE}/plan`);
 
-    // Back to profiles, switch to it. Row cards are the specific
-    // .rounded-lg.border.border-border.bg-surface div (see Card.tsx) --
-    // a generic "div with this text" locator also matches broad ancestor
-    // wrappers.
-    await page.goto(`${BASE}/profiles`, { waitUntil: "networkidle" });
-    const row = page.locator(".rounded-lg.border.border-border.bg-surface").filter({ hasText: LABEL });
-    // The disposable persona has no profiles row yet (onboarding was never
-    // completed for it), so /plan/page.tsx's own pre-existing logic
-    // correctly bounces it to /onboarding rather than staying on /plan --
-    // that's the right outcome here, not a bug. The thing actually under
-    // test is that it lands somewhere real (an app page with real content),
-    // not on a 401 or a login page that no longer exists.
-    await row.getByRole("button", { name: "Switch", exact: true }).click();
-    await page.waitForURL((url) => url.pathname === "/plan" || url.pathname === "/onboarding", { timeout: 15000 });
-    await page.waitForTimeout(2000);
-    const afterSwitchUrl = page.url();
-    check("switch lands on a real app page (/plan or /onboarding), not login/401", true, `url=${afterSwitchUrl}`);
-    const planText = await page.locator("body").innerText();
-    check("post-switch page shows real content, not an error", !/sign in|invalid refresh/i.test(planText));
+    const bodyText = await page.locator("body").innerText();
+    check("plan page shows real content, not a stale error state", !/sign in|invalid refresh|unauthorized/i.test(bodyText));
 
-    // Reload proves the session persists across a fresh request
+    // Session survives a reload.
     await page.reload({ waitUntil: "networkidle" });
-    check("session survives a reload", page.url() === afterSwitchUrl, `url=${page.url()}`);
+    check("session survives a reload", page.url() === `${BASE}/plan`, page.url());
 
-    // Edit -> /onboarding, stays
-    await page.goto(`${BASE}/profiles`, { waitUntil: "networkidle" });
-    const editRow = page.locator(".rounded-lg.border.border-border.bg-surface").filter({ hasText: LABEL });
-    await editRow.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.waitForURL(`${BASE}/onboarding`, { timeout: 15000 });
+    // /account reachable, shows the right identity.
+    await page.goto(`${BASE}/account`, { waitUntil: "networkidle" });
+    const acctText = await page.locator("body").innerText();
+    check("/account shows the logged-in user's own email", acctText.includes(EMAIL));
+
+    // Logout actually ends the session (not just clears a client-side flag).
+    await page.getByText("Log out", { exact: true }).click();
     await page.waitForTimeout(1500);
-    check("edit -> /onboarding and stays there", page.url() === `${BASE}/onboarding`);
-
-    // "Back to profiles" ends the persona session but keeps Basic Auth valid
-    await page.getByRole("button", { name: /Back to profiles/i }).click();
-    await page.waitForURL(`${BASE}/profiles`, { timeout: 10000 });
-    check("back to profiles -> /profiles (not a 401 -- Basic Auth still cached)", page.url() === `${BASE}/profiles`);
-
     await page.goto(`${BASE}/plan`, { waitUntil: "networkidle" });
-    check("/plan with no active persona redirects to /onboarding, not a 401", page.url() === `${BASE}/onboarding`);
+    check("/plan requires login again after logout", page.url().includes("auth0.com"), page.url());
 
-    // Clean up: delete the disposable persona
-    await page.goto(`${BASE}/profiles`, { waitUntil: "networkidle" });
-    const deleteRow = page.locator(".rounded-lg.border.border-border.bg-surface").filter({ hasText: LABEL });
-    await deleteRow.getByRole("button", { name: "Delete", exact: true }).click();
-    await page.waitForTimeout(1500);
-    const afterDeleteText = await page.locator("body").innerText();
-    check("disposable persona cleaned up", !afterDeleteText.includes(LABEL));
+    // Re-login and confirm the same account's data persisted.
+    await login(page);
+    check("re-login lands back on /plan (existing profile persisted)", page.url() === `${BASE}/plan`, page.url());
   } catch (e) {
     check("EXCEPTION", false, String(e));
   } finally {
     await context.close();
-    await browser.close();
   }
 
+  // 4. RLS defense-in-depth: an unauthenticated Supabase request must never
+  // return another user's (or any) row, regardless of app-level bugs.
+  {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (supabaseUrl && anonKey) {
+      for (const table of ["profiles", "meal_plans", "pantry_items", "grocery_price_overrides"]) {
+        const res = await fetch(`${supabaseUrl}/rest/v1/${table}?select=*`, {
+          headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        });
+        const body = await res.json();
+        check(`RLS blocks unauthenticated reads on ${table}`, Array.isArray(body) && body.length === 0, `rows=${Array.isArray(body) ? body.length : JSON.stringify(body)}`);
+      }
+    } else {
+      console.log("[SKIP] RLS check -- NEXT_PUBLIC_SUPABASE_URL/ANON_KEY not set in this shell.");
+    }
+  }
+
+  await browser.close();
   console.log(allOk ? "\n=== ALL CHECKS PASSED ===" : "\n=== SOME CHECKS FAILED ===");
   process.exit(allOk ? 0 : 1);
 }

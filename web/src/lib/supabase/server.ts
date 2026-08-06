@@ -1,29 +1,21 @@
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { auth0 } from "@/lib/auth0";
 
-// For use in Server Components, Route Handlers, and Server Actions.
+// For use in Server Components, Route Handlers, and Server Actions. There is
+// no Supabase-managed session/cookie anymore -- Auth0 is the sole identity
+// provider (see migration 0034), wired in via Supabase's Third-Party Auth
+// feature. RLS policies read (auth.jwt() ->> 'sub') off this same ID token,
+// so passing it via `accessToken` is what makes auth.jwt() resolve at all;
+// Supabase's own auth.uid()/auth.getUser() do not apply to third-party JWTs.
 export async function createClient() {
-  const cookieStore = await cookies();
+  const session = await auth0.getSession();
+  const idToken = session?.tokenSet.idToken;
 
-  return createServerClient(
+  return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options),
-            );
-          } catch {
-            // Called from a Server Component — safe to ignore because
-            // middleware.ts already refreshes the session on every request.
-          }
-        },
-      },
+      accessToken: async () => idToken ?? null,
     },
   );
 }

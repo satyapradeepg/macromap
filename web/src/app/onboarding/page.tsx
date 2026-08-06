@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default function OnboardingPage() {
   return (
     <>
-      <LogoutBar showBackToProfiles />
+      <LogoutBar />
       <OnboardingWizard />
     </>
   );
