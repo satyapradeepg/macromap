@@ -41,37 +41,39 @@ function makePlan(slots: PlanSlotView[]): PlanView {
   };
 }
 
-// A fixed, known Wednesday -- Aug 12, 2026 is a Wednesday (dayIndex 2, Mon=0).
-const WEDNESDAY = new Date(2026, 7, 12);
+// A fixed reference date -- Aug 12, 2026. day_index no longer ties to a
+// real weekday at all, so this is just "the day the plan was
+// generated/exported," nothing more.
+const TODAY = new Date(2026, 7, 12);
 
 describe("buildMealPlanIcs", () => {
-  it("anchors today's weekday's slot to today's real date", () => {
-    const plan = makePlan([makeSlot({ dayIndex: 2, mealType: "lunch" })]); // Wed
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+  it("maps day_index 0 to today, always", () => {
+    const plan = makePlan([makeSlot({ dayIndex: 0, mealType: "lunch" })]);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).toContain("DTSTART:20260812T123000");
   });
 
-  it("maps a future day_index to a later real date", () => {
-    const plan = makePlan([makeSlot({ dayIndex: 4, mealType: "dinner" })]); // Fri, +2 days
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
-    expect(ics).toContain("DTSTART:20260814T183000");
+  it("maps day_index N to N days from today", () => {
+    const plan = makePlan([makeSlot({ dayIndex: 4, mealType: "dinner" })]);
+    const ics = buildMealPlanIcs(plan, TODAY);
+    expect(ics).toContain("DTSTART:20260816T183000");
   });
 
-  it("skips a day_index earlier in the week than today (already passed)", () => {
-    const plan = makePlan([makeSlot({ dayIndex: 0, mealType: "breakfast" })]); // Mon, already gone
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
-    expect(ics).not.toContain("BEGIN:VEVENT");
+  it("maps the last day of the rolling week (day_index 6) 6 days out", () => {
+    const plan = makePlan([makeSlot({ dayIndex: 6, mealType: "breakfast" })]);
+    const ics = buildMealPlanIcs(plan, TODAY);
+    expect(ics).toContain("DTSTART:20260818T080000");
   });
 
-  it("skips an unfilled slot even if its day hasn't passed", () => {
+  it("skips an unfilled slot", () => {
     const plan = makePlan([makeSlot({ dayIndex: 2, isUnfilled: true })]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).not.toContain("BEGIN:VEVENT");
   });
 
   it("titles the event with the meal type and recipe name", () => {
     const plan = makePlan([makeSlot({ dayIndex: 2, mealType: "dinner", recipeTitle: "Baked Cheese Manicotti" })]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).toContain("SUMMARY:Dinner: Baked Cheese Manicotti");
   });
 
@@ -83,7 +85,7 @@ describe("buildMealPlanIcs", () => {
         recipeIngredients: [{ name: "rice, white", amount: 1, unit: "cup" }],
       }),
     ]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).toContain("SUMMARY:Lunch: Rice\\, Beans\\; and Greens");
     expect(ics).toContain("rice\\, white");
   });
@@ -98,7 +100,7 @@ describe("buildMealPlanIcs", () => {
         recipeIngredients: null,
       }),
     ]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).toContain("215g cottage cheese");
   });
 
@@ -109,13 +111,13 @@ describe("buildMealPlanIcs", () => {
         addon: { ingredientName: "sunflower seed butter", amountG: 10, caloriesKcal: 58, proteinG: 2, carbsG: 2, fatG: 5 },
       }),
     ]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics).toContain("+ 10g sunflower seed butter");
   });
 
   it("produces a valid VCALENDAR wrapper even with zero events", () => {
     const plan = makePlan([]);
-    const ics = buildMealPlanIcs(plan, WEDNESDAY);
+    const ics = buildMealPlanIcs(plan, TODAY);
     expect(ics.startsWith("BEGIN:VCALENDAR")).toBe(true);
     expect(ics.trim().endsWith("END:VCALENDAR")).toBe(true);
   });
