@@ -167,6 +167,7 @@ export function OnboardingWizard({
   const [alsoGenerate, setAlsoGenerate] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [usingCachedFallback, setUsingCachedFallback] = useState(false);
 
   const router = useRouter();
   const [continuing, startContinuing] = useTransition();
@@ -290,6 +291,15 @@ export function OnboardingWizard({
         setSaved(true);
         return;
       }
+      if (genResult.usingCachedFallback) {
+        // No error, but the "plan" just returned is last week's, not one
+        // built from the targets just saved -- an auto-redirect to /plan
+        // here would look identical to a real regeneration succeeding.
+        // Stop and say so instead, same as the genResult.error branch above.
+        setUsingCachedFallback(true);
+        setSaved(true);
+        return;
+      }
       router.push("/plan");
       return;
     }
@@ -320,6 +330,14 @@ export function OnboardingWizard({
         {generateError && (
           <p className="mt-2 text-sm text-red-500">
             Couldn&apos;t generate a new meal plan automatically: {generateError}
+          </p>
+        )}
+        {usingCachedFallback && (
+          <p className="mt-2 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
+            Live generation is temporarily unavailable, so the meal plan
+            you&apos;ll see next is your last one, not yet updated for these
+            new targets. Try &quot;Regenerate&quot; from the meal plan page
+            shortly.
           </p>
         )}
         <button
