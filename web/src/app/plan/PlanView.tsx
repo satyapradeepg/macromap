@@ -101,14 +101,12 @@ export function PlanBoard({
   dailyCalories,
   initialPantryItems,
   initialGroceryList,
-  tier,
 }: {
   initialPlan: PlanView | null;
   dietaryStyles: string[];
   dailyCalories: number;
   initialPantryItems: PantryItemView[];
   initialGroceryList: GroceryLineView[];
-  tier: "free" | "pro";
 }) {
   const [plan, setPlan] = useState<PlanView | null>(initialPlan);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlotView[]>(initialPlan?.blockedSlots ?? []);
@@ -378,7 +376,7 @@ export function PlanBoard({
           </span>
         </summary>
         <div className="border-t border-border p-4 pt-3">
-          <GroceryList lines={groceryList} tier={tier} />
+          <GroceryList lines={groceryList} />
         </div>
       </details>
     </main>

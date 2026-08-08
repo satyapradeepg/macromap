@@ -51,7 +51,6 @@ export default async function PlanPage() {
         dailyCalories={profile.daily_calories}
         initialPantryItems={initialPantryItems}
         initialGroceryList={initialGroceryList}
-        tier={tier}
       />
     </>
   );
