@@ -28,17 +28,16 @@ const MEAL_TIMES: Record<MealType, { hour: number; minute: number }> = {
 
 const EVENT_DURATION_MINUTES = 30;
 
-// day_index has no real calendar date anywhere in the schema (0-6 is just
-// a Monday=0 label, per targets.ts/PlanView.tsx's DAY_LABELS) -- Satya's
-// call: today anchors to its own real weekday, the rest of the plan's
-// days fall forward/backward from there. A day_index earlier in the week
-// than today has therefore already passed and is skipped below, rather
-// than exporting a calendar reminder for a meal that's already happened.
-function dateForDayIndex(dayIndex: number, today: Date): Date | null {
-  const todayWeekday = (today.getDay() + 6) % 7; // Date.getDay(): 0=Sun -> 0=Mon
-  if (dayIndex < todayWeekday) return null;
+// day_index has no real calendar date anywhere in the schema, and (per
+// PlanView.tsx's DAY_LABELS, renamed 2026-08-08) isn't tied to a real
+// Monday-Sunday week at all -- it's a rolling 7-day plan starting from
+// whenever it was generated. Satya's call: day_index 0 is always today,
+// day_index N is N days from now -- matching "fill one week of recipes
+// starting from today," so every index is today-or-later by construction
+// and none ever need to be skipped as already passed.
+function dateForDayIndex(dayIndex: number, today: Date): Date {
   const target = new Date(today);
-  target.setDate(today.getDate() + (dayIndex - todayWeekday));
+  target.setDate(today.getDate() + dayIndex);
   return target;
 }
 
@@ -118,10 +117,7 @@ export function buildMealPlanIcs(plan: PlanView, today: Date = new Date()): stri
   const dtstamp = formatUtcTimestamp(today);
   const events = plan.slots
     .filter((slot) => !slot.isUnfilled)
-    .flatMap((slot) => {
-      const date = dateForDayIndex(slot.dayIndex, today);
-      return date ? [buildEvent(plan.id, slot, date, dtstamp)] : [];
-    });
+    .map((slot) => buildEvent(plan.id, slot, dateForDayIndex(slot.dayIndex, today), dtstamp));
 
   return [
     "BEGIN:VCALENDAR",

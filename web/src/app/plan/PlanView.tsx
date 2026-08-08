@@ -24,7 +24,13 @@ import { fetchGroceryList } from "./groceryActions";
 import { pluralizeUnit } from "./unitFormatting";
 import { buildMealPlanIcs } from "./calendarExport";
 
-const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// day_index (0-6) was never actually tied to a real Monday-Sunday week --
+// a plan can be generated/regenerated any day, so labeling it with real
+// weekday names implied a fixed-week alignment that doesn't exist. Renamed
+// 2026-08-08 (Satya's call) to match what it actually is: a rolling 7-day
+// plan starting from whenever it was generated. See calendarExport.ts for
+// the matching change on the export side (day_index 0 = today, always).
+const DAY_LABELS = ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7"];
 
 function slotMapKey(dayIndex: number, mealType: MealType): string {
   return `${dayIndex}-${mealType}`;
