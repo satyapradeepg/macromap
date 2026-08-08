@@ -1,6 +1,7 @@
 "use server";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUser } from "@/lib/identity";
 import {
@@ -334,6 +335,14 @@ export async function generatePlan(): Promise<GeneratePlanResult> {
         blockingHint: b.blockingHint,
       })),
     };
+
+    // Callers that navigate here via a client-side `router.push("/plan")`
+    // (e.g. account-edit's handleSave) can otherwise render an already-
+    // stale prefetched RSC snapshot of this route from before the new plan
+    // was generated -- bust it so the fresh weekly targets/slots are what
+    // actually renders, not whatever LogoutBar's ambient <Link href="/plan">
+    // prefetch had cached moments earlier.
+    revalidatePath("/plan");
 
     return { plan, usingCachedFallback: false, error: null };
   } catch (err) {
