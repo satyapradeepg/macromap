@@ -22,6 +22,7 @@ import { GroceryList } from "./GroceryList";
 import type { GroceryLineView } from "./groceryData";
 import { fetchGroceryList } from "./groceryActions";
 import { pluralizeUnit } from "./unitFormatting";
+import { buildMealPlanIcs } from "./calendarExport";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -153,6 +154,17 @@ export function PlanBoard({
     }
   }
 
+  function handleExportCalendar() {
+    if (!plan) return;
+    const blob = new Blob([buildMealPlanIcs(plan)], { type: "text/calendar" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "meal-plan.ics";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Adding/removing a pantry item changes what aggregate.ts's
   // applyPantryItems subtracts from the grocery list, but that list lives
   // in this component's own state, not the pantry's -- without an
@@ -223,9 +235,16 @@ export function PlanBoard({
     <main className="mx-auto w-full min-w-0 max-w-3xl px-6 py-16">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Your meal plan</h1>
-        <Button variant="primary" onClick={handleGenerate} disabled={generating}>
-          {generating ? "Generating…" : plan ? "Regenerate" : "Generate my meal plan"}
-        </Button>
+        <div className="flex items-center gap-3">
+          {plan && (
+            <button type="button" onClick={handleExportCalendar} className="text-xs font-semibold text-muted">
+              Export to Calendar
+            </button>
+          )}
+          <Button variant="primary" onClick={handleGenerate} disabled={generating}>
+            {generating ? "Generating…" : plan ? "Regenerate" : "Generate my meal plan"}
+          </Button>
+        </div>
       </div>
 
       {plan && (
