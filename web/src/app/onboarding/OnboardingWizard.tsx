@@ -156,9 +156,12 @@ export function OnboardingWizard({
   const [allergyPresets, setAllergyPresets] = useState<string[]>(initialAllergyPresets);
   const [otherAllergies, setOtherAllergies] = useState(initialOtherAllergies);
   const [dislikes, setDislikes] = useState(initialProfile?.dislikes.join(", ") ?? "");
-  const [weeklyBudget, setWeeklyBudget] = useState(
-    initialProfile?.weeklyBudgetUsd != null ? String(initialProfile.weeklyBudgetUsd) : "",
-  );
+  // No form control edits this anymore -- the budget-aware ranking feature
+  // (orchestrate.ts/ranking.ts) still reads weekly_budget_usd, so this just
+  // carries forward whatever a user already had set (or null for everyone
+  // else) rather than clearing it. Re-adding an input here is all it'd take
+  // to let users set it again.
+  const weeklyBudget = initialProfile?.weeklyBudgetUsd != null ? String(initialProfile.weeklyBudgetUsd) : "";
   const [zipCode, setZipCode] = useState(initialProfile?.zipCode ?? "");
 
   const [saving, setSaving] = useState(false);
@@ -616,30 +619,16 @@ export function OnboardingWizard({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm font-semibold text-muted">
-                Weekly budget (optional)
-              </label>
-              <Input
-                type="number"
-                value={weeklyBudget}
-                onChange={(e) => setWeeklyBudget(e.target.value)}
-                placeholder="$"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-semibold text-muted">
-                Zip code
-              </label>
-              <Input
-                type="text"
-                value={zipCode}
-                onChange={(e) => setZipCode(e.target.value)}
-                className="mt-1"
-              />
-            </div>
+          <div>
+            <label className="text-sm font-semibold text-muted">
+              Zip code
+            </label>
+            <Input
+              type="text"
+              value={zipCode}
+              onChange={(e) => setZipCode(e.target.value)}
+              className="mt-1"
+            />
           </div>
 
           <label className="flex items-center gap-2 text-sm text-muted">

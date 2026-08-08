@@ -1,12 +1,12 @@
 "use client";
 
-// Epic E3 (F4). Free tier: deduped list + quantities, no prices. Pro tier
-// adds a per-line price (or a manual-override input when Tavily couldn't
-// resolve one) and a running weekly total (PRD 7.3 F4).
+// Epic E3 (F4): deduped list + quantities, grouped by aisle for a real
+// shopping trip. No prices shown -- Satya's call (2026-08-08): grocery
+// prices were too often unresolvable ("Price unavailable") to be useful,
+// so this only ever shows names/amounts now.
 
 import { useState } from "react";
 import type { GroceryLineView } from "./groceryData";
-import { overrideGroceryPrice } from "./groceryActions";
 import { UNCATEGORIZED_AISLE } from "@/lib/grocery/ingredientAisle";
 import { pluralizeUnit } from "./unitFormatting";
 
@@ -19,100 +19,16 @@ function formatAmount(amount: number, unit: string): string {
   return unit.length <= 2 ? `${rounded}${unit}` : `${rounded} ${pluralizeUnit(unit, rounded)}`;
 }
 
-function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
 function lineToText(line: GroceryLineView): string {
   return `${formatAmount(line.totalAmount, line.unit)} ${line.name}`;
 }
 
-function PriceCell({ line, onOverride }: { line: GroceryLineView; onOverride: (priceCents: number) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [input, setInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const dollars = parseFloat(input);
-    if (!Number.isFinite(dollars) || dollars < 0) {
-      setError("Enter a valid price.");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    const priceCents = Math.round(dollars * 100);
-    const result = await overrideGroceryPrice({
-      ingredientId: line.ingredientId,
-      mergedIds: line.mergedIds,
-      priceCents,
-      totalAmount: line.totalAmount,
-      unit: line.unit,
-    });
-    setSaving(false);
-
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    onOverride(priceCents);
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <form onSubmit={handleSubmit} className="flex items-center gap-1">
-        <span className="text-xs text-muted">$</span>
-        <input
-          type="number"
-          step="0.01"
-          min="0"
-          autoFocus
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          className="w-16 rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-foreground"
-        />
-        <button type="submit" disabled={saving} className="text-xs font-semibold text-accent-2 disabled:opacity-60">
-          {saving ? "…" : "Save"}
-        </button>
-        {error && <span className="text-xs text-red-500">{error}</span>}
-      </form>
-    );
-  }
-
-  if (line.priceCents !== null) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setInput((line.priceCents! / 100).toFixed(2));
-          setEditing(true);
-        }}
-        className="font-mono text-xs text-muted"
-      >
-        {formatCents(line.priceCents)}
-      </button>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => setEditing(true)}
-      className="text-xs text-muted underline decoration-dotted"
-    >
-      $— Price unavailable — add manually
-    </button>
-  );
-}
-
 // A resolved ingredient id can appear as more than one grocery line at
 // once (aggregate.ts splits a same-id group whenever units disagree,
-// needsManualCombine) — so an override must be keyed by (ingredient,
-// unit), not by ingredient id alone, or overriding one line would
-// silently overwrite the displayed price of an unrelated line sharing the
-// same ingredient.
+// needsManualCombine) -- (ingredient, unit) is this list's stable-ish
+// render key, combined with the render index below since that pairing
+// still isn't guaranteed unique on its own (a manual-combine split or a
+// shared synthetic placeholder id can legitimately repeat it).
 function lineKey(line: Pick<GroceryLineView, "ingredientId" | "unit">): string {
   return `${line.ingredientId}-${line.unit}`;
 }
@@ -136,9 +52,15 @@ function groupByAisle(lines: GroceryLineView[]): Array<[string, GroceryLineView[
   });
 }
 
-export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "free" | "pro" }) {
+function groceryListToFile(groupedLines: Array<[string, GroceryLineView[]]>): string {
+  return groupedLines
+    .map(([aisle, aisleLines]) => `${aisle}\n${aisleLines.map((line) => `- ${lineToText(line)}`).join("\n")}`)
+    .join("\n\n");
+}
+
+export function GroceryList({ lines }: { lines: GroceryLineView[] }) {
   const [copied, setCopied] = useState(false);
-  const [priceOverrides, setPriceOverrides] = useState<Record<string, number>>({});
+  const groupedLines = groupByAisle(lines);
 
   async function handleCopy() {
     await navigator.clipboard.writeText(lines.map(lineToText).join("\n"));
@@ -146,23 +68,29 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const resolvedLines = lines.map((line) => ({
-    ...line,
-    priceCents: priceOverrides[lineKey(line)] ?? line.priceCents,
-  }));
-
-  // Contributes $0 until overridden (PRD 7.3 F4) — never fabricated.
-  const weeklyTotalCents = resolvedLines.reduce((sum, line) => sum + (line.priceCents ?? 0), 0);
-  const groupedLines = groupByAisle(resolvedLines);
+  function handleExport() {
+    const blob = new Blob([groceryListToFile(groupedLines)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "grocery-list.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Grocery list</h2>
         {lines.length > 0 && (
-          <button type="button" onClick={handleCopy} className="text-xs font-semibold text-muted">
-            {copied ? "Copied!" : "Copy list"}
-          </button>
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={handleCopy} className="text-xs font-semibold text-muted">
+              {copied ? "Copied!" : "Copy list"}
+            </button>
+            <button type="button" onClick={handleExport} className="text-xs font-semibold text-muted">
+              Export
+            </button>
+          </div>
         )}
       </div>
       <p className="mt-1 text-xs text-muted">
@@ -173,56 +101,33 @@ export function GroceryList({ lines, tier }: { lines: GroceryLineView[]; tier: "
       {lines.length === 0 ? (
         <p className="mt-3 text-xs text-muted">Nothing to shop for yet — generate a plan first.</p>
       ) : (
-        <>
-          <div className="mt-3 flex flex-col gap-4">
-            {groupedLines.map(([aisle, aisleLines]) => (
-              <div key={aisle}>
-                <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{aisle}</h3>
-                <ul className="mt-1.5 flex flex-col gap-1.5">
-                  {aisleLines.map((line, index) => (
-                    // Index appended: lineKey() (ingredientId+unit) is a
-                    // deliberately coarser key for price-override lookups,
-                    // not a render-uniqueness guarantee -- a manual-combine
-                    // split or a shared synthetic placeholder id (e.g. -1
-                    // for composed ingredients with no real Spoonacular id)
-                    // can legitimately produce two distinct lines with the
-                    // same lineKey(), which React then sees as duplicate
-                    // keys. onOverride below still keys the actual price
-                    // state by lineKey() alone, unaffected by this.
-                    <li key={`${lineKey(line)}-${index}`} className="flex items-center justify-between gap-3 text-sm text-foreground">
-                      <span>
-                        {formatAmount(line.totalAmount, line.unit)} {line.name}
-                        {line.needsManualCombine && (
-                          <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
-                        )}
-                        {!line.needsManualCombine && line.viaAiEstimate && (
-                          <span className="ml-1.5 text-xs text-muted">
-                            — combined via AI density estimate, double-check the total
-                          </span>
-                        )}
+        <div className="mt-3 flex flex-col gap-4">
+          {groupedLines.map(([aisle, aisleLines]) => (
+            <div key={aisle}>
+              <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{aisle}</h3>
+              <ul className="mt-1.5 flex flex-col gap-1.5">
+                {aisleLines.map((line, index) => (
+                  // Index appended: lineKey() (ingredientId+unit) isn't a
+                  // render-uniqueness guarantee on its own -- a manual-
+                  // combine split or a shared synthetic placeholder id
+                  // (e.g. -1 for composed ingredients with no real
+                  // Spoonacular id) can legitimately repeat it.
+                  <li key={`${lineKey(line)}-${index}`} className="text-sm text-foreground">
+                    {formatAmount(line.totalAmount, line.unit)} {line.name}
+                    {line.needsManualCombine && (
+                      <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
+                    )}
+                    {!line.needsManualCombine && line.viaAiEstimate && (
+                      <span className="ml-1.5 text-xs text-muted">
+                        — combined via AI density estimate, double-check the total
                       </span>
-                      {tier === "pro" && (
-                        <PriceCell
-                          line={line}
-                          onOverride={(priceCents) =>
-                            setPriceOverrides((prev) => ({ ...prev, [lineKey(line)]: priceCents }))
-                          }
-                        />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-
-          {tier === "pro" && (
-            <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-sm font-semibold text-foreground">
-              <span>Weekly total</span>
-              <span className="font-mono">{formatCents(weeklyTotalCents)}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
-          )}
-        </>
+          ))}
+        </div>
       )}
     </div>
   );
