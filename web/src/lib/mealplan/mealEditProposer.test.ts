@@ -120,6 +120,21 @@ describe("buildEditPrompt", () => {
     expect(prompt).toMatch(/EXACTLY ONE ingredient may have role "protein"/);
   });
 
+  // Live-confirmed 2026-08-09 (silent-substitution-masking bugs): asking
+  // to add crushed almonds/cilantro/dry sherry to a nut-allergic/halal
+  // meal correctly never added the conflicting ingredient (constraintCheck
+  // already worked), but the OLD changeSummary instruction only asked
+  // "what did you change," so the user-facing reply never explained that
+  // anything had been declined -- surfacing as a confusing "already has
+  // this" or a bare "Updated the meal." with no reason given. This
+  // instruction is the fix at the source: it requires the model to name
+  // what it declined and why, not just what it changed.
+  it("requires changeSummary to disclose a declined or substituted ingredient, not just describe a generic change", () => {
+    const prompt = buildEditPrompt(BASE_INPUT);
+    expect(prompt).toMatch(/you declined it or substituted something else.*say so explicitly/i);
+    expect(prompt).toContain("Don't let changeSummary describe a request as fulfilled when it wasn't.");
+  });
+
   // Retry-with-feedback, live bug 2026-08-09: a real multi-ingredient
   // recipe's role assignment can come back inconsistent across separate
   // calls for the identical request -- reproduced live by sending the

@@ -1168,8 +1168,14 @@ export function describeRejectionForChatUser(reason: CompositionRejection): stri
     case "title_ingredient_mismatch":
       return `That edit's dish name mentions "${reason.mismatchedWord}", but that's not actually one of the ingredients.`;
     case "amount_out_of_bounds": {
+      // Live-confirmed 2026-08-09: the leading phrase used to hardcode
+      // "That's more X than fits..." regardless of which bound was
+      // actually violated -- for an under-the-minimum amount (a tiny,
+      // near-zero portion), this read backwards ("more" when the real
+      // problem is there's barely any of it), even though the trailing
+      // parenthetical already correctly distinguished max vs min.
       const over = reason.amountG > reason.max;
-      return `That's more ${reason.ingredientName} than fits in a realistic portion (${Math.round(reason.amountG)}g, ${
+      return `That's ${over ? "more" : "less"} ${reason.ingredientName} than fits in a realistic portion (${Math.round(reason.amountG)}g, ${
         over ? `the realistic max is ${reason.max}g` : `the realistic minimum is ${reason.min}g`
       }).`;
     }

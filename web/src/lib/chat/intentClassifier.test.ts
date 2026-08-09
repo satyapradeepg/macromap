@@ -253,4 +253,28 @@ describe("buildIntentClassificationPrompt", () => {
     });
     expect(prompt).not.toContain("hasn't confirmed or declined yet");
   });
+
+  // Live-confirmed 2026-08-09: "swap day 8's lunch" deterministically (not
+  // intermittently -- reproduced 5/5) failed with a generic "couldn't
+  // understand" reply. Root cause: the model computed dayIndex = 8-1 = 7
+  // and emitted a real swap_meal intent with it, which validateOneIntent
+  // hard-rejects (dayIndex must be 0-6) -- and validateIntentClassification
+  // nulls the ENTIRE response on any single invalid intent, so the whole
+  // request silently failed with no fallback. A retry doesn't help here
+  // since it's deterministic, not flaky -- the fix has to be in the prompt
+  // itself, telling the model never to compute an out-of-range dayIndex and
+  // to use 'clarify' instead, exactly the same as it already does when no
+  // day is resolved at all.
+  it("tells the model never to compute an out-of-range dayIndex for a day number outside 1-7, and to clarify instead", () => {
+    const prompt = buildIntentClassificationPrompt({
+      message: "swap day 8's lunch",
+      resolvedDayIndex: null,
+      resolvedMatchedPhrase: null,
+      todayWeekdayName: "Wednesday",
+      pendingSuggestion: null,
+    });
+    expect(prompt).toMatch(/only valid for N from 1 through 7/i);
+    expect(prompt).toContain("swap day 8's lunch");
+    expect(prompt).toMatch(/do NOT mechanically compute dayIndex = 8-1 = 7/);
+  });
 });

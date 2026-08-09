@@ -1373,7 +1373,13 @@ describe("describeRejectionForChatUser", () => {
     [{ kind: "portion_infeasible", role: "protein", ingredientName: "lentils", gapNeeded: 40 }, /isn't dense enough/],
     [{ kind: "portion_out_of_bounds", role: "carb", ingredientName: "rice", amountG: 400, min: 15, max: 250, gapNeeded: 90 }, /unrealistic amount/],
     [{ kind: "title_ingredient_mismatch", dishName: "Quinoa Bowl", mismatchedWord: "quinoa" }, /not actually one of the ingredients/],
-    [{ kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan", amountG: 800, min: 20, max: 280 }, /realistic max is 280g/],
+    [{ kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan", amountG: 800, min: 20, max: 280 }, /That's more seitan.*realistic max is 280g/],
+    // Live-confirmed 2026-08-09: the leading phrase used to hardcode
+    // "That's more X..." even for an under-the-minimum amount, reading
+    // backwards (e.g. "That's more black pepper than fits... 0g, the
+    // realistic minimum is 1g" for a near-zero portion, when the actual
+    // problem is there's barely any of it, not too much).
+    [{ kind: "amount_out_of_bounds", role: "fixed", ingredientName: "black pepper", amountG: 0.2, min: 1, max: 150 }, /That's less black pepper.*realistic minimum is 1g/],
   ];
 
   it.each(cases)("describes %j without leaking internal field names", (reason, expected) => {

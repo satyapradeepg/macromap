@@ -76,10 +76,23 @@ const TITLE_INGREDIENT_CHECK_FIELD = {
 // additive and never enforced) -- validateEditProposal below normalizes
 // and surfaces this directly as the assistant's chat reply on success.
 // Safe to trust for DISPLAY only: it never gates a decision.
+//
+// Live-confirmed 2026-08-09: constraintCheck (above) already tells the
+// model to swap out a conflicting ingredient before submitting -- and it
+// reliably does. The gap was entirely downstream: when the model honors a
+// user's request only partially or not at all (e.g. asked to add
+// almonds/dry sherry, declined for a nut allergy/halal diet, either left
+// the meal unchanged or made some other change instead), the OLD
+// changeSummary instruction only ever asked "what did you change," never
+// "did you have to deviate from what they literally asked, and why" -- so
+// a real decline surfaced as a generic, confusing reply that never
+// mentioned the actual reason. Explicitly requiring that disclosure here
+// fixes it at the source, for every downstream caller that reads
+// changeSummary (chatActions.ts's success AND no-op replies both do).
 const CHANGE_SUMMARY_FIELD = {
   type: "string",
   description:
-    "One short, friendly sentence describing what you changed, to show the user directly (e.g. \"Swapped the salmon for tofu and adjusted the rice slightly.\"). Write this AFTER finalizing the ingredient list above, so it accurately describes the real final result.",
+    'One short, friendly sentence describing what you changed, to show the user directly (e.g. "Swapped the salmon for tofu and adjusted the rice slightly."). If you had to decline or modify what the user literally asked for because of a dietary style/allergy/dislike conflict, this sentence MUST say so plainly and say what you did instead (e.g. "Couldn\'t add almonds since you\'re allergic to nuts -- left the meal unchanged." or "Swapped in agave nectar instead of honey to keep this vegan."). Never write a generic summary that hides a declined or substituted ingredient. Write this AFTER finalizing the ingredient list above, so it accurately describes the real final result.',
 };
 
 const PROPOSE_MEAL_EDIT_TOOL = {
@@ -137,14 +150,18 @@ Requirements:
 4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 5. It's fine for the resulting dish to have no ingredient in a given role (e.g. dropping the carb entirely) if that's what the user asked for -- don't invent a replacement they didn't request.
 6. EXACTLY ONE ingredient may have role "protein", EXACTLY ONE may have role "carb", and EXACTLY ONE may have role "fat" -- never two or more of the same one of these three. This matters most for a real recipe with several ingredients that could each plausibly seem protein-ish or carb-ish: pick the single most macro-relevant one for each role and put every other ingredient under "fixed", even ones that don't feel like a garnish (a cooking liquid, a second vegetable, a sauce base are all "fixed" if they're not THE ingredient carrying that role's macros).
-7. Fill in "changeSummary" after finalizing the ingredient list, describing what actually changed.
+7. Fill in "changeSummary" after finalizing the ingredient list, describing what actually changed. If the user's literal request conflicted with a dietary style/allergy/dislike and you declined it or substituted something else (per the constraint check below), say so explicitly here -- name what they asked for, what you did instead, and why. Don't let changeSummary describe a request as fulfilled when it wasn't.
 8. Fill in "titleIngredientCheck" next: re-read the dish name and confirm it doesn't name any ingredient, component, or preparation that isn't actually in your final ingredients list. If you find a mismatch, revise the dish name before finalizing.
 9. Fill in "constraintCheck" LAST -- go through each final ingredient by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict, go back and swap that ingredient before submitting.`;
 }
 
 const VALID_ROLES: MealRole[] = ["protein", "carb", "fat", "fixed"];
 const MAX_CHANGE_SUMMARY_LENGTH = 140;
-const FALLBACK_CHANGE_SUMMARY = "Updated the meal.";
+// Exported so chatActions.ts's no-op reply branch can tell a real,
+// model-written explanation (which it should show) apart from this
+// generic placeholder (which it shouldn't prefer over its own existing
+// no-op message) -- see the 2026-08-09 no-op-masking fix there.
+export const FALLBACK_CHANGE_SUMMARY = "Updated the meal.";
 
 // Never trusts the LLM's JSON shape blindly, same discipline as
 // mealProposer.ts's validateProposal. Unlike that function, amountG is

@@ -259,10 +259,64 @@ function hasAnimalDairySourceCompound(haystack: string, word: string): boolean {
 // a false negative here can only make a genuinely-compliant ingredient
 // look unsafe, never the reverse.
 function hasNegationQualifier(haystack: string, word: string): boolean {
-  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Stems the needle the same way wordBoundaryIncludes does -- live-found
+  // 2026-08-09 while verifying the gluten-free-pasta fix below: EGG_
+  // SYNONYMS lists "egg" and "eggs" as separate needles, and without this
+  // stemming step, checking the plural needle "eggs" against "egg-free
+  // mayonnaise" looked for the literal (never-occurring) phrase
+  // "eggs-free" instead of the real "egg-free", so the plural needle alone
+  // still wrongly flagged even though the singular needle would have been
+  // correctly exempted.
+  const stem = word.replace(/s$/i, "");
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return (
-    new RegExp(`\\bnon[-\\s]?${escaped}\\b`).test(haystack) || new RegExp(`\\b${escaped}[-\\s]free\\b`).test(haystack)
+    new RegExp(`\\bnon[-\\s]?${escaped}s?\\b`).test(haystack) ||
+    new RegExp(`\\b${escaped}s?[-\\s]free\\b`).test(haystack)
   );
+}
+
+// Live-confirmed 2026-08-09: "gluten-free brown rice pasta" (the LLM's own
+// correct substitute for a requested "whole wheat pasta") got flagged
+// unsafe for a gluten_free profile -- NOT because "gluten" itself was
+// unnegated (hasNegationQualifier above already handles that), but because
+// the MATCHED word was "pasta", a category proxy that GLUTEN_SYNONYMS'
+// alsoMatches adds for coverage even though "pasta" itself is never
+// negated anywhere in the name. hasNegationQualifier can't help here by
+// design -- it only ever exempts the literal word that's ACTUALLY negated,
+// which is deliberately narrow so a word that's inherently, definitionally
+// the restricted substance (seitan is always wheat gluten; tofu is always
+// soy; tahini is always sesame) keeps flagging no matter what a
+// contradictory label claims elsewhere in the name.
+//
+// The words below are different in kind: each is a FOOD CATEGORY that
+// genuinely has both a with-the-allergen and a without-the-allergen
+// version on real shelves (gluten-free bread/pasta/flour, dairy-free
+// cheese/yogurt/butter/cream/milk, egg-free mayonnaise/aioli, vegan/
+// fish-free worcestershire and fish sauce) -- unlike seitan/tofu/tahini,
+// there's no contradiction in "gluten-free bread" the way there is in
+// "gluten-free seitan". So when the CATEGORY's own core term (gluten/
+// dairy/egg/fish) is negated ANYWHERE in the same name, these specific
+// proxy words are exempted too. Confirmed via live repro (pasta) plus
+// direct testing of the sibling cases (bread/flour/couscous/cheese/
+// yogurt/butter/cream/milk/mayonnaise/aioli/custard/worcestershire/fish
+// sauce) before adding each -- same "only add a confirmed real collision,
+// not speculatively" discipline as PLANT_MODIFIERS/SAFE_ALCOHOL_COMPOUNDS
+// above. Deliberately excludes wheat/malt/semolina/farro/spelt/bulgur/
+// barley/rye/seitan (gluten), milk/cheese/etc.'s own DAIRY_SYNONYMS
+// entries are covered via "milk"/"cheese"/"yogurt"/"butter"/"cream" being
+// listed below rather than needing separate treatment, tofu/tempeh/
+// edamame (soy), and tahini (sesame) -- none of those can be validly
+// labeled "-free" for their own category without being a contradiction.
+const CATEGORY_LABEL_EXEMPTABLE_WORDS: Array<{ coreWord: string; exemptable: string[] }> = [
+  { coreWord: "gluten", exemptable: ["bread", "pasta", "flour", "couscous"] },
+  { coreWord: "dairy", exemptable: ["cheese", "yogurt", "yoghurt", "butter", "cream", "milk"] },
+  { coreWord: "egg", exemptable: ["mayonnaise", "mayo", "aioli", "custard", "meringue", "hollandaise"] },
+  { coreWord: "fish", exemptable: ["fish sauce", "worcestershire"] },
+];
+
+function hasCategoryLabelExemption(haystack: string, word: string): boolean {
+  const entry = CATEGORY_LABEL_EXEMPTABLE_WORDS.find((e) => e.exemptable.includes(word));
+  return entry !== undefined && hasNegationQualifier(haystack, entry.coreWord);
 }
 
 // Mirror of hasSafePlantCompound's shape: a handful of common ingredient
@@ -287,6 +341,7 @@ function containsAny(haystack: string, needles: string[]): string | null {
         wordBoundaryIncludes(haystack, n) &&
         !hasSafePlantCompound(haystack, n) &&
         !hasNegationQualifier(haystack, n) &&
+        !hasCategoryLabelExemption(haystack, n) &&
         !hasAnimalDairySourceCompound(haystack, n) &&
         !hasSafeAlcoholCompound(haystack, n),
     ) ?? null

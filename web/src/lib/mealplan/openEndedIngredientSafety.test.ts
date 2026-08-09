@@ -262,9 +262,30 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("nondairy creamer", ctx)).toBeNull();
     });
 
-    it("still flags a synonym word that isn't itself negated, even alongside an unrelated negated word (e.g. dairy-free yogurt is still yogurt)", () => {
+    // CORRECTED 2026-08-09: this test previously asserted "dairy-free
+    // yogurt alternative" should still flag, reasoning it was the same
+    // shape as "gluten-free seitan" (a word that's never itself negated).
+    // That reasoning turned out to be wrong -- confirmed while
+    // investigating a live "gluten-free brown rice pasta" false positive,
+    // which surfaced the same gap for "pasta"/"bread"/"flour" (gluten),
+    // and by extension "cheese"/"yogurt"/"butter"/"cream"/"milk" (dairy):
+    // unlike seitan (which IS wheat gluten, full stop, no such thing as a
+    // genuinely gluten-free seitan), yogurt/cheese/butter/cream/milk are
+    // FOOD CATEGORIES that really do have both a dairy and a dairy-free
+    // version on real shelves -- "dairy-free yogurt" is a real, common
+    // product, not a contradiction. See hasCategoryLabelExemption.
+    it("does not flag a food-category word with a genuine dairy-free version, when the category's own core term is negated in the same name", () => {
       const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
-      expect(isOpenEndedIngredientUnsafeFor("dairy-free yogurt alternative", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("dairy-free yogurt alternative", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("dairy-free cheese shreds", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("dairy-free butter", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("dairy-free cream", ctx)).toBeNull();
+    });
+
+    it("still flags a plain dairy product with no dairy-free qualifier anywhere in the name", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("plain yogurt", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("cheddar cheese", ctx)).not.toBeNull();
     });
 
     it("still flags a real dairy allergy typed as literal free text, unaffected by the negation exemption", () => {
@@ -295,6 +316,46 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
     it("still flags an actually-contradictory 'gluten-free seitan' label -- the exemption only covers the word 'gluten' itself", () => {
       const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("gluten-free seitan", ctx)).not.toBeNull();
+    });
+
+    // Live-confirmed 2026-08-09: a real chat request to add "whole wheat
+    // pasta" for a gluten_free profile got correctly self-censored by the
+    // LLM proposer, which substituted "gluten-free brown rice pasta" --
+    // but the safety gate then wrongly blocked its OWN safe substitute,
+    // because the matched word was "pasta" (a GLUTEN_SYNONYMS proxy),
+    // never itself negated by the "gluten-free" qualifier elsewhere in
+    // the name. Unlike seitan (always wheat gluten, no exception),
+    // bread/pasta/flour/couscous are food categories with genuine
+    // gluten-free versions on real shelves.
+    it("does not flag a food-category word with a genuine gluten-free version, when 'gluten' is negated in the same name (live-confirmed 2026-08-09)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free brown rice pasta", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free bread", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free all-purpose flour", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("gluten-free couscous", ctx)).toBeNull();
+    });
+
+    it("still flags bread/pasta/flour/couscous with no gluten-free qualifier anywhere in the name", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("whole wheat bread", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("penne pasta", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("all-purpose flour", ctx)).not.toBeNull();
+    });
+
+    it("does not flag egg-free mayonnaise/aioli/custard for an egg allergy (same category-label exemption, egg group)", () => {
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["egg"], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("egg-free mayonnaise", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("egg-free aioli", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("egg-free custard", ctx)).toBeNull();
+      // hollandaise has no common egg-free version and isn't in the
+      // exemptable list -- still flags even with no qualifier present.
+      expect(isOpenEndedIngredientUnsafeFor("hollandaise sauce", ctx)).not.toBeNull();
+    });
+
+    it("does not flag fish-free worcestershire sauce for a fish allergy (category-label exemption, fish group)", () => {
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["fish"], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("fish-free worcestershire sauce", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("worcestershire sauce", ctx)).not.toBeNull();
     });
 
     it("does not apply the gluten_free check for an unrelated style like vegetarian", () => {

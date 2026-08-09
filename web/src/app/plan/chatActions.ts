@@ -24,7 +24,7 @@ import { classifyChatIntent, type ClassifiedIntent, type ProfileOperation, type 
 import { answerReadOnlyQuestion, MEAL_TYPE_LABELS } from "@/lib/chat/answerReadOnlyQuestion";
 import { applyProfileOperations, type ProfileFields } from "@/lib/chat/applyProfileOperations";
 import { classifyAffirmativeResponse } from "@/lib/chat/classifyAffirmativeResponse";
-import { proposeMealEditViaClaude } from "@/lib/mealplan/mealEditProposer";
+import { proposeMealEditViaClaude, FALLBACK_CHANGE_SUMMARY } from "@/lib/mealplan/mealEditProposer";
 import {
   composeMealFromEditDetailed,
   isNoOpEdit,
@@ -363,22 +363,38 @@ async function applyMealEditResult(
   currentComposedIngredientsInGrams: Array<{ name: string; amountG: number }> | null,
   preExistingIngredientNames: string[],
   // Retry-with-feedback (2026-08-09, live-confirmed model-consistency
-  // issue): a real recipe with several ingredients can get an
-  // inconsistent role assignment across separate Claude calls for the
-  // EXACT SAME request (reproduced live -- the identical message produced
-  // two different duplicate_role failures on consecutive attempts). Only
-  // ever set from handleEditMealRecipe (a fresh proposal genuinely can be
-  // re-asked); resolvePendingClamp omits it -- a clamp replay is a
+  // issue, since generalized beyond just duplicate_role): a real recipe
+  // with several ingredients can get an inconsistent role assignment
+  // across separate Claude calls for the EXACT SAME request (reproduced
+  // live -- the identical message produced two different duplicate_role
+  // failures on consecutive attempts). Also reused for title_ingredient_
+  // mismatch below (live-confirmed same session: asking for a "-free"
+  // substitute like "gluten-free pasta"/"dairy-free cheese" sometimes
+  // updates the dish title to mention the requested word while naming the
+  // actual grounded ingredient something else, e.g. "brown rice noodles"
+  // -- titleIngredientCheck is supposed to catch and self-correct this
+  // before submitting, but isn't 100% reliable, same as changeSummary).
+  // Only ever set from handleEditMealRecipe (a fresh proposal genuinely
+  // can be re-asked); resolvePendingClamp omits it -- a clamp replay is a
   // deterministic re-application of an already-accepted proposal, not a
   // new request to retry.
-  retryOnDuplicateRole?: (feedback: string) => Promise<MealEditProposal | null>,
+  retryEditProposal?: (feedback: string) => Promise<MealEditProposal | null>,
 ): Promise<IntentHandlerResult> {
   let currentEdit = edit;
   let result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
 
-  if (!result.ok && result.reason.kind === "duplicate_role" && retryOnDuplicateRole) {
+  if (!result.ok && result.reason.kind === "duplicate_role" && retryEditProposal) {
     const feedback = `you assigned more than one ingredient to the "${result.reason.role}" role -- exactly one ingredient may have this role; move every other one to "fixed".`;
-    const retried = await retryOnDuplicateRole(feedback);
+    const retried = await retryEditProposal(feedback);
+    if (retried) {
+      currentEdit = retried;
+      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+    }
+  }
+
+  if (!result.ok && result.reason.kind === "title_ingredient_mismatch" && retryEditProposal) {
+    const feedback = `your dish name "${result.reason.dishName}" mentions "${result.reason.mismatchedWord}", but no ingredient in your list actually contains that word -- either rename the dish to match your real ingredients, or add "${result.reason.mismatchedWord}" as an actual ingredient if that's what you meant to include.`;
+    const retried = await retryEditProposal(feedback);
     if (retried) {
       currentEdit = retried;
       result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
@@ -407,7 +423,19 @@ async function applyMealEditResult(
   }
 
   if (currentComposedIngredientsInGrams && isNoOpEdit(currentComposedIngredientsInGrams, result.meal)) {
-    return { reply: "That's already what this meal has.", actionTaken: { kind: "meal_edit_noop", dayIndex, mealType } };
+    // Live-confirmed 2026-08-09: this used to always return the same
+    // hardcoded string, discarding the model's own changeSummary entirely
+    // -- so when a request got declined for a real dietary/allergy reason
+    // (e.g. "add crushed almonds" for a nut allergy) and the model
+    // correctly self-censored by resubmitting the meal unchanged, the
+    // user got a generic "already has this" reply that gives no hint why,
+    // and can read as "you already have nuts in this meal," which is both
+    // false and alarming for an allergy. Prefers the model's own
+    // (now-strengthened, see mealEditProposer.ts's CHANGE_SUMMARY_FIELD)
+    // explanation whenever it wrote a real one; only falls back to the
+    // generic message when it didn't (FALLBACK_CHANGE_SUMMARY).
+    const reply = currentEdit.changeSummary !== FALLBACK_CHANGE_SUMMARY ? currentEdit.changeSummary : "That's already what this meal has.";
+    return { reply, actionTaken: { kind: "meal_edit_noop", dayIndex, mealType } };
   }
 
   const meal = result.meal;
@@ -528,7 +556,7 @@ async function handleEditMealRecipe(
     ? slot.composedIngredients.map((i) => ({ name: i.name, amount: i.amountG, unit: "g" }))
     : (slot.recipeIngredients ?? []).map((i) => ({ name: i.name, amount: i.amount, unit: i.unit }));
 
-  const edit = await proposeMealEditViaClaude({
+  const editInput = {
     currentDishName: slot.recipeTitle,
     currentIngredients,
     userInstruction: editInstruction,
@@ -537,7 +565,20 @@ async function handleEditMealRecipe(
     dietaryStyles: dietaryCtx.dietaryStyles,
     allergies: dietaryCtx.allergies,
     dislikes: dietaryCtx.dislikes,
-  });
+  };
+  // Retry once on a null result -- live-confirmed 2026-08-09: an entirely
+  // ordinary, unrestricted edit request (e.g. "add a splash of lime juice")
+  // failed with the generic message below on 1 of 3 identical back-to-back
+  // attempts, with server logs showing no error -- just a malformed or
+  // incomplete tool call from Claude that fails validateEditProposal. Same
+  // bounded-retry philosophy already used for the duplicate_role/title-
+  // mismatch cases below (retryEditProposal): a same-input retry is cheap
+  // and this failure mode looks transient, not a systematic
+  // misunderstanding.
+  let edit = await proposeMealEditViaClaude(editInput);
+  if (!edit) {
+    edit = await proposeMealEditViaClaude(editInput);
+  }
   if (!edit) return { reply: "I couldn't process that edit right now -- try rephrasing?", actionTaken: { kind: "error" } };
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
@@ -707,13 +748,25 @@ export async function sendChatMessage(input: SendChatMessageInput): Promise<Send
     };
   } else {
     const dayRef = resolveDayReference(message);
-    const intents = await classifyChatIntent({
+    const classifyInput = {
       message,
       resolvedDayIndex: dayRef?.dayIndex ?? null,
       resolvedMatchedPhrase: dayRef?.matchedPhrase ?? null,
       todayWeekdayName: WEEKDAY_NAMES[new Date().getDay()],
       pendingSuggestion: pendingClamp ? describePendingSuggestion(pendingClamp) : null,
-    });
+    };
+    // Retry once on a null result -- live-confirmed 2026-08-09: a
+    // malformed/incomplete tool call from Claude here (the same class of
+    // flakiness already retried for mealEditProposer's duplicate_role
+    // case) intermittently drops an entirely ordinary message straight to
+    // "couldn't understand that," with no useful signal about why -- a
+    // same-input retry recovers cleanly most of the time, and this is the
+    // single call site every chat message passes through, so it's worth
+    // one extra round-trip before giving up.
+    let intents = await classifyChatIntent(classifyInput);
+    if (!intents) {
+      intents = await classifyChatIntent(classifyInput);
+    }
 
     if (!intents) {
       result = emptyResult("Sorry, I couldn't understand that -- could you try rephrasing?");
