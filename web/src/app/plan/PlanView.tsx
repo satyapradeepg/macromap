@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import {
@@ -23,6 +23,7 @@ import type { GroceryLineView } from "./groceryData";
 import { fetchGroceryList } from "./groceryActions";
 import { pluralizeUnit } from "./unitFormatting";
 import { buildMealPlanIcs } from "./calendarExport";
+import { pickDishIcon, type DishIconKind } from "./dishIcon";
 
 // day_index (0-6) was never actually tied to a real Monday-Sunday week --
 // a plan can be generated/regenerated any day, so labeling it with real
@@ -448,13 +449,62 @@ function MacroPill({ children }: { children: React.ReactNode }) {
 // slot, reading as noticeably plainer than every real-recipe card next to
 // them). A plain stroke icon, not a color emoji, to stay monochrome/
 // muted-toned like this app's other glyphs (✕/●/↗ below) rather than
-// introducing a jarring colorful element.
-function ComposedDishPlaceholder() {
+// introducing a jarring colorful element. Picks one of a small set of
+// dish-shape icons via a keyword match on the AI-generated title
+// (pickDishIcon, dishIcon.ts) instead of always showing the same bowl --
+// 2026-08-09, every AI-composed dish looked identical regardless of what
+// it actually was.
+const DISH_ICON_PATHS: Record<DishIconKind, ReactNode> = {
+  smoothie: (
+    <>
+      <path d="M8 4h8l-1.2 15.2a2 2 0 0 1-2 1.8h-1.6a2 2 0 0 1-2-1.8L8 4z" />
+      <path d="M7 4h10" />
+      <path d="M14 1l2 3" />
+    </>
+  ),
+  soup: (
+    <>
+      <circle cx="12" cy="15" r="6" />
+      <path d="M9 4c0 1-1 1.2-1 2.2S9 7.4 9 8.4M12 3c0 1-1 1.2-1 2.2s1 1.2 1 2.2M15 4c0 1-1 1.2-1 2.2s1 1.2 1 2.2" />
+    </>
+  ),
+  bowl: (
+    <>
+      <path d="M3 12h18" />
+      <path d="M4 12a8 6.5 0 0 0 16 0" />
+    </>
+  ),
+  skillet: (
+    <>
+      <circle cx="10" cy="13" r="7" />
+      <path d="M17 13h5" />
+    </>
+  ),
+  baked: (
+    <>
+      <rect x="4" y="9" width="16" height="9" rx="1.5" />
+      <path d="M2 11.5h2M20 11.5h2" />
+    </>
+  ),
+  sandwich: (
+    <>
+      <path d="M4 20L12 5l8 15z" />
+      <path d="M7.2 15h9.6" />
+    </>
+  ),
+  fallback: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3.5" />
+    </>
+  ),
+};
+
+function ComposedDishPlaceholder({ recipeTitle }: { recipeTitle: string }) {
   return (
     <div className="flex h-full w-full items-center justify-center bg-background text-muted">
       <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="15" r="6" />
-        <path d="M9 4c0 1-1 1.2-1 2.2S9 7.4 9 8.4M12 3c0 1-1 1.2-1 2.2s1 1.2 1 2.2M15 4c0 1-1 1.2-1 2.2s1 1.2 1 2.2" />
+        {DISH_ICON_PATHS[pickDishIcon(recipeTitle)]}
       </svg>
     </div>
   );
@@ -500,7 +550,7 @@ function MealCard({
       ) : (
         showPlaceholderImage && (
           <div className="aspect-4/3 w-full shrink-0">
-            <ComposedDishPlaceholder />
+            <ComposedDishPlaceholder recipeTitle={slot!.recipeTitle} />
           </div>
         )
       )}
@@ -699,7 +749,7 @@ function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPl
         ) : (
           slot.aiComposed && (
             <div className="aspect-16/9 w-full shrink-0">
-              <ComposedDishPlaceholder />
+              <ComposedDishPlaceholder recipeTitle={slot.recipeTitle} />
             </div>
           )
         )}
