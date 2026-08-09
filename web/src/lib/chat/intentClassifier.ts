@@ -27,9 +27,16 @@ export type ProfileOperation =
 
 export type ClassifiedIntent =
   | { kind: "swap_meal"; dayIndex: number; mealType: MealType }
+  | { kind: "edit_meal_recipe"; dayIndex: number; mealType: MealType; editInstruction: string }
   | { kind: "edit_pantry"; operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null }> }
   | { kind: "edit_profile"; operations: ProfileOperation[] }
   | { kind: "read_only_qa"; qaTopic: QaTopic; dayIndex: number | null; mealType: MealType | null }
+  // Fallback path for the clamp-confirmation flow (F11 meal editing) --
+  // chatActions.ts's own cheap deterministic yes/no keyword check handles
+  // the common case BEFORE this classifier even runs; this intent only
+  // fires when that check couldn't confidently tell (an ambiguous
+  // response to a pending clamp offer).
+  | { kind: "confirm_pending_action"; confirmed: boolean }
   | { kind: "clarify"; message: string }
   | { kind: "refuse"; message: string };
 
@@ -38,6 +45,14 @@ export interface ClassifyChatIntentInput {
   resolvedDayIndex: number | null;
   resolvedMatchedPhrase: string | null;
   todayWeekdayName: string;
+  // Set only when the assistant's PREVIOUS message offered a specific
+  // suggestion the user hasn't responded to yet (the clamp-confirmation
+  // flow, F11 meal editing) -- a plain-English summary of what's pending,
+  // so the model can recognize a yes/no reply in that context via
+  // confirm_pending_action. chatActions.ts's own cheap deterministic
+  // keyword check handles the common case before this classifier even
+  // runs; this is only reached when that check couldn't confidently tell.
+  pendingSuggestion: string | null;
 }
 
 const MEAL_TYPES: MealType[] = ["breakfast", "lunch", "dinner", "snack1", "snack2"];
@@ -72,17 +87,25 @@ const CLASSIFY_INTENT_TOOL = {
           properties: {
             intent: {
               type: "string",
-              enum: ["swap_meal", "edit_pantry", "edit_profile", "read_only_qa", "clarify", "refuse"],
+              enum: ["swap_meal", "edit_meal_recipe", "edit_pantry", "edit_profile", "read_only_qa", "confirm_pending_action", "clarify", "refuse"],
             },
             dayIndex: {
               type: "number",
               description:
-                "For swap_meal (required) or read_only_qa about a specific meal: which day, 0=today through 6. Prefer the resolved day hint given in the prompt when the message's day reference matches it.",
+                "For swap_meal/edit_meal_recipe (required) or read_only_qa about a specific meal: which day, 0=today through 6. Prefer the resolved day hint given in the prompt when the message's day reference matches it.",
             },
             mealType: {
               type: "string",
               enum: MEAL_TYPES,
-              description: "For swap_meal (required) or read_only_qa about a specific meal.",
+              description: "For swap_meal/edit_meal_recipe (required) or read_only_qa about a specific meal.",
+            },
+            editInstruction: {
+              type: "string",
+              description: "For edit_meal_recipe only (required) -- the user's requested change, verbatim or lightly cleaned up (e.g. 'remove the onions', 'double the chicken', 'swap the rice for quinoa').",
+            },
+            confirmed: {
+              type: "boolean",
+              description: "For confirm_pending_action only (required) -- true if the user is agreeing to the pending suggestion, false if declining.",
             },
             pantryOperations: {
               type: "array",
@@ -135,19 +158,22 @@ const CLASSIFY_INTENT_TOOL = {
 };
 
 export function buildIntentClassificationPrompt(input: ClassifyChatIntentInput): string {
-  const { message, resolvedDayIndex, resolvedMatchedPhrase, todayWeekdayName } = input;
+  const { message, resolvedDayIndex, resolvedMatchedPhrase, todayWeekdayName, pendingSuggestion } = input;
   return `A user of a meal-planning app sent this chat message: "${message}"
 
 Today is ${todayWeekdayName}. This app's plan is a rolling 7-day window where day 0 is always today, day 1 is tomorrow, and so on through day 6 -- there is no fixed Monday-Sunday week.
 ${resolvedDayIndex !== null ? `A deterministic parser already resolved a day reference in this message ("${resolvedMatchedPhrase}") to dayIndex ${resolvedDayIndex} -- use this exact value for any intent that needs a day, don't re-derive it yourself.` : "No day reference was deterministically resolved from this message -- if an intent needs a specific day and you genuinely can't tell which one, use 'clarify' instead of guessing."}
+${pendingSuggestion ? `\nThe assistant's PREVIOUS message offered this pending suggestion, which the user hasn't confirmed or declined yet: "${pendingSuggestion}". If this message reads as a response to that (agreeing, declining, or is otherwise ambiguous about it), use confirm_pending_action. If it's clearly about something else entirely, ignore the pending suggestion and classify normally.` : ""}
 
 Classify this message into one or more of these intents:
-- swap_meal: the user wants a specific meal replaced with something different. Needs dayIndex and mealType.
+- swap_meal: the user wants a specific meal REPLACED WHOLESALE with a different dish entirely. Needs dayIndex and mealType.
+- edit_meal_recipe: the user wants to change something WITHIN a specific meal's existing recipe -- an ingredient quantity, adding/removing an ingredient, or substituting one ingredient for another (e.g. "remove the onions from tonight's dinner", "double the chicken in tomorrow's lunch", "swap the rice for quinoa"). Needs dayIndex, mealType, and editInstruction. Use this instead of swap_meal whenever the request is about MODIFYING the current dish, not replacing it with something different.
 - edit_pantry: the user is telling you what they have or don't have on hand (e.g. "I have chicken and rice", "I used up the eggs"). Needs pantryOperations.
 - edit_profile: the user wants to change something about their diet, allergies, dislikes, weight, height, age, activity level, or goal. Needs profileOperations. Diet/allergy/dislike changes are add/remove against their existing list (e.g. "I'm allergic to peanuts now" = add; "I'm not vegan anymore" = remove), never a full replacement. Weight/height/age/activity/goal/sex changes are a set (a new value).
 - read_only_qa: the user is asking a question, not asking for a change. Needs qaTopic ('remaining_weekly_macros' for "how many calories/protein/etc do I have left this week", 'specific_meal_details' for "what's in tonight's dinner" -- also set dayIndex/mealType for this one, 'today_summary' for a general "what's today look like", 'unsupported' for anything else including budget/cost questions).
+- confirm_pending_action: only ever relevant right after the assistant's own previous message offered a specific suggestion and asked the user to confirm it (e.g. a clamped portion size) -- use this if the message is a plain yes/no/agreement/decline in that context. If there's no pending suggestion in play, never use this.
 - clarify: you genuinely cannot tell what the user wants well enough to act (which day, which meal, what change) -- ask a short, specific question back in the message field. Never guess and execute when this is the better fit.
-- refuse: the request is clearly outside what this assistant can do (e.g. asking to change the budget, which is intentionally not exposed here) -- explain why in the message field. This is different from a hard-constraint safety refusal, which happens deterministically downstream, not here -- don't try to pre-judge allergy/diet conflicts yourself; classify the request normally (e.g. still emit edit_pantry or swap_meal) and let the app's own safety checks catch a real conflict.
+- refuse: the request is clearly outside what this assistant can do (e.g. asking to change the budget, which is intentionally not exposed here) -- explain why in the message field. This is different from a hard-constraint safety refusal, which happens deterministically downstream, not here -- don't try to pre-judge allergy/diet conflicts yourself; classify the request normally (e.g. still emit edit_pantry, swap_meal, or edit_meal_recipe) and let the app's own safety checks catch a real conflict.
 
 Return one entry per distinct request in the message. Most messages have exactly one.`;
 }
@@ -166,6 +192,12 @@ function validateOneIntent(raw: unknown): ClassifiedIntent | null {
       if (typeof obj.dayIndex !== "number" || !Number.isInteger(obj.dayIndex) || obj.dayIndex < 0 || obj.dayIndex > 6) return null;
       if (typeof obj.mealType !== "string" || !VALID_MEAL_TYPES.has(obj.mealType as MealType)) return null;
       return { kind: "swap_meal", dayIndex: obj.dayIndex, mealType: obj.mealType as MealType };
+    }
+    case "edit_meal_recipe": {
+      if (typeof obj.dayIndex !== "number" || !Number.isInteger(obj.dayIndex) || obj.dayIndex < 0 || obj.dayIndex > 6) return null;
+      if (typeof obj.mealType !== "string" || !VALID_MEAL_TYPES.has(obj.mealType as MealType)) return null;
+      if (typeof obj.editInstruction !== "string" || !obj.editInstruction.trim()) return null;
+      return { kind: "edit_meal_recipe", dayIndex: obj.dayIndex, mealType: obj.mealType as MealType, editInstruction: obj.editInstruction };
     }
     case "edit_pantry": {
       if (!Array.isArray(obj.pantryOperations) || obj.pantryOperations.length === 0) return null;
@@ -214,6 +246,10 @@ function validateOneIntent(raw: unknown): ClassifiedIntent | null {
           : null;
       const mealType = typeof obj.mealType === "string" && VALID_MEAL_TYPES.has(obj.mealType as MealType) ? (obj.mealType as MealType) : null;
       return { kind: "read_only_qa", qaTopic: obj.qaTopic as QaTopic, dayIndex, mealType };
+    }
+    case "confirm_pending_action": {
+      if (typeof obj.confirmed !== "boolean") return null;
+      return { kind: "confirm_pending_action", confirmed: obj.confirmed };
     }
     case "clarify": {
       if (typeof obj.message !== "string" || !obj.message.trim()) return null;

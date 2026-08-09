@@ -119,6 +119,40 @@ describe("validateIntentClassification", () => {
     expect(validateIntentClassification({ intents: [{ intent: "read_only_qa", qaTopic: "budget" }] })).toBeNull();
   });
 
+  it("accepts a well-formed edit_meal_recipe intent", () => {
+    const result = validateIntentClassification({
+      intents: [{ intent: "edit_meal_recipe", dayIndex: 0, mealType: "dinner", editInstruction: "remove the onions" }],
+    });
+    expect(result).toEqual([{ kind: "edit_meal_recipe", dayIndex: 0, mealType: "dinner", editInstruction: "remove the onions" }]);
+  });
+
+  it("rejects edit_meal_recipe missing editInstruction", () => {
+    expect(validateIntentClassification({ intents: [{ intent: "edit_meal_recipe", dayIndex: 0, mealType: "dinner" }] })).toBeNull();
+  });
+
+  it("rejects edit_meal_recipe with an empty editInstruction", () => {
+    expect(
+      validateIntentClassification({ intents: [{ intent: "edit_meal_recipe", dayIndex: 0, mealType: "dinner", editInstruction: "  " }] }),
+    ).toBeNull();
+  });
+
+  it("rejects edit_meal_recipe missing dayIndex/mealType", () => {
+    expect(validateIntentClassification({ intents: [{ intent: "edit_meal_recipe", editInstruction: "remove onions" }] })).toBeNull();
+  });
+
+  it("accepts confirm_pending_action with a boolean confirmed field", () => {
+    expect(validateIntentClassification({ intents: [{ intent: "confirm_pending_action", confirmed: true }] })).toEqual([
+      { kind: "confirm_pending_action", confirmed: true },
+    ]);
+    expect(validateIntentClassification({ intents: [{ intent: "confirm_pending_action", confirmed: false }] })).toEqual([
+      { kind: "confirm_pending_action", confirmed: false },
+    ]);
+  });
+
+  it("rejects confirm_pending_action with a non-boolean confirmed field", () => {
+    expect(validateIntentClassification({ intents: [{ intent: "confirm_pending_action", confirmed: "yes" }] })).toBeNull();
+  });
+
   it("accepts clarify and refuse with a message", () => {
     expect(validateIntentClassification({ intents: [{ intent: "clarify", message: "Which day did you mean?" }] })).toEqual([
       { kind: "clarify", message: "Which day did you mean?" },
@@ -169,6 +203,7 @@ describe("buildIntentClassificationPrompt", () => {
       resolvedDayIndex: 1,
       resolvedMatchedPhrase: "tomorrow",
       todayWeekdayName: "Wednesday",
+      pendingSuggestion: null,
     });
     expect(prompt).toContain("tomorrow");
     expect(prompt).toContain("dayIndex 1");
@@ -180,6 +215,7 @@ describe("buildIntentClassificationPrompt", () => {
       resolvedDayIndex: null,
       resolvedMatchedPhrase: null,
       todayWeekdayName: "Wednesday",
+      pendingSuggestion: null,
     });
     expect(prompt).toContain("No day reference was deterministically resolved");
   });
@@ -190,7 +226,31 @@ describe("buildIntentClassificationPrompt", () => {
       resolvedDayIndex: null,
       resolvedMatchedPhrase: null,
       todayWeekdayName: "Monday",
+      pendingSuggestion: null,
     });
     expect(prompt).toContain("I'm allergic to peanuts now");
+  });
+
+  it("includes the pending suggestion context when one is present", () => {
+    const prompt = buildIntentClassificationPrompt({
+      message: "yeah go for it",
+      resolvedDayIndex: null,
+      resolvedMatchedPhrase: null,
+      todayWeekdayName: "Monday",
+      pendingSuggestion: "use 280g of chicken instead, for Dinner on day 1",
+    });
+    expect(prompt).toContain("use 280g of chicken instead, for Dinner on day 1");
+    expect(prompt).toContain("confirm_pending_action");
+  });
+
+  it("omits the pending suggestion paragraph when there is none", () => {
+    const prompt = buildIntentClassificationPrompt({
+      message: "swap tomorrow's dinner",
+      resolvedDayIndex: 1,
+      resolvedMatchedPhrase: "tomorrow",
+      todayWeekdayName: "Wednesday",
+      pendingSuggestion: null,
+    });
+    expect(prompt).not.toContain("hasn't confirmed or declined yet");
   });
 });

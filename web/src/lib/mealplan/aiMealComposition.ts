@@ -66,6 +66,42 @@ export interface ComposedMealIngredient {
   carbsG: number;
   fatG: number;
   estimatedCostCents: number | null;
+  // Additive (F11 chat-driven meal editing, 2026-08-09): recorded on newly
+  // composed ingredients going forward so a future edit doesn't need to
+  // re-infer role for a slot generated after this change -- optional
+  // because it was never persisted before this, so an OLD slot's
+  // ingredients genuinely may not have it. Nothing in composeMealFromEditDetailed
+  // below actually depends on this being present; the edit proposer is
+  // always shown the CURRENT ingredient list as plain description text
+  // (no roles needed) and always returns a fresh, complete, role-tagged
+  // list itself.
+  role?: MealRole;
+}
+
+// F11 chat-driven meal editing (2026-08-09): the edit-proposal LLM call
+// always returns the COMPLETE new ingredient list (not a diff), with an
+// explicit gram amount for every ingredient, changed or not -- see
+// mealEditProposer.ts. This is the key difference from MealProposal/
+// ProposedIngredient above: an edit never solves an amount against a
+// macro target (composeMealFromProposalDetailed's whole job), it just
+// grounds an already-fully-specified list.
+export interface EditedIngredient {
+  name: string;
+  role: MealRole;
+  amountG: number;
+}
+
+export interface MealEditProposal {
+  dishName: string;
+  ingredients: EditedIngredient[];
+  // One short, user-facing sentence describing what changed -- unlike
+  // mealProposer.ts's titleIngredientCheck/constraintCheck self-check
+  // fields (purely additive, never read), this one IS read and surfaced
+  // directly as the assistant's chat reply on success. Safe to trust for
+  // DISPLAY only: the real accept/reject verdict and every macro number
+  // still come entirely from composeMealFromEditDetailed's deterministic
+  // grounding below, never from this sentence.
+  changeSummary: string;
 }
 
 export interface ComposedMeal {
@@ -293,7 +329,7 @@ function sizeForGap(
 // already-established near-miss behavior.
 const IMPLAUSIBLE_OVERAGE_MULTIPLIER = 1.5;
 
-function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): ComposedMealIngredient {
+function toComposedIngredient(lookup: GroundedIngredientData, amountG: number, role?: MealRole): ComposedMealIngredient {
   const scale = amountG / 100;
   return {
     ingredientName: lookup.name,
@@ -304,6 +340,7 @@ function toComposedIngredient(lookup: GroundedIngredientData, amountG: number): 
     carbsG: lookup.carbsGPer100g * scale,
     fatG: lookup.fatGPer100g * scale,
     estimatedCostCents: lookup.estimatedCostCentsPer100g !== null ? lookup.estimatedCostCentsPer100g * scale : null,
+    role,
   };
 }
 
@@ -363,7 +400,13 @@ export type CompositionRejection =
       max: number;
       gapNeeded: number;
     }
-  | { kind: "title_ingredient_mismatch"; dishName: string; mismatchedWord: string };
+  | { kind: "title_ingredient_mismatch"; dishName: string; mismatchedWord: string }
+  // F11 chat-driven meal editing only (composeMealFromEditDetailed below) --
+  // an edit's ingredients always carry an EXPLICIT amountG (never solved
+  // against a gap), so the failure shape is simpler than portion_out_of_bounds:
+  // just "this stated amount is outside the realistic bound for this role,"
+  // no gapNeeded to report since nothing was being solved for.
+  | { kind: "amount_out_of_bounds"; role: MealRole; ingredientName: string; amountG: number; min: number; max: number };
 
 // mealProposer.ts's TITLE_INGREDIENT_CHECK_FIELD asks Claude to self-check
 // this, but never enforces it (validateProposal never reads the field's
@@ -592,7 +635,7 @@ export async function composeMealFromProposalDetailed(
     // for the actual macro target, a fixed item never is.
     const lookup = await fetchIngredientMacros(fixedItem.name);
     if (!lookup) continue;
-    const item = toComposedIngredient(lookup, amountG);
+    const item = toComposedIngredient(lookup, amountG, "fixed");
     composed.push(item);
     remainingProtein -= item.proteinG;
     remainingCarbs -= item.carbsG;
@@ -712,13 +755,13 @@ export async function composeMealFromProposalDetailed(
     fatAmountG: fatSized?.amountG ?? null,
   });
 
-  const proteinItem = toComposedIngredient(proteinLookup, refined.proteinAmountG);
+  const proteinItem = toComposedIngredient(proteinLookup, refined.proteinAmountG, "protein");
   composed.push(proteinItem);
   if (refined.carbAmountG !== null) {
-    composed.push(toComposedIngredient(carbLookup, refined.carbAmountG));
+    composed.push(toComposedIngredient(carbLookup, refined.carbAmountG, "carb"));
   }
   if (refined.fatAmountG !== null) {
-    composed.push(toComposedIngredient(fatLookup, refined.fatAmountG));
+    composed.push(toComposedIngredient(fatLookup, refined.fatAmountG, "fat"));
   }
 
   // Second, final title check against the ACTUAL composed ingredients --
@@ -863,7 +906,7 @@ export async function composeMealFromProposalBestEffort(
     }
     const lookup = await fetchIngredientMacros(fixedItem.name);
     if (!lookup) continue; // fixed items are non-critical -- same silent drop as the strict composer
-    const item = toComposedIngredient(lookup, amountG);
+    const item = toComposedIngredient(lookup, amountG, "fixed");
     composed.push(item);
     remainingProtein -= item.proteinG;
     remainingCarbs -= item.carbsG;
@@ -910,7 +953,7 @@ export async function composeMealFromProposalBestEffort(
       // (e.g. proposed as "protein" but is macro-zero) -- fall back to a
       // realistic minimum portion rather than omitting a load-bearing role.
       notes.push(`"${proposed.name}" (${role}) can't meaningfully close the gap -- included at a normal minimum ${bounds.min}g portion instead`);
-      return toComposedIngredient(lookup, bounds.min);
+      return toComposedIngredient(lookup, bounds.min, role);
     }
 
     const sized = sizeForGap(density, remaining);
@@ -922,10 +965,10 @@ export async function composeMealFromProposalBestEffort(
       // small-but-legitimate fat amount (bounds.min=3) that the universal
       // 10g floor would otherwise have silently dropped.
       const rescued = bounds.min < MIN_INGREDIENT_AMOUNT_G ? sizeForGap(density, remaining, bounds.min) : null;
-      if (rescued) return toComposedIngredient(lookup, rescued.amountG);
+      if (rescued) return toComposedIngredient(lookup, rescued.amountG, role);
       if (optional) return null; // matches the strict composer's "allowed to contribute nothing" exception exactly -- not a compromise
       notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
-      return toComposedIngredient(lookup, bounds.min);
+      return toComposedIngredient(lookup, bounds.min, role);
     }
     // Persona audit 2026-07-31, finding #5 follow-up: needing drastically
     // more than the realistic ceiling (found live: parmesan cheese at
@@ -943,7 +986,7 @@ export async function composeMealFromProposalBestEffort(
     // contribute the honest minimum rather than silently nothing.
     if (sized.amountG > bounds.max * IMPLAUSIBLE_OVERAGE_MULTIPLIER) {
       notes.push(`"${proposed.name}" (${role}) isn't dense enough to close the remaining gap -- included at a normal minimum ${bounds.min}g portion instead`);
-      return toComposedIngredient(lookup, bounds.min);
+      return toComposedIngredient(lookup, bounds.min, role);
     }
     let amountG = sized.amountG;
     if (!isRealisticAmount(amountG, bounds)) {
@@ -951,7 +994,7 @@ export async function composeMealFromProposalBestEffort(
       notes.push(`"${proposed.name}" (${role}) needed ${amountG}g to fully close the gap -- capped at a realistic ${clamped}g instead`);
       amountG = clamped;
     }
-    return toComposedIngredient(lookup, amountG);
+    return toComposedIngredient(lookup, amountG, role);
   }
 
   let notesBefore = notes.length;
@@ -1005,9 +1048,9 @@ export async function composeMealFromProposalBestEffort(
       fixedAdjustedTarget,
       { proteinAmountG: proteinItem.amountG, carbAmountG: carbItem?.amountG ?? null, fatAmountG: fatItem?.amountG ?? null },
     );
-    proteinItem = toComposedIngredient(reverseTo100g(proteinItem), refined.proteinAmountG);
-    carbItem = carbItem && refined.carbAmountG !== null ? toComposedIngredient(reverseTo100g(carbItem), refined.carbAmountG) : null;
-    fatItem = fatItem && refined.fatAmountG !== null ? toComposedIngredient(reverseTo100g(fatItem), refined.fatAmountG) : null;
+    proteinItem = toComposedIngredient(reverseTo100g(proteinItem), refined.proteinAmountG, "protein");
+    carbItem = carbItem && refined.carbAmountG !== null ? toComposedIngredient(reverseTo100g(carbItem), refined.carbAmountG, "carb") : null;
+    fatItem = fatItem && refined.fatAmountG !== null ? toComposedIngredient(reverseTo100g(fatItem), refined.fatAmountG, "fat") : null;
   }
 
   if (proteinItem) composed.push(proteinItem);
@@ -1094,5 +1137,148 @@ export function describeRejectionForFeedback(reason: CompositionRejection): stri
     }
     case "title_ingredient_mismatch":
       return `Your dish name "${reason.dishName}" mentions "${reason.mismatchedWord}" but that isn't one of your listed ingredients. Either remove that word from the dish name, or add it as a real ingredient.`;
+    case "amount_out_of_bounds":
+      return `"${reason.ingredientName}" (${reason.role}) at ${Math.round(reason.amountG)}g isn't a realistic amount for this role (needs to be ${reason.min}-${reason.max}g). Give it a realistic amount instead.`;
   }
+}
+
+// User-facing sibling to describeRejectionForFeedback above -- that one is
+// written FOR Claude (a retry-with-feedback prompt, internal field names
+// like "role"/"gapNeeded" are fine); this one is written FOR the chat
+// user reading sendChatMessage's reply text directly, so it stays in
+// plain second-person language with no internal jargon.
+export function describeRejectionForChatUser(reason: CompositionRejection): string {
+  switch (reason.kind) {
+    case "no_ingredients":
+      return "I couldn't make sense of that edit -- it didn't end up with any ingredients.";
+    case "unsafe_ingredient":
+      return `I can't do that -- "${reason.ingredientName}" ${reason.reason}.`;
+    case "duplicate_role":
+      return `That edit ended up with more than one ${reason.role} ingredient, which I can't size correctly -- try naming just one.`;
+    case "missing_role":
+      return `That edit is missing a ${reason.role} ingredient.`;
+    case "fixed_item_unrealistic":
+      return `"${reason.ingredientName}" at ${Math.round(reason.amountG)}g isn't a realistic side/garnish amount.`;
+    case "ingredient_not_found":
+      return `I couldn't find real nutrition data for "${reason.ingredientName}" -- try a more common ingredient name.`;
+    case "portion_infeasible":
+      return `"${reason.ingredientName}" isn't dense enough to make that change work in a realistic portion.`;
+    case "portion_out_of_bounds":
+      return `"${reason.ingredientName}" would need an unrealistic amount to make that change work.`;
+    case "title_ingredient_mismatch":
+      return `That edit's dish name mentions "${reason.mismatchedWord}", but that's not actually one of the ingredients.`;
+    case "amount_out_of_bounds": {
+      const over = reason.amountG > reason.max;
+      return `That's more ${reason.ingredientName} than fits in a realistic portion (${Math.round(reason.amountG)}g, ${
+        over ? `the realistic max is ${reason.max}g` : `the realistic minimum is ${reason.min}g`
+      }).`;
+    }
+  }
+}
+
+// Case/whitespace-insensitive, order-insensitive (multiset) comparison --
+// an edit that reproduces the current ingredient list (same names, same
+// amounts within a small tolerance) is a no-op worth telling the user
+// about explicitly rather than silently "succeeding" at doing nothing.
+const NO_OP_AMOUNT_TOLERANCE_G = 1;
+
+export function isNoOpEdit(
+  current: Array<{ name: string; amountG: number }>,
+  proposedMeal: ComposedMeal,
+): boolean {
+  if (current.length !== proposedMeal.ingredients.length) return false;
+
+  const remaining = [...proposedMeal.ingredients];
+  for (const currentItem of current) {
+    const matchIndex = remaining.findIndex(
+      (p) =>
+        p.ingredientName.trim().toLowerCase() === currentItem.name.trim().toLowerCase() &&
+        Math.abs(p.amountG - currentItem.amountG) < NO_OP_AMOUNT_TOLERANCE_G,
+    );
+    if (matchIndex === -1) return false;
+    remaining.splice(matchIndex, 1);
+  }
+  return true;
+}
+
+export type ComposeEditResult = { ok: true; meal: ComposedMeal } | { ok: false; reason: CompositionRejection };
+
+// F11 chat-driven meal editing. Reuses every existing grounding/safety
+// helper from composeMealFromProposalDetailed above, but is deliberately
+// NOT a variant of it -- an edit never solves an amount against a macro
+// target (every amountG here is already explicit, from the edit
+// proposal), so there is no protein-then-carb-then-fat sequential solve
+// and no refineRoleAmounts pass. Safety is identical and unconditional
+// (never relaxed, same as both existing composers). Deliberately no
+// missing_role check -- unlike a fresh composition, an edit may
+// legitimately drop a role entirely ("drop the rice from tonight's
+// dinner" is a valid outcome, not a malformed proposal).
+export async function composeMealFromEditDetailed(
+  edit: MealEditProposal,
+  ctx: DietaryContext,
+  fetchIngredientMacros: FetchIngredientMacrosFn,
+): Promise<ComposeEditResult> {
+  if (edit.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
+
+  const mismatchedWord = findTitleIngredientMismatch(edit.dishName, edit.ingredients);
+  if (mismatchedWord) {
+    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: edit.dishName, mismatchedWord } };
+  }
+
+  for (const ing of edit.ingredients) {
+    const unsafeReason = isOpenEndedIngredientUnsafeFor(ing.name, ctx);
+    if (unsafeReason !== null) {
+      return { ok: false, reason: { kind: "unsafe_ingredient", role: ing.role, ingredientName: ing.name, reason: unsafeReason } };
+    }
+  }
+
+  for (const role of ["protein", "carb", "fat"] as const) {
+    if (edit.ingredients.filter((i) => i.role === role).length > 1) {
+      return { ok: false, reason: { kind: "duplicate_role", role } };
+    }
+  }
+
+  const composed: ComposedMealIngredient[] = [];
+  for (const ing of edit.ingredients) {
+    const lookup = await fetchIngredientMacros(ing.name);
+    if (!lookup) {
+      return { ok: false, reason: { kind: "ingredient_not_found", role: ing.role, ingredientName: ing.name } };
+    }
+    const bounds = PORTION_BOUNDS_G[ing.role];
+    if (!isRealisticAmount(ing.amountG, bounds)) {
+      return {
+        ok: false,
+        reason: { kind: "amount_out_of_bounds", role: ing.role, ingredientName: ing.name, amountG: ing.amountG, min: bounds.min, max: bounds.max },
+      };
+    }
+    composed.push(toComposedIngredient(lookup, ing.amountG, ing.role));
+  }
+
+  // Second, final title check against the ACTUAL composed ingredient
+  // names -- same rationale as composeMealFromProposalDetailed's own
+  // second check (a fixed item's lookup could theoretically still fail
+  // above, but unlike that function, this one hard-rejects on ANY failed
+  // lookup, so this is mostly defensive here rather than catching a real
+  // silent-drop case).
+  const finalMismatch = findTitleIngredientMismatch(
+    edit.dishName,
+    composed.map((i) => ({ name: i.ingredientName })),
+  );
+  if (finalMismatch) {
+    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: edit.dishName, mismatchedWord: finalMismatch } };
+  }
+
+  const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
+  return {
+    ok: true,
+    meal: {
+      dishName: edit.dishName,
+      ingredients: composed,
+      totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
+      totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
+      totalCarbsG: composed.reduce((s, i) => s + i.carbsG, 0),
+      totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
+      totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
+    },
+  };
 }

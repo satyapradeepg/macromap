@@ -3,11 +3,16 @@ import {
   composeMealFromProposal,
   composeMealFromProposalDetailed,
   composeMealFromProposalBestEffort,
+  composeMealFromEditDetailed,
+  isNoOpEdit,
   describeRejectionForFeedback,
+  describeRejectionForChatUser,
   findTitleIngredientMismatch,
   stripAllTitleMismatches,
   type CompositionRejection,
+  type ComposedMeal,
   type GroundedIngredientData,
+  type MealEditProposal,
   type MealProposal,
 } from "./aiMealComposition";
 import type { DietaryContext } from "./openEndedIngredientSafety";
@@ -969,5 +974,173 @@ describe("stripAllTitleMismatches", () => {
     expect(result.dishName.toLowerCase()).not.toContain("bean");
     expect(result.dishName).not.toContain("  "); // no leftover double space
     expect(result.removedWords).toEqual(["bean"]);
+  });
+});
+
+describe("composeMealFromEditDetailed", () => {
+  it("grounds a valid edit -- explicit amounts, no target-solving", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan, "brown rice": { id: 2, name: "brown rice", caloriesPer100g: 112, proteinGPer100g: 2.6, carbsGPer100g: 23.5, fatGPer100g: 0.9, estimatedCostCentsPer100g: null }, "olive oil": oil });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stir-Fry with Rice",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "brown rice", role: "carb", amountG: 100 },
+        { name: "olive oil", role: "fat", amountG: 10 },
+      ],
+      changeSummary: "Doubled the seitan.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.meal.ingredients).toHaveLength(3);
+      expect(result.meal.ingredients[0]).toMatchObject({ ingredientName: "seitan cutlets", amountG: 150, role: "protein" });
+      // 150g seitan @ 21g protein/100g = 31.5g -- exact linear scale, no solving involved
+      expect(result.meal.ingredients[0].proteinG).toBeCloseTo(31.5, 1);
+    }
+  });
+
+  it("CRITICAL: rejects an unsafe ingredient unconditionally, same as the strict/best-effort composers", async () => {
+    const ctx: DietaryContext = { dietaryStyles: [], allergies: ["peanuts"], dislikes: [] };
+    const fetchMacros = lookupFrom({ peanuts: { id: 99, name: "peanuts", caloriesPer100g: 567, proteinGPer100g: 25.8, carbsGPer100g: 16.1, fatGPer100g: 49.2, estimatedCostCentsPer100g: null } });
+    const edit: MealEditProposal = {
+      dishName: "Peanut Snack",
+      ingredients: [{ name: "peanuts", role: "protein", amountG: 40 }],
+      changeSummary: "Added peanuts.",
+    };
+    const result = await composeMealFromEditDetailed(edit, ctx, fetchMacros);
+    expect(result).toEqual({ ok: false, reason: { kind: "unsafe_ingredient", role: "protein", ingredientName: "peanuts", reason: expect.any(String) } });
+  });
+
+  it("rejects a duplicate core role", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan, tofu: tofu });
+    const edit: MealEditProposal = {
+      dishName: "Two Proteins",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 100 },
+        { name: "tofu", role: "protein", amountG: 100 },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result).toEqual({ ok: false, reason: { kind: "duplicate_role", role: "protein" } });
+  });
+
+  it("accepts an edit that drops a core role entirely -- the key edit-vs-generation divergence", async () => {
+    // A fresh composition would reject this for missing carb/fat roles;
+    // an edit legitimately can ("drop the rice from tonight's dinner").
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Only",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 150 }],
+      changeSummary: "Dropped the rice and oil.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.meal.ingredients).toHaveLength(1);
+  });
+
+  it("rejects an explicit amount outside the role's realistic bounds, with the correct min/max payload", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Only",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 800 }],
+      changeSummary: "Tripled the seitan.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan cutlets", amountG: 800, min: 20, max: 280 },
+    });
+  });
+
+  it("rejects a title/ingredient mismatch against the composed ingredients", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan and Quinoa Bowl",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 150 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result).toEqual({ ok: false, reason: { kind: "title_ingredient_mismatch", dishName: "Seitan and Quinoa Bowl", mismatchedWord: "quinoa" } });
+  });
+
+  it("rejects when an ingredient fails to ground", async () => {
+    const fetchMacros = lookupFrom({});
+    const edit: MealEditProposal = {
+      dishName: "Mystery Meal",
+      ingredients: [{ name: "unobtainium", role: "protein", amountG: 100 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result).toEqual({ ok: false, reason: { kind: "ingredient_not_found", role: "protein", ingredientName: "unobtainium" } });
+  });
+
+  it("rejects an edit with no ingredients", async () => {
+    const edit: MealEditProposal = { dishName: "Empty", ingredients: [], changeSummary: "n/a" };
+    const result = await composeMealFromEditDetailed(edit, NONE, lookupFrom({}));
+    expect(result).toEqual({ ok: false, reason: { kind: "no_ingredients" } });
+  });
+});
+
+describe("isNoOpEdit", () => {
+  const proposedMeal = (ingredients: Array<{ ingredientName: string; amountG: number }>): ComposedMeal => ({
+    dishName: "n/a",
+    ingredients: ingredients.map((i) => ({ ...i, spoonacularIngredientId: 1, caloriesKcal: 0, proteinG: 0, carbsG: 0, fatG: 0, estimatedCostCents: null })),
+    totalCalories: 0,
+    totalProteinG: 0,
+    totalCarbsG: 0,
+    totalFatG: 0,
+    totalEstimatedCostCents: null,
+  });
+
+  it("detects an identical list as a no-op regardless of order", () => {
+    const current = [{ name: "seitan cutlets", amountG: 150 }, { name: "brown rice", amountG: 100 }];
+    const proposed = proposedMeal([{ ingredientName: "Brown Rice", amountG: 100 }, { ingredientName: "Seitan Cutlets", amountG: 150 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(true);
+  });
+
+  it("treats a sub-tolerance amount difference as a no-op", () => {
+    const current = [{ name: "seitan cutlets", amountG: 150 }];
+    const proposed = proposedMeal([{ ingredientName: "seitan cutlets", amountG: 150.5 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(true);
+  });
+
+  it("treats an over-tolerance amount difference as a real change", () => {
+    const current = [{ name: "seitan cutlets", amountG: 150 }];
+    const proposed = proposedMeal([{ ingredientName: "seitan cutlets", amountG: 300 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(false);
+  });
+
+  it("treats a different ingredient count as a real change", () => {
+    const current = [{ name: "seitan cutlets", amountG: 150 }];
+    const proposed = proposedMeal([{ ingredientName: "seitan cutlets", amountG: 150 }, { ingredientName: "brown rice", amountG: 100 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(false);
+  });
+
+  it("is case/whitespace-insensitive on names", () => {
+    const current = [{ name: "  Seitan Cutlets  ", amountG: 150 }];
+    const proposed = proposedMeal([{ ingredientName: "seitan cutlets", amountG: 150 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(true);
+  });
+});
+
+describe("describeRejectionForChatUser", () => {
+  const cases: Array<[CompositionRejection, RegExp]> = [
+    [{ kind: "no_ingredients" }, /didn't end up with any ingredients/],
+    [{ kind: "unsafe_ingredient", role: "protein", ingredientName: "peanuts", reason: "matches excluded term \"peanuts\"" }, /can't do that/],
+    [{ kind: "duplicate_role", role: "carb" }, /more than one carb/],
+    [{ kind: "missing_role", role: "fat" }, /missing a fat ingredient/],
+    [{ kind: "fixed_item_unrealistic", ingredientName: "parsley", amountG: 900, min: 1, max: 150 }, /realistic side\/garnish amount/],
+    [{ kind: "ingredient_not_found", role: "protein", ingredientName: "unobtainium" }, /couldn't find real nutrition data/],
+    [{ kind: "portion_infeasible", role: "protein", ingredientName: "lentils", gapNeeded: 40 }, /isn't dense enough/],
+    [{ kind: "portion_out_of_bounds", role: "carb", ingredientName: "rice", amountG: 400, min: 15, max: 250, gapNeeded: 90 }, /unrealistic amount/],
+    [{ kind: "title_ingredient_mismatch", dishName: "Quinoa Bowl", mismatchedWord: "quinoa" }, /not actually one of the ingredients/],
+    [{ kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan", amountG: 800, min: 20, max: 280 }, /realistic max is 280g/],
+  ];
+
+  it.each(cases)("describes %j without leaking internal field names", (reason, expected) => {
+    const text = describeRejectionForChatUser(reason);
+    expect(text).toMatch(expected);
+    expect(text).not.toMatch(/gapNeeded|kind:/);
   });
 });
