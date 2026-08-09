@@ -24,14 +24,14 @@ export function AccountIdentity({ email, name }: { email: string | null; name: s
       <h2 className="text-sm font-bold text-muted uppercase tracking-wide">Account</h2>
       <dl className="mt-3 flex flex-col gap-2 text-sm">
         {name && (
-          <div className="flex justify-between">
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between">
             <dt className="text-muted">Name</dt>
-            <dd className="font-medium">{name}</dd>
+            <dd className="font-medium break-all sm:text-right">{name}</dd>
           </div>
         )}
-        <div className="flex justify-between">
+        <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between">
           <dt className="text-muted">Email</dt>
-          <dd className="font-medium">{email ?? "—"}</dd>
+          <dd className="font-medium break-all sm:text-right">{email ?? "—"}</dd>
         </div>
       </dl>
 
