@@ -55,6 +55,18 @@ jobs:
             ./web
 
       - name: Sync app config
+        # KEEP_ALIVE_TIMEOUT (2026-08-09): a real user hit the Regenerate
+        # button getting stuck on a slow plan generation, root-caused to a
+        # request timing out at exactly ~120s (measured live, 3 separate
+        # times) -- a suspiciously precise match to a long-running-request
+        # timeout somewhere in front of the app, not the app's own code.
+        # Next's standalone-mode generated server.js already reads this
+        # exact env var and passes it into startServer()'s keepAliveTimeout
+        # option -- raised here as a live experiment (300000ms = 5min) to
+        # test whether it's actually the lever controlling this, before
+        # assuming Azure Container Apps' own ingress enforces a fixed,
+        # non-configurable limit instead (its ARM ingress schema exposes no
+        # timeout property at all, checked across several API versions).
         run: |
           az containerapp secret set \
             --resource-group rg-students-platform \
@@ -80,7 +92,8 @@ jobs:
               AUTH0_CLIENT_ID=secretref:auth0-client-id \
               AUTH0_CLIENT_SECRET=secretref:auth0-client-secret \
               AUTH0_SECRET=secretref:auth0-secret \
-              APP_BASE_URL=${{ vars.APP_BASE_URL }}
+              APP_BASE_URL=${{ vars.APP_BASE_URL }} \
+              KEEP_ALIVE_TIMEOUT=300000
 
       - name: Deploy to Container App
         run: |
