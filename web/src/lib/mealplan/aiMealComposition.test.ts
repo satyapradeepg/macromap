@@ -1053,6 +1053,244 @@ describe("composeMealFromEditDetailed", () => {
     });
   });
 
+  it("live bug 2026-08-09: a pre-existing 'fixed'-role ingredient over the bound is accepted, not rejected", async () => {
+    // Real repro, exact live data: the slot's RAW stored ingredient name is
+    // "bot beer" (Spoonacular's own quantity-shorthand prefix, "bot" =
+    // bottle), but the edit proposer reasonably re-lists it as plain
+    // "beer" (a real, specific, searchable name, per its own prompt
+    // instructions) at 426.6g -- over the fixed role's 150g cap, meant for
+    // AI-composed garnish-scale amounts. An exact-string pre-existing
+    // match would miss this entirely (that was this fix's own first,
+    // broken attempt, live-confirmed not to work) -- word-subset matching
+    // is what actually closes the real repro.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "Added more seitan.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["bot beer"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const beerLine = result.meal.ingredients.find((i) => i.ingredientName === "beer");
+      expect(beerLine?.amountG).toBe(426.6);
+    }
+  });
+
+  it("live bug 2026-08-09: a pre-existing 'fixed'-role ingredient that fails to ground is DROPPED, not rejected", async () => {
+    // Real repro continuation: after the beer bounds-check fix above, the
+    // SAME edit's other pre-existing fixed ingredient ("strong mushroom
+    // broth") still failed lookup entirely -- Spoonacular's own ingredient
+    // search has no match for it under any phrasing, even though the
+    // recipe's structured data already links it to a real id. Dropping it
+    // (not rejecting the whole edit) is what actually lets the user's real
+    // request go through.
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "strong mushroom broth", role: "fixed", amountG: 2018 },
+      ],
+      changeSummary: "Added seitan.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["strong mushroom broth"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.meal.ingredients).toHaveLength(1);
+      expect(result.meal.ingredients[0].ingredientName).toBe("seitan cutlets");
+    }
+  });
+
+  it("still rejects (not drops) a lookup failure for a genuinely NEW ingredient", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan and Mystery",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "unobtainium broth", role: "fixed", amountG: 50 },
+      ],
+      changeSummary: "n/a",
+    };
+    // "unobtainium broth" is NOT in the pre-existing list -- a genuinely new addition.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "ingredient_not_found", role: "fixed", ingredientName: "unobtainium broth" },
+    });
+  });
+
+  it("rejects with no_ingredients if every ingredient ends up dropped as a failed pre-existing fixed item", async () => {
+    const fetchMacros = lookupFrom({});
+    const edit: MealEditProposal = {
+      dishName: "Broth Only",
+      ingredients: [{ name: "strong mushroom broth", role: "fixed", amountG: 2018 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["strong mushroom broth"]);
+    expect(result).toEqual({ ok: false, reason: { kind: "no_ingredients" } });
+  });
+
+  it("does NOT treat a genuinely new ingredient as pre-existing just because it's a substring of an existing one's name", async () => {
+    // Real false-positive risk word-subset matching must avoid: a NEW "egg"
+    // should never be waved through just because the recipe already had
+    // "eggplant" -- naive substring containment would wrongly match this
+    // ("egg" is a substring of "eggplant"), word-level comparison doesn't.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      egg: { id: 4, name: "egg", caloriesPer100g: 143, proteinGPer100g: 13, carbsGPer100g: 1.1, fatGPer100g: 9.5, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan and Egg",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "egg", role: "fixed", amountG: 500 }, // genuinely unrealistic for a new addition
+      ],
+      changeSummary: "Added a lot of egg.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["eggplant"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "fixed", ingredientName: "egg", amountG: 500, min: 1, max: 150 },
+    });
+  });
+
+  it("still rejects an out-of-bounds 'fixed' ingredient when it's genuinely NEW, not pre-existing", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "Added beer.",
+    };
+    // "beer" is NOT in the pre-existing list this time -- it's a new addition.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "fixed", ingredientName: "beer", amountG: 426.6, min: 1, max: 150 },
+    });
+  });
+
+  it("live bug 2026-08-09 (3rd case, same repro): the bounds relaxation applies to ANY role for a pre-existing ingredient, not just fixed", async () => {
+    // Real repro continuation: after fixing beer (fixed role) and strong
+    // mushroom broth (lookup failure), the SAME edit's pre-existing
+    // "carrots" -- a CARB-role ingredient -- also tripped its own role's
+    // bounds once re-expressed (341g > carb's 250g max). Proves this isn't
+    // fixed-role-specific: any real recipe ingredient's already-legitimate
+    // amount can exceed AI-composed norms regardless of role.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      carrots: { id: 5, name: "carrots", caloriesPer100g: 41, proteinGPer100g: 0.9, carbsGPer100g: 10, fatGPer100g: 0.2, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "carrots", role: "carb", amountG: 341 },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["carrots"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const carrotLine = result.meal.ingredients.find((i) => i.ingredientName === "carrots");
+      expect(carrotLine?.amountG).toBe(341);
+    }
+  });
+
+  it("still rejects an out-of-bounds amount for a genuinely NEW ingredient in a non-fixed role", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Only",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 800 }],
+      changeSummary: "n/a",
+    };
+    // "seitan cutlets" is NOT in the pre-existing list -- a fresh, oversized addition.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, []);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan cutlets", amountG: 800, min: 20, max: 280 },
+    });
+  });
+
+  it("does NOT drop a pre-existing protein/carb/fat ingredient that fails to ground -- only fixed-role drops", async () => {
+    // Dropping a fixed-role garnish silently is a minor omission; dropping
+    // a pre-existing PROTEIN ingredient that fails to ground would
+    // misrepresent the meal's real macro totals -- this must still
+    // hard-reject even though the ingredient is pre-existing.
+    const fetchMacros = lookupFrom({});
+    const edit: MealEditProposal = {
+      dishName: "Mystery Protein",
+      ingredients: [{ name: "unfindable protein", role: "protein", amountG: 150 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["unfindable protein"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "ingredient_not_found", role: "protein", ingredientName: "unfindable protein" },
+    });
+  });
+
+  it("pre-existing-name matching is case/whitespace insensitive", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "n/a",
+    };
+    // The proposal's own ingredient name is normalized casing ("beer"), but
+    // the ORIGINAL current-ingredient description (as read from the slot,
+    // e.g. Spoonacular's own "Beer" capitalization) may differ in case --
+    // the pre-existing check must still recognize it as the same ingredient.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["  Beer  "]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("live bug 2026-08-09 (found retesting the fix itself): pre-existing-name matching tokenizes across '/' too", async () => {
+    // Real repro: the raw stored name "pkt firm/extra tofu" re-listed by
+    // the proposer as just "firm tofu" (150g protein-role amount, over
+    // protein's 280g max after re-scaling) -- a naive whitespace-only word
+    // split leaves "firm/extra" as one token, so ["firm","tofu"] is never
+    // recognized as a subset and the pre-existing relaxation silently
+    // fails to apply, reproducing the exact bounds rejection this whole
+    // fix exists to prevent.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      "firm tofu": tofu,
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan and Tofu Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "carb", amountG: 100 },
+        { name: "firm tofu", role: "protein", amountG: 350 },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["pkt firm/extra tofu"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const tofuLine = result.meal.ingredients.find((i) => i.ingredientName === "firm tofu");
+      expect(tofuLine?.amountG).toBe(350);
+    }
+  });
+
   it("rejects a title/ingredient mismatch against the composed ingredients", async () => {
     const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
     const edit: MealEditProposal = {

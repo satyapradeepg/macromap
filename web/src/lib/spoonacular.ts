@@ -226,8 +226,18 @@ export function commaSwapFallback(query: string): string | null {
 // commaSwapFallback's reorder ("diced russet potatoes" also zero) -- same
 // shape/cut risk profile as "sliced" already here, dicing doesn't change
 // per-100g macros either.
+//
+// "strong" added 2026-08-09, live-confirmed via F11 chat-driven meal
+// editing against production: "strong mushroom broth" (a real ingredient
+// name already present in a live Spoonacular recipe) returned zero
+// results from ingredient search. Unlike the cut/cooking-method words
+// above, "strong" describes concentration, not a different preparation --
+// same low risk as those: a strong vs. regular broth is still
+// fundamentally the same food for per-100g macro purposes (mostly water),
+// not a reformulated product the way an "X-free" qualifier can be (see
+// glutenFreeQualifierStripFallback's own comment on that distinction).
 const PREP_PREFIXES = [
-  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced",
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced", "strong",
 ];
 
 // Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
@@ -305,6 +315,58 @@ export function glutenFreeQualifierStripFallback(query: string): string | null {
   return null;
 }
 
+// Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production,
+// same repro as PREP_PREFIXES' "strong" entry above): "firm/extra tofu" --
+// a real ingredient name from a live Spoonacular recipe's own stored data
+// -- returned zero search results, while the exact same words
+// space-separated ("firm extra tofu") matched immediately. The "/" reads
+// to Spoonacular's own recipe-ingredient data as a compact "either/or"
+// label (this same recipe's data literally uses it as shorthand for
+// "firm or extra-firm tofu"), but its ingredient SEARCH endpoint doesn't
+// tokenize across it the way it does whitespace. Replacing "/" with a
+// space doesn't change what food is being searched for (unlike a
+// qualifier-drop, there's no different-product risk here at all -- it's
+// the same words, just re-punctuated), so this is safe to try unconditionally
+// whenever a "/" is present, not scoped to specific known phrases the way
+// PREP_PREFIXES/glutenFreeQualifierStripFallback are.
+export function slashToSpaceFallback(query: string): string | null {
+  if (!query.includes("/")) return null;
+  const reformatted = query.replace(/\//g, " ").replace(/\s+/g, " ").trim();
+  return reformatted && reformatted !== query.trim() ? reformatted : null;
+}
+
+// Live-confirmed 2026-08-09 (same F11 session, found testing an 18-
+// ingredient real recipe): "mori-nu tofu" -- a real tofu BRAND name from
+// that recipe's own Spoonacular ingredient data -- returned zero search
+// results, while bare "tofu" matches immediately. Deliberately a SEPARATE
+// list from PREP_PREFIXES, not folded into it, because the safety
+// reasoning is different: a cooking-method word (steamed/diced/etc.)
+// never changes what food is being searched for, so PREP_PREFIXES can
+// generalize freely across many words at once. A brand name doesn't get
+// that same blanket treatment -- SOME brands genuinely denote a different
+// product/formulation (their own "X-free" reasoning applies here too, see
+// glutenFreeQualifierStripFallback's comment), so this stays a small,
+// individually-confirmed curated list rather than a general "strip any
+// hyphenated/capitalized leading word" heuristic (which would also wrongly
+// catch real descriptors like "extra-firm tofu" -- "extra-firm" isn't a
+// brand). Add a new entry here only after confirming LIVE both that
+// Spoonacular's search fails on it and that the specific brand's product
+// doesn't meaningfully differ in macros from the generic ingredient (true
+// for Mori-Nu, a silken-tofu packaging brand).
+const BRAND_NAME_PREFIXES = ["mori-nu"];
+
+export function brandNamePrefixStripFallback(query: string): string | null {
+  const trimmed = query.trim();
+  for (const brand of BRAND_NAME_PREFIXES) {
+    const match = new RegExp(`^${brand}\\s+`, "i").exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest || null;
+    }
+  }
+  return null;
+}
+
 interface IngredientSearchMatch {
   id: number;
 }
@@ -349,6 +411,14 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   if (!match) {
     const glutenFreeStripped = glutenFreeQualifierStripFallback(query);
     if (glutenFreeStripped) match = await searchIngredient(glutenFreeStripped, apiKey);
+  }
+  if (!match) {
+    const slashReformatted = slashToSpaceFallback(query);
+    if (slashReformatted) match = await searchIngredient(slashReformatted, apiKey);
+  }
+  if (!match) {
+    const brandStripped = brandNamePrefixStripFallback(query);
+    if (brandStripped) match = await searchIngredient(brandStripped, apiKey);
   }
   if (!match) return null;
 

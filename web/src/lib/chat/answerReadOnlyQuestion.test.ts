@@ -47,9 +47,16 @@ function plan(overrides: Partial<PlanView> = {}): PlanView {
 }
 
 describe("answerReadOnlyQuestion", () => {
-  it("returns the unsupported message regardless of plan state", () => {
-    expect(answerReadOnlyQuestion("unsupported", null, null, null)).toMatch(/budget\/cost tracking isn't something/);
-    expect(answerReadOnlyQuestion("unsupported", null, null, plan())).toMatch(/budget\/cost tracking isn't something/);
+  it("returns the unsupported message regardless of plan state, listing real supported topics rather than naming one guessed reason", () => {
+    // Live bug fixed 2026-08-09: this message used to hardcode budget/cost
+    // as THE named example regardless of what was actually asked -- now it
+    // lists what IS supported (including pantry) and only mentions
+    // budget/cost as one example of what isn't, not the presumed reason.
+    const unsupportedNull = answerReadOnlyQuestion("unsupported", null, null, null);
+    const unsupportedWithPlan = answerReadOnlyQuestion("unsupported", null, null, plan());
+    expect(unsupportedNull).toBe(unsupportedWithPlan);
+    expect(unsupportedNull).toContain("what's in your pantry");
+    expect(unsupportedNull).toContain("isn't something I can answer right now");
   });
 
   it("returns a no-plan message for any other topic when there's no plan", () => {
@@ -105,5 +112,36 @@ describe("answerReadOnlyQuestion", () => {
   it("reports no meals for today when every day-0 slot is unfilled", () => {
     const p = plan({ slots: [slot({ dayIndex: 0, isUnfilled: true })] });
     expect(answerReadOnlyQuestion("today_summary", null, null, p)).toMatch(/don't see any meals filled in for today/);
+  });
+
+  // pantry_contents added 2026-08-09 -- see the QaTopic/UNSUPPORTED_MESSAGE
+  // comments for the live bug this closes ("What's in my pantry?" had no
+  // topic to land on and fell to the generic unsupported message).
+  describe("pantry_contents", () => {
+    it("lists pantry items with their quantity text when present", () => {
+      const answer = answerReadOnlyQuestion("pantry_contents", null, null, null, [
+        { id: "1", name: "chicken breast", quantityText: "2 lbs", amount: null, unit: null },
+        { id: "2", name: "peanuts", quantityText: null, amount: null, unit: null },
+      ]);
+      expect(answer).toContain("chicken breast (2 lbs)");
+      expect(answer).toContain("peanuts");
+      expect(answer).not.toContain("peanuts (");
+    });
+
+    it("reports an empty pantry honestly instead of a generic unsupported message", () => {
+      expect(answerReadOnlyQuestion("pantry_contents", null, null, null, [])).toMatch(/pantry is empty/);
+    });
+
+    it("doesn't require a generated plan -- pantry is independent of the meal plan", () => {
+      const answer = answerReadOnlyQuestion("pantry_contents", null, null, null, [
+        { id: "1", name: "rice", quantityText: null, amount: null, unit: null },
+      ]);
+      expect(answer).not.toMatch(/don't have a generated plan/);
+      expect(answer).toContain("rice");
+    });
+
+    it("treats a null pantryItems argument as empty, not a crash", () => {
+      expect(answerReadOnlyQuestion("pantry_contents", null, null, null)).toMatch(/pantry is empty/);
+    });
   });
 });

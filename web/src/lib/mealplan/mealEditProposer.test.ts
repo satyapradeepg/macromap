@@ -114,4 +114,30 @@ describe("buildEditPrompt", () => {
     const prompt = buildEditPrompt(BASE_INPUT);
     expect(prompt).toMatch(/COMPLETE new ingredient list, not a diff/);
   });
+
+  it("tells the model exactly one ingredient may have each of protein/carb/fat", () => {
+    const prompt = buildEditPrompt(BASE_INPUT);
+    expect(prompt).toMatch(/EXACTLY ONE ingredient may have role "protein"/);
+  });
+
+  // Retry-with-feedback, live bug 2026-08-09: a real multi-ingredient
+  // recipe's role assignment can come back inconsistent across separate
+  // calls for the identical request -- reproduced live by sending the
+  // same message twice and getting two different duplicate_role failures.
+  describe("priorAttemptFeedback", () => {
+    it("omits the retry note entirely when there's no prior feedback", () => {
+      const prompt = buildEditPrompt(BASE_INPUT);
+      expect(prompt).not.toContain("your previous proposal");
+    });
+
+    it("includes the retry note with the specific feedback when present", () => {
+      const prompt = buildEditPrompt({
+        ...BASE_INPUT,
+        priorAttemptFeedback: 'you assigned more than one ingredient to the "protein" role -- exactly one ingredient may have this role; move every other one to "fixed".',
+      });
+      expect(prompt).toContain("IMPORTANT -- your previous proposal for this exact edit was rejected");
+      expect(prompt).toContain('more than one ingredient to the "protein" role');
+      expect(prompt).toMatch(/don't just repeat the same choice/);
+    });
+  });
 });

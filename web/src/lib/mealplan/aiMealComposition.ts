@@ -1213,11 +1213,96 @@ export type ComposeEditResult = { ok: true; meal: ComposedMeal } | { ok: false; 
 // missing_role check -- unlike a fresh composition, an edit may
 // legitimately drop a role entirely ("drop the rice from tonight's
 // dinner" is a valid outcome, not a malformed proposal).
+//
+// Word-set matching for preExistingIngredientNames below, NOT exact string
+// equality -- live-confirmed the exact-match version doesn't work at all
+// for the real repro it exists to fix: a real Spoonacular recipe's stored
+// ingredient name can carry the source's own quantity shorthand (e.g.
+// "bot beer", "pkt firm/extra tofu" -- "bot"/"pkt" abbreviate a serving
+// container, not a food name), while the edit proposer is explicitly
+// instructed to return "real, specific, searchable ingredient names," so
+// it reasonably re-lists that same ingredient as plain "beer". An exact
+// match against the raw stored name never fires for exactly the case this
+// exists to catch. Subset-of-words (either direction) catches this
+// ("beer" is fully contained in "bot beer") while still guarding against
+// a real false-positive risk: plain substring containment would wrongly
+// treat a genuinely NEW "egg" as pre-existing just because the recipe
+// already had "eggplant" -- word-level comparison doesn't have that
+// collision ("egg" is not one of "eggplant"'s words). Splits on "/" as
+// well as whitespace -- live-confirmed 2026-08-09, same repro: the exact
+// same "pkt firm/extra tofu" carries a literal "/" that Spoonacular's own
+// search doesn't tokenize across either (see slashToSpaceFallback in
+// spoonacular.ts). A whitespace-only split leaves "firm/extra" as one
+// token, so ["firm","tofu"] (the proposer's own re-listed, shortened
+// name) is never a subset of ["pkt","firm/extra","tofu"] -- "firm" never
+// exact-matches "firm/extra". Splitting on "/" too makes both sides
+// tokenize the same way ("pkt","firm","extra","tofu"), so the subset
+// check works as intended again.
+function nameWords(name: string): string[] {
+  return name.trim().toLowerCase().split(/[\s/]+/).filter(Boolean);
+}
+
+function isWordSubsetEitherWay(a: string[], b: string[]): boolean {
+  const isSubset = (small: string[], big: string[]) => small.every((w) => big.includes(w));
+  return isSubset(a, b) || isSubset(b, a);
+}
+
+// preExistingIngredientNames (live bug found 2026-08-09, real-user chat
+// testing against production): the proposer always returns the COMPLETE
+// ingredient list, re-listing untouched ingredients alongside whatever
+// actually changed (see mealEditProposer.ts's own schema doc). For a real
+// Spoonacular-recipe-sourced slot, those untouched ingredients can be
+// recipe-scale cooking components (a braising liquid, a soup base) that
+// the model has to force into one of the four AI-composed roles even
+// though they were never meant to be sized like one, AND can be described
+// in a way Spoonacular's own free-text ingredient search doesn't
+// recognize even though the recipe's structured data already links it to
+// a real ingredient id -- live-confirmed, both in the same real repro:
+// editing "Mushroom Tofu Stew" (asking to add chicken) never even reached
+// the requested ingredient because the recipe's own pre-existing "beer"
+// (re-expressed at 426.6g) first tripped the `fixed` role's 150g cap
+// (meant for AI-composed garnish-scale amounts, not a recipe's own
+// cooking liquid), and separately its "strong mushroom broth" (Spoonacular
+// itself calls the same real ingredient "stock" -- confirmed directly
+// against the search API, "mushroom broth" returns zero results under any
+// phrasing) failed to ground at all. Both resulting refusals named an
+// ingredient the user never asked about, never addressing the actual
+// request. A THIRD live case in the same repro, after fixing the first
+// two: the same recipe's pre-existing "carrots" (a `carb`-role ingredient,
+// not `fixed`) also tripped its own role's bounds once re-expressed --
+// proving this isn't a `fixed`-role-specific problem, it's a general
+// consequence of forcing a real recipe's own already-legitimate amounts
+// through bounds tuned for AI-composed single-serving norms, regardless
+// of role.
+//
+// So: an ingredient that already existed in the meal before this edit
+// ALWAYS skips the out-of-bounds check (any role) -- its amount isn't a
+// new judgment being introduced, it's a real recipe's own pre-existing
+// data, so the realism bound (which exists to catch a genuinely invented
+// outlier) doesn't apply to it in the first place. A failed LOOKUP,
+// however, is only forgiven (dropped from the result) for `fixed` role --
+// `fixed` is documented above as "isn't macro-solved" (a garnish/aromatic,
+// low-stakes by design), so dropping one is a minor omission; silently
+// dropping a pre-existing protein/carb/fat ingredient that fails to
+// ground would misrepresent the meal's actual macro totals, a
+// meaningfully worse outcome this app's own macro-accuracy guarantee
+// doesn't accept -- that case still hard-rejects exactly as before. Both
+// relaxations are unconditional on safety (still runs through
+// isOpenEndedIngredientUnsafeFor above regardless) and only ever apply to
+// an ingredient genuinely already in the meal -- a NEW ingredient of any
+// role, in either failure mode, is held to the full original standard.
 export async function composeMealFromEditDetailed(
   edit: MealEditProposal,
   ctx: DietaryContext,
   fetchIngredientMacros: FetchIngredientMacrosFn,
+  preExistingIngredientNames: string[] = [],
 ): Promise<ComposeEditResult> {
+  const preExistingWordSets = preExistingIngredientNames.map(nameWords).filter((w) => w.length > 0);
+  const isPreExistingIngredient = (name: string): boolean => {
+    const words = nameWords(name);
+    if (words.length === 0) return false;
+    return preExistingWordSets.some((existingWords) => isWordSubsetEitherWay(words, existingWords));
+  };
   if (edit.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
 
   const mismatchedWord = findTitleIngredientMismatch(edit.dishName, edit.ingredients);
@@ -1240,12 +1325,29 @@ export async function composeMealFromEditDetailed(
 
   const composed: ComposedMealIngredient[] = [];
   for (const ing of edit.ingredients) {
+    const isPreExisting = isPreExistingIngredient(ing.name);
     const lookup = await fetchIngredientMacros(ing.name);
     if (!lookup) {
+      // Live-confirmed 2026-08-09: a pre-existing fixed-role ingredient can
+      // fail lookup for a real, unrelated-to-this-fix reason -- "strong
+      // mushroom broth" isn't findable by ANY free-text search Spoonacular
+      // recognizes (confirmed directly against the search API), even
+      // though the recipe's own structured data already links it to a
+      // real ingredient id ("stock"). Rather than block the whole edit
+      // over an ingredient the user never asked about, drop it -- same
+      // "isn't macro-solved, low-stakes by design" reasoning as the bounds
+      // relaxation just below. Deliberately NOT extended to protein/carb/
+      // fat even when pre-existing (unlike the bounds relaxation just
+      // below) -- silently dropping one of those would misrepresent the
+      // meal's actual macro totals, a materially worse outcome than
+      // dropping a fixed-role garnish/liquid that was never macro-solved
+      // to begin with. A genuinely NEW ingredient of any role still
+      // hard-rejects here exactly as before.
+      if (isPreExisting && ing.role === "fixed") continue;
       return { ok: false, reason: { kind: "ingredient_not_found", role: ing.role, ingredientName: ing.name } };
     }
     const bounds = PORTION_BOUNDS_G[ing.role];
-    if (!isRealisticAmount(ing.amountG, bounds)) {
+    if (!isPreExisting && !isRealisticAmount(ing.amountG, bounds)) {
       return {
         ok: false,
         reason: { kind: "amount_out_of_bounds", role: ing.role, ingredientName: ing.name, amountG: ing.amountG, min: bounds.min, max: bounds.max },
@@ -1254,12 +1356,19 @@ export async function composeMealFromEditDetailed(
     composed.push(toComposedIngredient(lookup, ing.amountG, ing.role));
   }
 
+  // Guards the pre-existing-fixed-item drop above: if literally every
+  // ingredient in the edit was a dropped pre-existing fixed item (no
+  // protein/carb/fat, no new fixed item that grounded successfully),
+  // there's nothing left to compose -- same rejection as the empty-input
+  // check at the top of this function, just reached a different way.
+  if (composed.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
+
   // Second, final title check against the ACTUAL composed ingredient
   // names -- same rationale as composeMealFromProposalDetailed's own
-  // second check (a fixed item's lookup could theoretically still fail
-  // above, but unlike that function, this one hard-rejects on ANY failed
-  // lookup, so this is mostly defensive here rather than catching a real
-  // silent-drop case).
+  // second check. Unlike when this comment was first written, a
+  // pre-existing fixed item's failed lookup CAN now silently drop it (see
+  // above), so this also catches the dish name still referencing an
+  // ingredient that got dropped, not just a hypothetical case.
   const finalMismatch = findTitleIngredientMismatch(
     edit.dishName,
     composed.map((i) => ({ name: i.ingredientName })),

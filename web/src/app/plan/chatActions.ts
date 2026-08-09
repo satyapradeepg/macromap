@@ -48,6 +48,12 @@ export type ChatActionTaken =
       role: MealRole;
       ingredientName: string;
       suggestedAmountG: number;
+      // Carried forward so a later confirm ("yes") re-validates through
+      // composeMealFromEditDetailed with the same pre-existing-ingredient
+      // context the original proposal had -- see that function's own
+      // comment on why this matters for a real Spoonacular recipe's
+      // untouched ingredients.
+      preExistingIngredientNames: string[];
     }
   | { kind: "confirm_pending_action" }
   | { kind: "pantry_edit"; operations: Array<{ action: "add" | "remove"; itemName: string }> }
@@ -308,8 +314,18 @@ async function handleEditProfile(supabase: SupabaseClient, userId: string, opera
   };
 }
 
-function handleReadOnlyQa(topic: QaTopic, dayIndex: number | null, mealType: MealType | null, plan: PlanView | null): IntentHandlerResult {
-  return { reply: answerReadOnlyQuestion(topic, dayIndex, mealType, plan), actionTaken: { kind: "qa", topic } };
+async function handleReadOnlyQa(
+  supabase: SupabaseClient,
+  userId: string,
+  topic: QaTopic,
+  dayIndex: number | null,
+  mealType: MealType | null,
+  plan: PlanView | null,
+): Promise<IntentHandlerResult> {
+  // Only fetched for this one topic -- every other QA topic answers
+  // entirely from the already-loaded plan, no extra query needed.
+  const pantryItems = topic === "pantry_contents" ? await getPantryItems(supabase, userId) : null;
+  return { reply: answerReadOnlyQuestion(topic, dayIndex, mealType, plan, pantryItems), actionTaken: { kind: "qa", topic } };
 }
 
 // Shared by both the fresh edit-proposal path (handleEditMealRecipe) and
@@ -327,8 +343,29 @@ async function applyMealEditResult(
   edit: MealEditProposal,
   dietaryCtx: DietaryContext,
   currentComposedIngredientsInGrams: Array<{ name: string; amountG: number }> | null,
+  preExistingIngredientNames: string[],
+  // Retry-with-feedback (2026-08-09, live-confirmed model-consistency
+  // issue): a real recipe with several ingredients can get an
+  // inconsistent role assignment across separate Claude calls for the
+  // EXACT SAME request (reproduced live -- the identical message produced
+  // two different duplicate_role failures on consecutive attempts). Only
+  // ever set from handleEditMealRecipe (a fresh proposal genuinely can be
+  // re-asked); resolvePendingClamp omits it -- a clamp replay is a
+  // deterministic re-application of an already-accepted proposal, not a
+  // new request to retry.
+  retryOnDuplicateRole?: (feedback: string) => Promise<MealEditProposal | null>,
 ): Promise<IntentHandlerResult> {
-  const result = await composeMealFromEditDetailed(edit, dietaryCtx, lookupIngredientMacrosCached);
+  let currentEdit = edit;
+  let result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+
+  if (!result.ok && result.reason.kind === "duplicate_role" && retryOnDuplicateRole) {
+    const feedback = `you assigned more than one ingredient to the "${result.reason.role}" role -- exactly one ingredient may have this role; move every other one to "fixed".`;
+    const retried = await retryOnDuplicateRole(feedback);
+    if (retried) {
+      currentEdit = retried;
+      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+    }
+  }
 
   if (!result.ok) {
     if (result.reason.kind === "amount_out_of_bounds") {
@@ -336,7 +373,16 @@ async function applyMealEditResult(
       const suggestedAmountG = amountG > max ? max : min;
       return {
         reply: `${describeRejectionForChatUser(result.reason)} Want me to use ${suggestedAmountG}g instead?`,
-        actionTaken: { kind: "pending_clamp_suggestion", dayIndex, mealType, proposal: edit, role, ingredientName, suggestedAmountG },
+        actionTaken: {
+          kind: "pending_clamp_suggestion",
+          dayIndex,
+          mealType,
+          proposal: currentEdit,
+          role,
+          ingredientName,
+          suggestedAmountG,
+          preExistingIngredientNames,
+        },
       };
     }
     return { reply: describeRejectionForChatUser(result.reason), actionTaken: { kind: "meal_edit_rejected", dayIndex, mealType } };
@@ -424,8 +470,8 @@ async function applyMealEditResult(
   };
 
   return {
-    reply: edit.changeSummary,
-    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: edit.changeSummary },
+    reply: currentEdit.changeSummary,
+    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: currentEdit.changeSummary },
     updatedSlot: slot,
     updatedWeeklyActual: weeklyActual,
   };
@@ -477,7 +523,29 @@ async function handleEditMealRecipe(
   if (!edit) return { reply: "I couldn't process that edit right now -- try rephrasing?", actionTaken: { kind: "error" } };
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
-  return applyMealEditResult(supabase, plan.id, dayIndex, mealType, edit, dietaryCtx, currentComposedInGrams);
+  const preExistingIngredientNames = currentIngredients.map((i) => i.name);
+  return applyMealEditResult(
+    supabase,
+    plan.id,
+    dayIndex,
+    mealType,
+    edit,
+    dietaryCtx,
+    currentComposedInGrams,
+    preExistingIngredientNames,
+    (feedback) =>
+      proposeMealEditViaClaude({
+        currentDishName: slot.recipeTitle,
+        currentIngredients,
+        userInstruction: editInstruction,
+        mealType,
+        target,
+        dietaryStyles: dietaryCtx.dietaryStyles,
+        allergies: dietaryCtx.allergies,
+        dislikes: dietaryCtx.dislikes,
+        priorAttemptFeedback: feedback,
+      }),
+  );
 }
 
 // Resolves a pending clamp suggestion -- either from the fast deterministic
@@ -516,7 +584,16 @@ async function resolvePendingClamp(
     changeSummary: `Used ${pending.suggestedAmountG}g of ${pending.ingredientName} instead of the amount you asked for -- everything else stays the same.`,
   };
 
-  return applyMealEditResult(supabase, mealPlanId, pending.dayIndex, pending.mealType, clampedEdit, dietaryCtx, null);
+  return applyMealEditResult(
+    supabase,
+    mealPlanId,
+    pending.dayIndex,
+    pending.mealType,
+    clampedEdit,
+    dietaryCtx,
+    null,
+    pending.preExistingIngredientNames,
+  );
 }
 
 function describePendingSuggestion(pending: PendingClampSuggestion): string {
@@ -541,7 +618,7 @@ async function dispatchIntent(
     case "edit_profile":
       return handleEditProfile(supabase, userId, intent.operations);
     case "read_only_qa":
-      return handleReadOnlyQa(intent.qaTopic, intent.dayIndex, intent.mealType, plan);
+      return handleReadOnlyQa(supabase, userId, intent.qaTopic, intent.dayIndex, intent.mealType, plan);
     case "confirm_pending_action":
       // The classifier can misfire here even against its own instructions
       // -- found live 2026-08-09: after a plain clarify question (day
