@@ -55,7 +55,11 @@ export interface GroundedIngredientData {
   estimatedCostCentsPer100g: number | null;
 }
 
-export type FetchIngredientMacrosFn = (query: string) => Promise<GroundedIngredientData | null>;
+// aiSuggestedSearchTerm (2026-08-09): optional, last-resort-only hint --
+// see lookupIngredientMacros's own doc comment in spoonacular.ts. Most
+// callers of this type (mealProposer.ts's fresh-generation path) have
+// nothing to pass here and simply omit it.
+export type FetchIngredientMacrosFn = (query: string, aiSuggestedSearchTerm?: string | null) => Promise<GroundedIngredientData | null>;
 
 export interface ComposedMealIngredient {
   ingredientName: string;
@@ -89,6 +93,39 @@ export interface EditedIngredient {
   name: string;
   role: MealRole;
   amountG: number;
+  // Added 2026-08-09: the proposer already knows, at generation time,
+  // whether it's carrying an ingredient over from the current list
+  // (possibly renaming/rephrasing it) or adding a genuinely new one --
+  // the OLD design threw that away and re-guessed it afterward via
+  // word-subset string matching against the ingredient's NAME
+  // (isPreExistingIngredient below), which kept needing a new curated
+  // fix every time a real recipe's raw ingredient name didn't overlap
+  // enough words with the model's own rephrasing ("pkt firm/extra tofu"
+  // vs "firm tofu", "group pepper" vs "black pepper", etc.). Optional
+  // (not every caller sets it -- mealProposer.ts's fresh-generation path
+  // has no such thing as "pre-existing" at all) and treated as false when
+  // absent, so it only ever ADDS coverage on top of the string match,
+  // never replaces it -- see composeMealFromEditDetailed's isPreExisting
+  // check below, which ORs the two signals together as a deliberate
+  // defense-in-depth pair, not a replacement (same reasoning as this
+  // app's AI-self-check + deterministic-backstop pattern for safety: an
+  // explicit model-stated signal is more reliable for this specific
+  // "same ingredient, renamed" case, but isn't 100% reliable either, so
+  // the string match stays as a backstop for whichever the model forgets
+  // to flag).
+  isPreExisting?: boolean;
+  // Added 2026-08-09, same "ask the model for what it already knows"
+  // philosophy as isPreExisting above, applied to the OTHER recurring
+  // whack-a-mole: Spoonacular search failing on a real ingredient's raw
+  // name (brand names like "karo corn syrup", prep words like "fresh
+  // spinach"). Rather than only ever growing a hand-curated list of
+  // known-bad prefixes/brands one incident at a time, the model can
+  // suggest its own plain/generic/brand-free search term alongside the
+  // display name in the SAME call. Tried only as an absolute last resort
+  // in lookupIngredientMacros, after every existing deterministic fallback
+  // has already failed -- an AI guess is never trusted ahead of a
+  // confirmed deterministic transform.
+  searchTerm?: string;
 }
 
 export interface MealEditProposal {
@@ -1244,6 +1281,33 @@ export type ComposeEditResult = { ok: true; meal: ComposedMeal } | { ok: false; 
 // exact-matches "firm/extra". Splitting on "/" too makes both sides
 // tokenize the same way ("pkt","firm","extra","tofu"), so the subset
 // check works as intended again.
+// Live-confirmed 2026-08-09, TWICE independently in two different real
+// Spoonacular chili recipes ("Slow Cooker Chili" and "How to Make the
+// Best Chili"): a raw recipe ingredient literally named "group pepper" --
+// almost certainly a shared data-entry/OCR-style typo for "ground
+// pepper"/"black pepper" somewhere upstream in Spoonacular's own recipe
+// data, not a real food -- never matches the model's own natural
+// re-naming ("black pepper") via the word-subset check below, since
+// neither name is a subset of the other ("group" and "black" share no
+// words). This silently re-treats an already-present, tiny seasoning
+// amount as a brand-new addition on every single edit to either recipe,
+// tripping the realistic-amount floor regardless of what was actually
+// asked for. A small, curated alias (same discipline as this file's
+// BRAND_NAME_PREFIXES in spoonacular.ts) rather than a general "any
+// shared word" relaxation for pre-existing-ingredient matching, which
+// would risk misidentifying genuinely different foods that happen to
+// share one word (e.g. "green pepper" vs "black pepper" both contain
+// "pepper" but are different foods with different macros). Add a new
+// entry here only after confirming live that the SAME oddity recurs, not
+// speculatively.
+const PRE_EXISTING_NAME_ALIASES: Record<string, string> = {
+  "group pepper": "black pepper",
+};
+
+function normalizeForPreExistingMatch(name: string): string {
+  return PRE_EXISTING_NAME_ALIASES[name.trim().toLowerCase()] ?? name;
+}
+
 function nameWords(name: string): string[] {
   return name.trim().toLowerCase().split(/[\s/]+/).filter(Boolean);
 }
@@ -1303,7 +1367,9 @@ export async function composeMealFromEditDetailed(
   fetchIngredientMacros: FetchIngredientMacrosFn,
   preExistingIngredientNames: string[] = [],
 ): Promise<ComposeEditResult> {
-  const preExistingWordSets = preExistingIngredientNames.map(nameWords).filter((w) => w.length > 0);
+  const preExistingWordSets = preExistingIngredientNames
+    .map((n) => nameWords(normalizeForPreExistingMatch(n)))
+    .filter((w) => w.length > 0);
   const isPreExistingIngredient = (name: string): boolean => {
     const words = nameWords(name);
     if (words.length === 0) return false;
@@ -1331,8 +1397,15 @@ export async function composeMealFromEditDetailed(
 
   const composed: ComposedMealIngredient[] = [];
   for (const ing of edit.ingredients) {
-    const isPreExisting = isPreExistingIngredient(ing.name);
-    const lookup = await fetchIngredientMacros(ing.name);
+    // Defense-in-depth, not a replacement (2026-08-09): prefers the
+    // proposer's own explicit isPreExisting signal (see EditedIngredient's
+    // doc comment for why), falling back to the word-subset name match
+    // for whichever ingredient it forgets to flag -- same "AI signal
+    // ORed with a deterministic backstop" pattern as this file's own
+    // safety gate, just for a low-stakes bookkeeping distinction instead
+    // of a safety one.
+    const isPreExisting = ing.isPreExisting === true || isPreExistingIngredient(ing.name);
+    const lookup = await fetchIngredientMacros(ing.name, ing.searchTerm);
     if (!lookup) {
       // Live-confirmed 2026-08-09: a pre-existing fixed-role ingredient can
       // fail lookup for a real, unrelated-to-this-fix reason -- "strong

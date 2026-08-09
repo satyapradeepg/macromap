@@ -19,7 +19,15 @@ function normalizeQuery(query: string): string {
   return query.toLowerCase().trim();
 }
 
-export async function lookupIngredientMacrosCached(query: string): Promise<IngredientMacroLookup | null> {
+// aiSuggestedSearchTerm passes straight through to lookupIngredientMacros
+// (see its own doc comment) -- the CACHE KEY stays the original query only,
+// never the search term, so a later identical query hits the cache
+// directly without needing the hint again, same as every other
+// deterministic fallback already behaves.
+export async function lookupIngredientMacrosCached(
+  query: string,
+  aiSuggestedSearchTerm?: string | null,
+): Promise<IngredientMacroLookup | null> {
   const key = normalizeQuery(query);
   const admin = createAdminClient();
   const { data: cached } = await admin
@@ -45,7 +53,7 @@ export async function lookupIngredientMacrosCached(query: string): Promise<Ingre
   // Errors (quota/outage) propagate to the caller unchanged -- same
   // contract as calling lookupIngredientMacros directly, this wrapper only
   // adds a cache layer in front, it doesn't change failure behavior.
-  const fresh = await lookupIngredientMacros(query);
+  const fresh = await lookupIngredientMacros(query, aiSuggestedSearchTerm);
   if (!fresh) return null;
 
   await admin.from("ingredient_macro_lookup_cache").upsert(

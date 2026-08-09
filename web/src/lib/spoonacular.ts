@@ -247,8 +247,19 @@ export function commaSwapFallback(query: string): string | null {
 // maturity/freshness descriptor, not a cut/cooking-method word like the
 // rest of this list, but the same reasoning applies: it doesn't change
 // the food's per-100g macros, so it's equally safe to drop.
+// "fresh"/"raw"/"chopped"/"minced" added 2026-08-09, live-confirmed
+// against the search API directly: "fresh spinach" and "raw spinach" both
+// return zero results (bare "spinach" matches immediately), same for
+// "raw chicken", "minced garlic", "chopped onion" -- all common,
+// everyday prep/state words that don't change a food's per-100g macros,
+// same reasoning as every other entry in this list. (Not universal --
+// "fresh basil" has its own real Spoonacular entry and matches on the
+// FIRST, unmodified search, so this fallback never even triggers for it;
+// it only helps the cases where the qualified phrase itself has no
+// match.)
 const PREP_PREFIXES = [
   "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced", "strong", "julienne", "young",
+  "fresh", "raw", "chopped", "minced",
 ];
 
 // Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
@@ -364,7 +375,14 @@ export function slashToSpaceFallback(query: string): string | null {
 // Spoonacular's search fails on it and that the specific brand's product
 // doesn't meaningfully differ in macros from the generic ingredient (true
 // for Mori-Nu, a silken-tofu packaging brand).
-const BRAND_NAME_PREFIXES = ["mori-nu"];
+//
+// "karo" added 2026-08-09, confirmed live directly against the search API
+// three separate times (same recipe recurring, "Best Beef Jerky"): "karo
+// corn syrup" returns zero results while bare "corn syrup" matches
+// exactly (id 19350). Karo is purely a corn-syrup packaging brand, same
+// reasoning as Mori-Nu -- corn syrup is corn syrup regardless of brand,
+// no reformulation risk.
+const BRAND_NAME_PREFIXES = ["mori-nu", "karo"];
 
 export function brandNamePrefixStripFallback(query: string): string | null {
   const trimmed = query.trim();
@@ -399,12 +417,24 @@ async function searchIngredient(query: string, apiKey: string): Promise<Ingredie
   return searchBody.results[0] ?? null;
 }
 
-// Combines search + information into the one lookup the add-on mechanism
-// actually needs — returns null (not a thrown error) on quota/request
-// failure or a zero-result search, since a missing add-on ingredient is an
-// expected, handled case (reconciliation falls through to the slack-meal
-// requery), not an outage.
-export async function lookupIngredientMacros(query: string): Promise<IngredientMacroLookup | null> {
+// aiSuggestedSearchTerm (2026-08-09): every fallback ABOVE this function is
+// a hand-curated, deterministic string transform (comma-swap, prefix-strip,
+// gluten-free-strip, brand-name-strip) -- reliable and free, but each one
+// only exists because a specific real failure got noticed and patched
+// (mori-nu, karo, fresh/raw/chopped/minced...), an inherently unbounded
+// long tail against Spoonacular's own real-world data quirks. Callers that
+// already have an LLM in the loop (mealEditProposer.ts) can ask it for a
+// plain, generic, brand-free search term ALONGSIDE the display name in the
+// SAME call -- the model already has that common-sense knowledge (it's
+// exactly how it already knows "Karo" is a corn-syrup brand). Tried only as
+// the LAST resort, after every deterministic fallback has already failed --
+// never ahead of them, since an AI guess is inherently less reliable than a
+// confirmed deterministic transform, and this function's whole contract is
+// "return null, don't ever silently substitute the wrong food."
+export async function lookupIngredientMacros(
+  query: string,
+  aiSuggestedSearchTerm?: string | null,
+): Promise<IngredientMacroLookup | null> {
   const apiKey = process.env.SPOONACULAR_API_KEY;
   if (!apiKey) {
     throw new SpoonacularRequestError("SPOONACULAR_API_KEY is not set");
@@ -442,6 +472,9 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   if (!match) {
     const brandStripped = brandNamePrefixStripFallback(query);
     if (brandStripped) match = await searchIngredient(brandStripped, apiKey);
+  }
+  if (!match && aiSuggestedSearchTerm && aiSuggestedSearchTerm.trim() && aiSuggestedSearchTerm.trim().toLowerCase() !== query.trim().toLowerCase()) {
+    match = await searchIngredient(aiSuggestedSearchTerm.trim(), apiKey);
   }
   if (!match) return null;
 

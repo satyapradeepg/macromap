@@ -29,6 +29,7 @@ const oil: GroundedIngredientData = { id: 4053, name: "olive oil", caloriesPer10
 const spinach: GroundedIngredientData = { id: 11457, name: "spinach", caloriesPer100g: 23, proteinGPer100g: 2.86, carbsGPer100g: 3.63, fatGPer100g: 0.39, estimatedCostCentsPer100g: null };
 const chicken: GroundedIngredientData = { id: 1, name: "grilled chicken breast", caloriesPer100g: 165, proteinGPer100g: 31, carbsGPer100g: 0, fatGPer100g: 3.6, estimatedCostCentsPer100g: null };
 const paprika: GroundedIngredientData = { id: 1032040, name: "smoked paprika", caloriesPer100g: 282, proteinGPer100g: 14.1, carbsGPer100g: 54, fatGPer100g: 12.9, estimatedCostCentsPer100g: null };
+const cornSyrup: GroundedIngredientData = { id: 19350, name: "corn syrup", caloriesPer100g: 286, proteinGPer100g: 0, carbsGPer100g: 76.8, fatGPer100g: 0, estimatedCostCentsPer100g: null };
 // Real USDA per-100g values (not live-fetched this session) -- used for
 // the fat-role realism-bound regression test below.
 const avocado: GroundedIngredientData = { id: 9038, name: "avocado", caloriesPer100g: 160, proteinGPer100g: 2.0, carbsGPer100g: 8.5, fatGPer100g: 14.7, estimatedCostCentsPer100g: null };
@@ -1289,6 +1290,116 @@ describe("composeMealFromEditDetailed", () => {
       const tofuLine = result.meal.ingredients.find((i) => i.ingredientName === "firm tofu");
       expect(tofuLine?.amountG).toBe(350);
     }
+  });
+
+  it("live bug 2026-08-09, confirmed twice in two independent real Spoonacular chili recipes: 'group pepper' (a data typo for black/ground pepper) is recognized as pre-existing", async () => {
+    // Real repro: the raw stored ingredient name "group pepper" re-listed
+    // by the proposer as "black pepper" (a tiny, e.g. 0.3g, pre-existing
+    // seasoning amount) -- neither name is a word-subset of the other
+    // ("group" vs "black"), so the pre-existing relaxation silently failed
+    // to apply and the tiny amount tripped the realistic-minimum floor on
+    // every single edit to either recipe, regardless of what was actually
+    // asked for.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      "black pepper": { id: 6, name: "black pepper", caloriesPer100g: 251, proteinGPer100g: 10.4, carbsGPer100g: 64, fatGPer100g: 3.3, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Chili",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "black pepper", role: "fixed", amountG: 0.3 },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["group pepper"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const pepperLine = result.meal.ingredients.find((i) => i.ingredientName === "black pepper");
+      expect(pepperLine?.amountG).toBe(0.3);
+    }
+  });
+
+  // Design change 2026-08-09: the explicit isPreExisting signal is meant
+  // to succeed exactly where word-subset name matching structurally
+  // cannot -- a rename with ZERO shared words at all ("group pepper" and
+  // "black pepper" at least share "pepper"; this case shares nothing).
+  // No curated alias could ever cover an arbitrary rename like this one;
+  // the model just has to say so directly.
+  it("recognizes a pre-existing ingredient via the explicit isPreExisting flag even when the name shares NO words with the original (string matching alone could never catch this)", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      "aromatic seasoning blend": {
+        id: 7,
+        name: "aromatic seasoning blend",
+        caloriesPer100g: 251,
+        proteinGPer100g: 10.4,
+        carbsGPer100g: 64,
+        fatGPer100g: 3.3,
+        estimatedCostCentsPer100g: null,
+      },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Chili",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150, isPreExisting: true },
+        // Renamed from the recipe's own oddly-named "group pepper" to
+        // something with literally zero words in common -- only the
+        // explicit flag can carry this through; the string-match backstop
+        // (preExistingIngredientNames: ["group pepper"]) would reject it.
+        { name: "aromatic seasoning blend", role: "fixed", amountG: 0.3, isPreExisting: true },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["group pepper"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const line = result.meal.ingredients.find((i) => i.ingredientName === "aromatic seasoning blend");
+      expect(line?.amountG).toBe(0.3);
+    }
+  });
+
+  it("does NOT trust a false isPreExisting claim to bypass bounds for a genuinely new ingredient -- the flag only relaxes, string matching is not required to confirm it, but this proves the flag isn't a blanket bypass either", async () => {
+    // A ingredient marked isPreExisting: false with no string-match backing
+    // is held to the full standard, same as today -- the new field only
+    // ever ADDS a way to relax, never removes the existing checks.
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Only",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 800, isPreExisting: false }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, []);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan cutlets", amountG: 800, min: 20, max: 280 },
+    });
+  });
+
+  // Design change 2026-08-09 (second whack-a-mole fix, same session as
+  // isPreExisting above): the actual last-resort search fallback lives in
+  // spoonacular.ts's lookupIngredientMacros (real network calls, not unit-
+  // tested here per this codebase's convention) -- what belongs at THIS
+  // level is confirming the plumbing: does composeMealFromEditDetailed
+  // actually pass the ingredient's searchTerm through as fetchIngredientMacros's
+  // second argument, for every ingredient, not just ones that need it.
+  it("passes each ingredient's searchTerm through to fetchIngredientMacros as the second argument", async () => {
+    const fetchMacros = vi.fn(async (query: string, searchTerm?: string | null) => {
+      if (query === "karo corn syrup" && searchTerm === "corn syrup") return cornSyrup;
+      if (query === "seitan cutlets") return seitan;
+      return null;
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150, isPreExisting: true, searchTerm: "seitan cutlets" },
+        { name: "karo corn syrup", role: "fixed", amountG: 5, isPreExisting: true, searchTerm: "corn syrup" },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["karo corn syrup"]);
+    expect(result.ok).toBe(true);
+    expect(fetchMacros).toHaveBeenCalledWith("karo corn syrup", "corn syrup");
   });
 
   it("rejects a title/ingredient mismatch against the composed ingredients", async () => {

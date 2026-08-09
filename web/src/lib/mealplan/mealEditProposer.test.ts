@@ -20,8 +20,8 @@ describe("validateEditProposal", () => {
     const raw = {
       dishName: "Seitan Stir-Fry with Rice",
       ingredients: [
-        { name: "seitan cutlets", role: "protein", amountG: 300 },
-        { name: "brown rice", role: "carb", amountG: 100 },
+        { name: "seitan cutlets", role: "protein", amountG: 300, isPreExisting: true },
+        { name: "brown rice", role: "carb", amountG: 100, isPreExisting: false },
       ],
       changeSummary: "Doubled the seitan.",
       titleIngredientCheck: "ok",
@@ -31,11 +31,90 @@ describe("validateEditProposal", () => {
     expect(result).toEqual({
       dishName: "Seitan Stir-Fry with Rice",
       ingredients: [
-        { name: "seitan cutlets", role: "protein", amountG: 300 },
-        { name: "brown rice", role: "carb", amountG: 100 },
+        { name: "seitan cutlets", role: "protein", amountG: 300, isPreExisting: true },
+        { name: "brown rice", role: "carb", amountG: 100, isPreExisting: false },
       ],
       changeSummary: "Doubled the seitan.",
     });
+  });
+
+  // Live design change 2026-08-09: replaces guessing "is this the same
+  // ingredient as before" from word-subset name matching (which kept
+  // needing a new curated fix every time a real recipe's raw name didn't
+  // overlap enough words with the model's rephrasing -- "pkt firm/extra
+  // tofu" vs "firm tofu", "group pepper" vs "black pepper") with an
+  // explicit signal the model states directly, since it already knows the
+  // answer while writing the proposal. Defensive, not strict, unlike
+  // amountG -- a missing/non-boolean value degrades to false (no explicit
+  // signal, falls back to the string-match backstop in
+  // composeMealFromEditDetailed) rather than invalidating the whole
+  // proposal, since this is a low-stakes bookkeeping field, not a
+  // safety-critical one.
+  it("parses isPreExisting defensively: true/false pass through, missing or non-boolean defaults to false", () => {
+    const withTrue = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100, isPreExisting: true }],
+      changeSummary: "n/a",
+    });
+    expect(withTrue!.ingredients[0].isPreExisting).toBe(true);
+
+    const withFalse = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100, isPreExisting: false }],
+      changeSummary: "n/a",
+    });
+    expect(withFalse!.ingredients[0].isPreExisting).toBe(false);
+
+    const missing = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100 }],
+      changeSummary: "n/a",
+    });
+    expect(missing!.ingredients[0].isPreExisting).toBe(false);
+
+    const malformed = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100, isPreExisting: "yes" }],
+      changeSummary: "n/a",
+    });
+    expect(malformed!.ingredients[0].isPreExisting).toBe(false);
+  });
+
+  // Second whack-a-mole fix, same session as isPreExisting above: the
+  // model's own suggested generic/brand-free search term, used only as a
+  // last-resort fallback in lookupIngredientMacros when the exact name and
+  // every deterministic string transform have already failed (e.g. "karo
+  // corn syrup" -> "corn syrup"). Defensive parsing, same reasoning as
+  // isPreExisting -- a missing/empty/identical-to-name value just means no
+  // fallback is available, not an invalid proposal.
+  it("parses searchTerm defensively: a genuine hint passes through, missing/empty/identical-to-name becomes undefined", () => {
+    const withHint = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "karo corn syrup", role: "fixed", amountG: 5, isPreExisting: true, searchTerm: "corn syrup" }],
+      changeSummary: "n/a",
+    });
+    expect(withHint!.ingredients[0].searchTerm).toBe("corn syrup");
+
+    const identical = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "chicken breast", role: "protein", amountG: 150, isPreExisting: true, searchTerm: "chicken breast" }],
+      changeSummary: "n/a",
+    });
+    expect(identical!.ingredients[0].searchTerm).toBeUndefined();
+
+    const missing = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100, isPreExisting: true }],
+      changeSummary: "n/a",
+    });
+    expect(missing!.ingredients[0].searchTerm).toBeUndefined();
+
+    const malformedSearchTerm = validateEditProposal({
+      dishName: "X",
+      ingredients: [{ name: "seitan", role: "protein", amountG: 100, isPreExisting: true, searchTerm: 42 }],
+      changeSummary: "n/a",
+    });
+    expect(malformedSearchTerm!.ingredients[0].searchTerm).toBeUndefined();
   });
 
   it("rejects a missing amountG -- unlike mealProposer's optional fixedAmountG, an edit never leaves an amount unsolved", () => {
@@ -118,6 +197,20 @@ describe("buildEditPrompt", () => {
   it("tells the model exactly one ingredient may have each of protein/carb/fat", () => {
     const prompt = buildEditPrompt(BASE_INPUT);
     expect(prompt).toMatch(/EXACTLY ONE ingredient may have role "protein"/);
+  });
+
+  // Design change 2026-08-09: replaces guessing pre-existing-ness from
+  // name string matching with an explicit model-stated signal.
+  it("tells the model to explicitly mark each ingredient's isPreExisting status", () => {
+    const prompt = buildEditPrompt(BASE_INPUT);
+    expect(prompt).toMatch(/set "isPreExisting": true if it's the same ingredient/);
+    expect(prompt).toMatch(/false if it's a genuinely new addition/);
+  });
+
+  it("tells the model to suggest a plain/generic/brand-free searchTerm for each ingredient", () => {
+    const prompt = buildEditPrompt(BASE_INPUT);
+    expect(prompt).toMatch(/set "searchTerm" for EACH ingredient/);
+    expect(prompt).toMatch(/karo corn syrup.*corn syrup/);
   });
 
   // Live-confirmed 2026-08-09 (silent-substitution-masking bugs): asking

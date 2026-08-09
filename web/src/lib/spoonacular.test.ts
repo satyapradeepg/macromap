@@ -132,6 +132,18 @@ describe("prefixStripFallback", () => {
     expect(prefixStripFallback("broccoli florets")).toBeNull();
   });
 
+  // Live-confirmed 2026-08-09 directly against the search API: "fresh
+  // spinach" and "raw spinach" both return zero results while bare
+  // "spinach" matches immediately; same for "raw chicken", "minced
+  // garlic", "chopped onion".
+  it("strips fresh/raw/chopped/minced prefixes (live-confirmed 2026-08-09)", () => {
+    expect(prefixStripFallback("fresh spinach")).toBe("spinach");
+    expect(prefixStripFallback("raw spinach")).toBe("spinach");
+    expect(prefixStripFallback("raw chicken")).toBe("chicken");
+    expect(prefixStripFallback("minced garlic")).toBe("garlic");
+    expect(prefixStripFallback("chopped onion")).toBe("onion");
+  });
+
   it("returns null when stripping the prefix would leave nothing", () => {
     expect(prefixStripFallback("steamed")).toBeNull();
     expect(prefixStripFallback("steamed ")).toBeNull();
@@ -252,6 +264,15 @@ describe("brandNamePrefixStripFallback", () => {
   it("strips a known leading brand name", () => {
     expect(brandNamePrefixStripFallback("mori-nu tofu")).toBe("tofu");
     expect(brandNamePrefixStripFallback("MORI-NU tofu")).toBe("tofu");
+  });
+
+  // Live-confirmed 2026-08-09, THREE separate times on the same recurring
+  // real recipe ("Best Beef Jerky"): "karo corn syrup" returns zero
+  // Spoonacular search results while bare "corn syrup" matches exactly.
+  // Karo is purely a corn-syrup packaging brand, same reasoning as Mori-Nu.
+  it("strips the karo brand prefix", () => {
+    expect(brandNamePrefixStripFallback("karo corn syrup")).toBe("corn syrup");
+    expect(brandNamePrefixStripFallback("KARO corn syrup")).toBe("corn syrup");
   });
 
   it("returns null for an unlisted brand/word", () => {

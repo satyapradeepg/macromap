@@ -113,8 +113,18 @@ const PROPOSE_MEAL_EDIT_TOOL = {
             name: { type: "string", description: "A real, searchable whole-food or common grocery ingredient name (not a brand name)." },
             role: { type: "string", enum: ["protein", "carb", "fat", "fixed"] },
             amountG: { type: "number", description: "A realistic, EXPLICIT gram amount for this ingredient -- required for every ingredient, including ones that aren't changing." },
+            isPreExisting: {
+              type: "boolean",
+              description:
+                "true if this is essentially the SAME ingredient already in the current list above -- even if you renamed it, cleaned up how it's phrased, fixed an odd/misspelled name, or just adjusted its amount. false ONLY for a genuinely NEW ingredient this edit is adding for the first time. Set this for EVERY ingredient, not just ones you changed.",
+            },
+            searchTerm: {
+              type: "string",
+              description:
+                "A plain, generic, brand-free version of this ingredient's name, suitable for looking up nutrition data -- e.g. for name \"karo corn syrup\" use \"corn syrup\"; for name \"fresh spinach\" use \"spinach\". If the name is already plain and generic, just repeat it here unchanged. Set this for EVERY ingredient.",
+            },
           },
-          required: ["name", "role", "amountG"],
+          required: ["name", "role", "amountG", "isPreExisting", "searchTerm"],
         },
       },
       changeSummary: CHANGE_SUMMARY_FIELD,
@@ -144,7 +154,7 @@ Hard constraints -- never violate these, including hidden/derived forms (e.g. ma
 ${condimentWarnings.length ? `\nFor any "fixed" role ingredient specifically, do NOT reach for: ${condimentWarnings.join("; ")} -- these are common flavorings/garnishes that conflict with the constraints above.` : ""}
 
 Requirements:
-1. Return the COMPLETE new ingredient list, not a diff -- re-list every ingredient that isn't changing with essentially its current amount, alongside whatever you're adding, removing, or adjusting per the user's request.
+1. Return the COMPLETE new ingredient list, not a diff -- re-list every ingredient that isn't changing with essentially its current amount, alongside whatever you're adding, removing, or adjusting per the user's request. For EACH ingredient, set "isPreExisting": true if it's the same ingredient as one already in the current list (even if you renamed it, fixed an odd/misspelled name, or just adjusted its amount), or false if it's a genuinely new addition -- you already know this while deciding what to write, so state it directly rather than leaving it to be guessed from the name alone. Also set "searchTerm" for EACH ingredient to a plain, generic, brand-free version of its name suitable for a nutrition-database lookup (e.g. name "karo corn syrup" -> searchTerm "corn syrup"; name "fresh spinach" -> searchTerm "spinach") -- if the name is already plain and generic, just repeat it as the searchTerm.
 2. Apply the user's requested edit precisely -- don't make unrelated changes to ingredients they didn't ask about.
 3. Give every ingredient a realistic, EXPLICIT gram amount. If the user asked for a relative change ("double the chicken", "a bit less rice"), compute the new gram amount yourself from the current amount given above.
 4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
@@ -181,7 +191,21 @@ export function validateEditProposal(raw: unknown): MealEditProposal | null {
     if (typeof i.name !== "string" || !i.name.trim()) return null;
     if (typeof i.role !== "string" || !VALID_ROLES.includes(i.role as MealRole)) return null;
     if (typeof i.amountG !== "number" || !Number.isFinite(i.amountG) || i.amountG <= 0) return null;
-    ingredients.push({ name: i.name, role: i.role as MealRole, amountG: i.amountG });
+    // Defensive, not strict, unlike amountG above -- this is a low-stakes
+    // bookkeeping signal (see EditedIngredient's doc comment), not a
+    // safety-critical one, so a missing/malformed value degrades to
+    // "no explicit signal" (falls back to the string-match backstop)
+    // rather than invalidating the whole proposal over it.
+    const isPreExisting = i.isPreExisting === true;
+    // Same defensive treatment as isPreExisting above -- a missing/empty/
+    // non-string searchTerm just means no last-resort fallback is
+    // available for this ingredient (today's exact behavior), not an
+    // invalid proposal. Also skips a searchTerm that's identical to name
+    // (the common case), since lookupIngredientMacros already guards
+    // against re-searching the same string.
+    const rawSearchTerm = typeof i.searchTerm === "string" ? i.searchTerm.trim() : "";
+    const searchTerm = rawSearchTerm && rawSearchTerm.toLowerCase() !== i.name.trim().toLowerCase() ? rawSearchTerm : undefined;
+    ingredients.push({ name: i.name, role: i.role as MealRole, amountG: i.amountG, isPreExisting, searchTerm });
   }
 
   const rawSummary = typeof obj.changeSummary === "string" ? obj.changeSummary.trim() : "";
