@@ -17,6 +17,27 @@ const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "
 export function resolveDayReference(text: string, today: Date = new Date()): DayReferenceResolution | null {
   const lower = text.toLowerCase();
 
+  // The UI's own tabs (PlanView.tsx's DAY_LABELS) are "Day 1" through
+  // "Day 7", 1-indexed to match how a person actually reads a calendar --
+  // dayIndex itself is 0-indexed internally (0 = today). A user saying
+  // "day 7" means the UI's last tab, i.e. dayIndex 6, NOT an out-of-range
+  // reference -- found live 2026-08-09: without this case, "day 7" fell
+  // through to the classifier, which (correctly, per its own prompt)
+  // reasoned in the internal 0-6 range and told the user "there's no day
+  // 7" -- technically accurate about dayIndex, but confusing since the
+  // user was reading the number straight off the screen, not off internal
+  // state they can't see. Checked first since it's the least ambiguous
+  // signal available (an explicit number matching a label the user is
+  // looking at) -- outside 1-7 returns null rather than guessing.
+  const dayNumberMatch = lower.match(/\bday\s*(\d+)\b/);
+  if (dayNumberMatch) {
+    const n = parseInt(dayNumberMatch[1], 10);
+    if (n >= 1 && n <= 7) {
+      return { dayIndex: n - 1, matchedPhrase: dayNumberMatch[0] };
+    }
+    return null;
+  }
+
   const todayTonightMatch = lower.match(/\b(today|tonight)\b/);
   if (todayTonightMatch) {
     return { dayIndex: 0, matchedPhrase: todayTonightMatch[0] };

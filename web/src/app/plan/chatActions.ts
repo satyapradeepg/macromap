@@ -543,7 +543,21 @@ async function dispatchIntent(
     case "read_only_qa":
       return handleReadOnlyQa(intent.qaTopic, intent.dayIndex, intent.mealType, plan);
     case "confirm_pending_action":
-      if (!pendingClamp) return { reply: "There's nothing pending for me to confirm.", actionTaken: { kind: "confirm_pending_action" } };
+      // The classifier can misfire here even against its own instructions
+      // -- found live 2026-08-09: after a plain clarify question (day
+      // ambiguity, nothing to do with a clamp), a short affirmative reply
+      // ("yes day 6", "go ahead") got misread as confirming a suggestion
+      // that never existed, producing a genuine dead end ("nothing to
+      // confirm") the user had no way to recover from except rephrasing
+      // from scratch. Never trust that call -- if there's really no
+      // pendingClamp, treat it the same as a clarify: invite the user to
+      // just restate what they want, don't leave them stuck.
+      if (!pendingClamp) {
+        return {
+          reply: "I don't have anything pending to confirm -- what would you like me to do?",
+          actionTaken: { kind: "confirm_pending_action" },
+        };
+      }
       return resolvePendingClamp(supabase, userId, plan?.id, pendingClamp, intent.confirmed);
     case "clarify":
       return { reply: intent.message, actionTaken: { kind: "clarify" } };
