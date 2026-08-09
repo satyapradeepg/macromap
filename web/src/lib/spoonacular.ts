@@ -335,6 +335,38 @@ export function slashToSpaceFallback(query: string): string | null {
   return reformatted && reformatted !== query.trim() ? reformatted : null;
 }
 
+// Live-confirmed 2026-08-09 (same F11 session, found testing an 18-
+// ingredient real recipe): "mori-nu tofu" -- a real tofu BRAND name from
+// that recipe's own Spoonacular ingredient data -- returned zero search
+// results, while bare "tofu" matches immediately. Deliberately a SEPARATE
+// list from PREP_PREFIXES, not folded into it, because the safety
+// reasoning is different: a cooking-method word (steamed/diced/etc.)
+// never changes what food is being searched for, so PREP_PREFIXES can
+// generalize freely across many words at once. A brand name doesn't get
+// that same blanket treatment -- SOME brands genuinely denote a different
+// product/formulation (their own "X-free" reasoning applies here too, see
+// glutenFreeQualifierStripFallback's comment), so this stays a small,
+// individually-confirmed curated list rather than a general "strip any
+// hyphenated/capitalized leading word" heuristic (which would also wrongly
+// catch real descriptors like "extra-firm tofu" -- "extra-firm" isn't a
+// brand). Add a new entry here only after confirming LIVE both that
+// Spoonacular's search fails on it and that the specific brand's product
+// doesn't meaningfully differ in macros from the generic ingredient (true
+// for Mori-Nu, a silken-tofu packaging brand).
+const BRAND_NAME_PREFIXES = ["mori-nu"];
+
+export function brandNamePrefixStripFallback(query: string): string | null {
+  const trimmed = query.trim();
+  for (const brand of BRAND_NAME_PREFIXES) {
+    const match = new RegExp(`^${brand}\\s+`, "i").exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest || null;
+    }
+  }
+  return null;
+}
+
 interface IngredientSearchMatch {
   id: number;
 }
@@ -383,6 +415,10 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   if (!match) {
     const slashReformatted = slashToSpaceFallback(query);
     if (slashReformatted) match = await searchIngredient(slashReformatted, apiKey);
+  }
+  if (!match) {
+    const brandStripped = brandNamePrefixStripFallback(query);
+    if (brandStripped) match = await searchIngredient(brandStripped, apiKey);
   }
   if (!match) return null;
 

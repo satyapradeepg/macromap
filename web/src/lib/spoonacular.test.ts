@@ -4,6 +4,7 @@ import {
   prefixStripFallback,
   glutenFreeQualifierStripFallback,
   slashToSpaceFallback,
+  brandNamePrefixStripFallback,
   parseRecipeInformation,
   parsePrimaryAisle,
   repairOrRejectIngredientName,
@@ -226,6 +227,29 @@ describe("slashToSpaceFallback", () => {
 
   it("returns null if replacing the slash doesn't actually change anything", () => {
     expect(slashToSpaceFallback("tofu")).toBeNull();
+  });
+});
+
+// Live-confirmed 2026-08-09, same F11 session: "mori-nu tofu" -- a real
+// tofu BRAND name from a live Spoonacular recipe's own stored data --
+// returned zero search results, while bare "tofu" matches immediately.
+describe("brandNamePrefixStripFallback", () => {
+  it("strips a known leading brand name", () => {
+    expect(brandNamePrefixStripFallback("mori-nu tofu")).toBe("tofu");
+    expect(brandNamePrefixStripFallback("MORI-NU tofu")).toBe("tofu");
+  });
+
+  it("returns null for an unlisted brand/word", () => {
+    expect(brandNamePrefixStripFallback("extra-firm tofu")).toBeNull();
+  });
+
+  it("returns null when the brand name is the entire query with nothing left", () => {
+    expect(brandNamePrefixStripFallback("mori-nu")).toBeNull();
+    expect(brandNamePrefixStripFallback("mori-nu ")).toBeNull();
+  });
+
+  it("returns null for a query with no brand prefix at all", () => {
+    expect(brandNamePrefixStripFallback("tofu")).toBeNull();
   });
 });
 
