@@ -239,7 +239,7 @@ export function PlanBoard({
     // margins from mx-auto override it regardless). Kept min-w-0 anyway
     // as cheap insurance against the OTHER cause resurfacing separately.
     <main className="mx-auto w-full min-w-0 max-w-3xl px-6 py-16">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Your meal plan</h1>
         <div className="flex items-center gap-3">
           {plan && (
