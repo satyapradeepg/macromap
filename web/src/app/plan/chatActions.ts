@@ -293,7 +293,25 @@ async function handleEditProfile(supabase: SupabaseClient, userId: string, opera
   // Chat-driven profile edits always regenerate -- unlike onboarding's
   // optional checkbox, leaving a now-noncompliant plan visible after a
   // constraint change (e.g. a new allergy) would be worse than the wait.
-  const genResult: GeneratePlanResult = await generatePlan();
+  //
+  // Live-confirmed 2026-08-09 (same root cause as PlanView's Regenerate
+  // button and OnboardingWizard's onboarding/account-edit flow): a slow
+  // generation can exceed the platform's own request timeout (measured at
+  // ~120s), which throws here rather than resolving normally. With no
+  // try/catch, that throw used to propagate all the way out of this
+  // server action AND past ChatWidget.tsx's handleSend with no catch of
+  // its own -- the chat message never got a reply, "sending" stayed true
+  // forever, and there was no way to recover short of a page reload.
+  let genResult: GeneratePlanResult;
+  try {
+    genResult = await generatePlan();
+  } catch {
+    return {
+      reply:
+        "Saved your profile, but the plan regeneration is taking longer than I can wait for here. It may still finish in the background -- try refreshing in a minute to check.",
+      actionTaken: { kind: "profile_edit", regenerated: false },
+    };
+  }
   if (genResult.error) {
     return {
       reply: `Saved your profile, but I couldn't regenerate your plan: ${genResult.error} Your existing plan may no longer match.`,

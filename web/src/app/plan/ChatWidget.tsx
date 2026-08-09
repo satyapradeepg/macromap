@@ -194,7 +194,25 @@ export function ChatWidget({
     setSlowRequest(false);
 
     const slowTimer = setTimeout(() => setSlowRequest(true), SLOW_REQUEST_THRESHOLD_MS);
-    const result = await sendChatMessage({ message });
+    // Defense-in-depth alongside chatActions.ts's own try/catch around its
+    // slowest paths (profile-edit regeneration): this catches ANY rejected
+    // call (a network drop, an unrelated server error), not just the one
+    // known cause -- without it, "sending" would stay true forever with no
+    // way to recover short of a page reload, same class of bug found and
+    // fixed at every other generatePlan() call site tonight.
+    let result;
+    try {
+      result = await sendChatMessage({ message });
+    } catch {
+      clearTimeout(slowTimer);
+      setSending(false);
+      setSlowRequest(false);
+      setMessages((prev) => [
+        ...prev,
+        { role: "error", content: "That took too long to get a reply. It may still be processing -- try again in a moment." },
+      ]);
+      return;
+    }
     clearTimeout(slowTimer);
     setSending(false);
     setSlowRequest(false);
