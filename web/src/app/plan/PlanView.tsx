@@ -24,6 +24,7 @@ import { fetchGroceryList } from "./groceryActions";
 import { pluralizeUnit } from "./unitFormatting";
 import { buildMealPlanIcs } from "./calendarExport";
 import { pickDishIcon, type DishIconKind } from "./dishIcon";
+import { ChatWidget } from "./ChatWidget";
 
 // day_index (0-6) was never actually tied to a real Monday-Sunday week --
 // a plan can be generated/regenerated any day, so labeling it with real
@@ -124,6 +125,13 @@ export function PlanBoard({
   const [swappingKey, setSwappingKey] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState(0);
   const [groceryList, setGroceryList] = useState<GroceryLineView[]>(initialGroceryList);
+  // PantryPanel owns its own displayed list internally, seeded once from
+  // initialItems (uncontrolled, same as every other action-driven panel in
+  // this file) -- a chat-driven pantry edit can't reach into that internal
+  // state directly, so it's tracked here instead and force-remounts
+  // PantryPanel (via the key) with a fresh seed whenever it changes.
+  const [currentPantryItems, setCurrentPantryItems] = useState<PantryItemView[]>(initialPantryItems);
+  const [pantryVersion, setPantryVersion] = useState(0);
 
   const unsupportedStyles = unsupportedDietaryStyles(dietaryStyles);
   // Audit round 2 (July 15 2026), finding 3's remaining half: our own
@@ -218,6 +226,34 @@ export function PlanBoard({
       // recomputed against the same plan rather than reused.
       const groceryResult = await fetchGroceryList(plan.id);
       setGroceryList(groceryResult.lines);
+    }
+  }
+
+  // The three callbacks below are ChatWidget's only way to affect this
+  // component's state -- same "server returns fresh state, client replaces
+  // it wholesale" convention handleSwap/handleGenerate already follow, just
+  // triggered from the chat server action instead of a button's own handler.
+  async function handleChatSlotReplaced(slot: PlanSlotView, weeklyActual: MacroTargets) {
+    if (!plan) return;
+    const key = slotMapKey(slot.dayIndex, slot.mealType);
+    setPlan((prev) => (prev ? { ...prev, slots: [...prev.slots.filter((s) => slotMapKey(s.dayIndex, s.mealType) !== key), slot], weeklyActual } : prev));
+    setBlockedSlots((prev) => prev.filter((b) => slotMapKey(b.dayIndex, b.mealType) !== key));
+    const groceryResult = await fetchGroceryList(plan.id);
+    setGroceryList(groceryResult.lines);
+  }
+
+  function handleChatPlanReplaced(newPlan: PlanView) {
+    setPlan(newPlan);
+    setBlockedSlots(newPlan.blockedSlots ?? []);
+    setSelectedDay(0);
+    fetchGroceryList(newPlan.id).then((groceryResult) => setGroceryList(groceryResult.lines));
+  }
+
+  function handleChatPantryReplaced(items: PantryItemView[]) {
+    setCurrentPantryItems(items);
+    setPantryVersion((v) => v + 1);
+    if (plan) {
+      fetchGroceryList(plan.id).then((groceryResult) => setGroceryList(groceryResult.lines));
     }
   }
 
@@ -390,7 +426,7 @@ export function PlanBoard({
           </span>
         </summary>
         <div className="border-t border-border p-4 pt-3">
-          <PantryPanel initialItems={initialPantryItems} onPantryChange={handlePantryChange} />
+          <PantryPanel key={pantryVersion} initialItems={currentPantryItems} onPantryChange={handlePantryChange} />
         </div>
       </details>
 
@@ -405,6 +441,12 @@ export function PlanBoard({
           <GroceryList lines={groceryList} />
         </div>
       </details>
+
+      <ChatWidget
+        onSlotReplaced={handleChatSlotReplaced}
+        onPlanReplaced={handleChatPlanReplaced}
+        onPantryReplaced={handleChatPantryReplaced}
+      />
     </main>
   );
 }
