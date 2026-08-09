@@ -251,6 +251,28 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("quinoa", ctx)).toBeNull();
     });
 
+    it("does not flag an ingredient explicitly labeled non-dairy (live-confirmed 2026-08-09 false positive)", () => {
+      // Live-confirmed: adding an unrelated safe ingredient to a meal that
+      // already contained "non-dairy beverage" got refused for a dairy_free
+      // profile -- the bare word-boundary match for "dairy" fired on the
+      // literal word inside the ingredient's OWN "non-dairy" qualifier,
+      // the exact opposite of what that label means for this profile.
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("non-dairy beverage", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("nondairy creamer", ctx)).toBeNull();
+    });
+
+    it("still flags a synonym word that isn't itself negated, even alongside an unrelated negated word (e.g. dairy-free yogurt is still yogurt)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["dairy_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("dairy-free yogurt alternative", ctx)).not.toBeNull();
+    });
+
+    it("still flags a real dairy allergy typed as literal free text, unaffected by the negation exemption", () => {
+      const ctx: DietaryContext = { dietaryStyles: [], allergies: ["dairy"], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("whole milk", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("non-dairy beverage", ctx)).toBeNull();
+    });
+
     it("flags gluten (including seitan, a wheat-gluten product) for a gluten_free profile", () => {
       const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("seitan cutlets", ctx)).not.toBeNull();

@@ -241,22 +241,28 @@ function hasAnimalDairySourceCompound(haystack: string, word: string): boolean {
   return reordered !== null && DAIRY_PRODUCT_WORDS.some((dw) => wordBoundaryIncludes(reordered, `${word} ${dw}`));
 }
 
-// Live-confirmed (2026-07-21, stacked-safety investigation): "gluten-free
-// rolled oats" and "rolled oats (gluten-free)" both got flagged unsafe for
-// a gluten_free profile -- the bare word-boundary match for "gluten"
-// fires on the literal word inside the ingredient's OWN "gluten-free"
-// qualifier, punishing exactly the case where Claude correctly called out
-// that an otherwise-risky ingredient (oats are commonly cross-
-// contaminated) has been screened. Narrowly scoped to the literal word
-// "gluten" immediately negated by "-free"/" free" in the SAME name --
-// does NOT exempt any other GLUTEN_SYNONYMS word (wheat/bread/seitan/
-// etc.), so an actually-contradictory label like "gluten-free seitan"
-// still correctly flags (seitan is inherently wheat gluten regardless of
-// how it's labeled). Same over-block-only reasoning as
-// hasSafePlantCompound above: a false negative here can only make a
-// genuinely gluten-free ingredient look unsafe, never the reverse.
-function hasGlutenFreeQualifier(haystack: string, word: string): boolean {
-  return word === "gluten" && /\bgluten[-\s]free\b/.test(haystack);
+// Live-confirmed (2026-07-21, stacked-safety investigation; generalized
+// 2026-08-09 after a dairy-free false positive): "gluten-free rolled oats"
+// and "rolled oats (gluten-free)" both got flagged unsafe for a
+// gluten_free profile, and separately "non-dairy beverage" got flagged for
+// a dairy_free profile -- in both cases the bare word-boundary match for
+// the risky word (gluten / dairy) fires on the literal word inside the
+// ingredient's OWN negation qualifier ("gluten-free" / "non-dairy"),
+// punishing exactly the case where the ingredient correctly calls out that
+// it's been screened for the very thing being checked. Narrowly scoped to
+// the literal MATCHED word immediately negated by a "non-"/"-free"
+// qualifier in the SAME name -- does NOT exempt any other word in the same
+// synonym group (e.g. "gluten-free seitan" still correctly flags: the
+// matched word there is "seitan", which is never itself negated, and
+// seitan is inherently wheat gluten regardless of how the name is
+// labeled). Same over-block-only reasoning as hasSafePlantCompound above:
+// a false negative here can only make a genuinely-compliant ingredient
+// look unsafe, never the reverse.
+function hasNegationQualifier(haystack: string, word: string): boolean {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    new RegExp(`\\bnon[-\\s]?${escaped}\\b`).test(haystack) || new RegExp(`\\b${escaped}[-\\s]free\\b`).test(haystack)
+  );
 }
 
 // Mirror of hasSafePlantCompound's shape: a handful of common ingredient
@@ -280,7 +286,7 @@ function containsAny(haystack: string, needles: string[]): string | null {
       (n) =>
         wordBoundaryIncludes(haystack, n) &&
         !hasSafePlantCompound(haystack, n) &&
-        !hasGlutenFreeQualifier(haystack, n) &&
+        !hasNegationQualifier(haystack, n) &&
         !hasAnimalDairySourceCompound(haystack, n) &&
         !hasSafeAlcoholCompound(haystack, n),
     ) ?? null
@@ -337,10 +343,16 @@ export function isOpenEndedIngredientUnsafeFor(ingredientName: string, ctx: Diet
   const dislikeWords = ctx.dislikes.map(normalize).filter(Boolean);
   const userWords = [...allergyWords, ...dislikeWords];
 
-  for (const word of userWords) {
-    if (wordBoundaryIncludes(name, word)) {
-      return `matches excluded term "${word}"`;
-    }
+  // Live-confirmed 2026-08-09: this direct user-word match had none of
+  // containsAny's exemption checks below (plant-compound, negation-
+  // qualifier, etc.) -- a user who typed "dairy" as their own literal
+  // allergy/dislike text, not just a dairy_free dietary-style preset,
+  // would hit the exact same "non-dairy beverage" false positive the
+  // dietary-style path was fixed for. Reuses containsAny so both paths
+  // share one exemption chain instead of drifting out of sync.
+  const directHit = containsAny(name, userWords);
+  if (directHit) {
+    return `matches excluded term "${directHit}"`;
   }
 
   // Category-wide expansion (below) is deliberately allergy/dietary-style
