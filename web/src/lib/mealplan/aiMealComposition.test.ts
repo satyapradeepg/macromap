@@ -1053,6 +1053,86 @@ describe("composeMealFromEditDetailed", () => {
     });
   });
 
+  it("live bug 2026-08-09: a pre-existing 'fixed'-role ingredient over the bound is accepted, not rejected", async () => {
+    // Real repro: editing a Spoonacular recipe re-lists ITS OWN existing
+    // "beer" (a braising liquid, not a garnish) at 426.6g -- over the
+    // fixed role's 150g cap, meant for AI-composed garnish-scale amounts.
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "Added more seitan.",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["beer"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const beerLine = result.meal.ingredients.find((i) => i.ingredientName === "beer");
+      expect(beerLine?.amountG).toBe(426.6);
+    }
+  });
+
+  it("still rejects an out-of-bounds 'fixed' ingredient when it's genuinely NEW, not pre-existing", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "Added beer.",
+    };
+    // "beer" is NOT in the pre-existing list this time -- it's a new addition.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "fixed", ingredientName: "beer", amountG: 426.6, min: 1, max: 150 },
+    });
+  });
+
+  it("still rejects a pre-existing ingredient over bounds in a NON-fixed role -- the relaxation is fixed-role only", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Only",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 800 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "protein", ingredientName: "seitan cutlets", amountG: 800, min: 20, max: 280 },
+    });
+  });
+
+  it("pre-existing-name matching is case/whitespace insensitive", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      beer: { id: 3, name: "beer", caloriesPer100g: 43, proteinGPer100g: 0.5, carbsGPer100g: 3.6, fatGPer100g: 0, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "beer", role: "fixed", amountG: 426.6 },
+      ],
+      changeSummary: "n/a",
+    };
+    // The proposal's own ingredient name is normalized casing ("beer"), but
+    // the ORIGINAL current-ingredient description (as read from the slot,
+    // e.g. Spoonacular's own "Beer" capitalization) may differ in case --
+    // the pre-existing check must still recognize it as the same ingredient.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["  Beer  "]);
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects a title/ingredient mismatch against the composed ingredients", async () => {
     const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
     const edit: MealEditProposal = {

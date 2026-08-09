@@ -195,6 +195,14 @@ describe("prefixStripFallback", () => {
   it("strips a trailing 'crumbled' descriptor and the leftover comma", () => {
     expect(prefixStripFallback("seitan, crumbled")).toBe("seitan");
   });
+
+  // Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production):
+  // "strong mushroom broth" -- a real ingredient name already present in a
+  // live Spoonacular recipe -- returned zero search results.
+  it("strips a leading 'strong' prefix", () => {
+    expect(prefixStripFallback("strong mushroom broth")).toBe("mushroom broth");
+    expect(prefixStripFallback("STRONG coffee")).toBe("coffee");
+  });
 });
 
 // Sibling gap to audit item #1, live-confirmed 2026-07-22 (stacked-safety

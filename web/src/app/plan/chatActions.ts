@@ -48,6 +48,12 @@ export type ChatActionTaken =
       role: MealRole;
       ingredientName: string;
       suggestedAmountG: number;
+      // Carried forward so a later confirm ("yes") re-validates through
+      // composeMealFromEditDetailed with the same pre-existing-ingredient
+      // context the original proposal had -- see that function's own
+      // comment on why this matters for a real Spoonacular recipe's
+      // untouched ingredients.
+      preExistingIngredientNames: string[];
     }
   | { kind: "confirm_pending_action" }
   | { kind: "pantry_edit"; operations: Array<{ action: "add" | "remove"; itemName: string }> }
@@ -327,8 +333,9 @@ async function applyMealEditResult(
   edit: MealEditProposal,
   dietaryCtx: DietaryContext,
   currentComposedIngredientsInGrams: Array<{ name: string; amountG: number }> | null,
+  preExistingIngredientNames: string[],
 ): Promise<IntentHandlerResult> {
-  const result = await composeMealFromEditDetailed(edit, dietaryCtx, lookupIngredientMacrosCached);
+  const result = await composeMealFromEditDetailed(edit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
 
   if (!result.ok) {
     if (result.reason.kind === "amount_out_of_bounds") {
@@ -336,7 +343,16 @@ async function applyMealEditResult(
       const suggestedAmountG = amountG > max ? max : min;
       return {
         reply: `${describeRejectionForChatUser(result.reason)} Want me to use ${suggestedAmountG}g instead?`,
-        actionTaken: { kind: "pending_clamp_suggestion", dayIndex, mealType, proposal: edit, role, ingredientName, suggestedAmountG },
+        actionTaken: {
+          kind: "pending_clamp_suggestion",
+          dayIndex,
+          mealType,
+          proposal: edit,
+          role,
+          ingredientName,
+          suggestedAmountG,
+          preExistingIngredientNames,
+        },
       };
     }
     return { reply: describeRejectionForChatUser(result.reason), actionTaken: { kind: "meal_edit_rejected", dayIndex, mealType } };
@@ -477,7 +493,8 @@ async function handleEditMealRecipe(
   if (!edit) return { reply: "I couldn't process that edit right now -- try rephrasing?", actionTaken: { kind: "error" } };
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
-  return applyMealEditResult(supabase, plan.id, dayIndex, mealType, edit, dietaryCtx, currentComposedInGrams);
+  const preExistingIngredientNames = currentIngredients.map((i) => i.name);
+  return applyMealEditResult(supabase, plan.id, dayIndex, mealType, edit, dietaryCtx, currentComposedInGrams, preExistingIngredientNames);
 }
 
 // Resolves a pending clamp suggestion -- either from the fast deterministic
@@ -516,7 +533,16 @@ async function resolvePendingClamp(
     changeSummary: `Used ${pending.suggestedAmountG}g of ${pending.ingredientName} instead of the amount you asked for -- everything else stays the same.`,
   };
 
-  return applyMealEditResult(supabase, mealPlanId, pending.dayIndex, pending.mealType, clampedEdit, dietaryCtx, null);
+  return applyMealEditResult(
+    supabase,
+    mealPlanId,
+    pending.dayIndex,
+    pending.mealType,
+    clampedEdit,
+    dietaryCtx,
+    null,
+    pending.preExistingIngredientNames,
+  );
 }
 
 function describePendingSuggestion(pending: PendingClampSuggestion): string {

@@ -1213,11 +1213,39 @@ export type ComposeEditResult = { ok: true; meal: ComposedMeal } | { ok: false; 
 // missing_role check -- unlike a fresh composition, an edit may
 // legitimately drop a role entirely ("drop the rice from tonight's
 // dinner" is a valid outcome, not a malformed proposal).
+//
+// preExistingIngredientNames (live bug found 2026-08-09, real-user chat
+// testing against production): the proposer always returns the COMPLETE
+// ingredient list, re-listing untouched ingredients alongside whatever
+// actually changed (see mealEditProposer.ts's own schema doc). For a real
+// Spoonacular-recipe-sourced slot, those untouched ingredients can be
+// recipe-scale cooking components (a braising liquid, a soup base) that
+// the model has to force into one of the four AI-composed roles even
+// though they were never meant to be sized like one -- live-confirmed:
+// editing "Mushroom Tofu Stew" (asking to add chicken) never even reached
+// the requested ingredient because the recipe's own pre-existing "beer"
+// (a fixed-role braising liquid, re-expressed at 426.6g) tripped the
+// `fixed` role's 150g cap first, and the resulting refusal named "beer" --
+// an ingredient the user never asked about -- instead of ever addressing
+// the actual request. `fixed` is documented above as "isn't macro-solved"
+// (a garnish/aromatic, not something this bound was ever meant to
+// gatekeep for a real recipe's own existing components), so an ingredient
+// that already existed in the meal before this edit skips ONLY the
+// out-of-bounds check for that role -- it still must resolve via
+// fetchIngredientMacros (grounding is never skipped) and is still fully
+// subject to the safety/duplicate-role checks above. Deliberately scoped
+// to `fixed` only, not protein/carb/fat -- those roles carry real
+// macro-accuracy weight this app is built around, and no live case has
+// yet shown they need the same relaxation; widening this without a real
+// repro would trade away a guarantee this codebase treats as
+// unconditional elsewhere (see this function's own module comment).
 export async function composeMealFromEditDetailed(
   edit: MealEditProposal,
   ctx: DietaryContext,
   fetchIngredientMacros: FetchIngredientMacrosFn,
+  preExistingIngredientNames: string[] = [],
 ): Promise<ComposeEditResult> {
+  const preExisting = new Set(preExistingIngredientNames.map((n) => n.trim().toLowerCase()));
   if (edit.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
 
   const mismatchedWord = findTitleIngredientMismatch(edit.dishName, edit.ingredients);
@@ -1245,7 +1273,8 @@ export async function composeMealFromEditDetailed(
       return { ok: false, reason: { kind: "ingredient_not_found", role: ing.role, ingredientName: ing.name } };
     }
     const bounds = PORTION_BOUNDS_G[ing.role];
-    if (!isRealisticAmount(ing.amountG, bounds)) {
+    const isPreExistingFixedItem = ing.role === "fixed" && preExisting.has(ing.name.trim().toLowerCase());
+    if (!isPreExistingFixedItem && !isRealisticAmount(ing.amountG, bounds)) {
       return {
         ok: false,
         reason: { kind: "amount_out_of_bounds", role: ing.role, ingredientName: ing.name, amountG: ing.amountG, min: bounds.min, max: bounds.max },

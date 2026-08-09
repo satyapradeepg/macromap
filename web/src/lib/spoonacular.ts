@@ -226,8 +226,18 @@ export function commaSwapFallback(query: string): string | null {
 // commaSwapFallback's reorder ("diced russet potatoes" also zero) -- same
 // shape/cut risk profile as "sliced" already here, dicing doesn't change
 // per-100g macros either.
+//
+// "strong" added 2026-08-09, live-confirmed via F11 chat-driven meal
+// editing against production: "strong mushroom broth" (a real ingredient
+// name already present in a live Spoonacular recipe) returned zero
+// results from ingredient search. Unlike the cut/cooking-method words
+// above, "strong" describes concentration, not a different preparation --
+// same low risk as those: a strong vs. regular broth is still
+// fundamentally the same food for per-100g macro purposes (mostly water),
+// not a reformulated product the way an "X-free" qualifier can be (see
+// glutenFreeQualifierStripFallback's own comment on that distinction).
 const PREP_PREFIXES = [
-  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced",
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced", "strong",
 ];
 
 // Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
