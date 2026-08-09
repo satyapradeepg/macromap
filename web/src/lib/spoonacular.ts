@@ -236,8 +236,19 @@ export function commaSwapFallback(query: string): string | null {
 // fundamentally the same food for per-100g macro purposes (mostly water),
 // not a reformulated product the way an "X-free" qualifier can be (see
 // glutenFreeQualifierStripFallback's own comment on that distinction).
+// "julienne"/"young" added 2026-08-09 (F11 chat meal editing, live user
+// report -- a chicken breakfast recipe's own real ingredient data
+// included "julienne young ginger", zero search results even after
+// stripping "julienne" alone -- "young ginger" ALONE also has zero
+// results, while bare "ginger" matches fine (confirmed live against the
+// search API). Two stacked descriptors needed stripping, not one -- see
+// lookupIngredientMacros below, which now retries prefixStripFallback
+// repeatedly rather than once, for exactly this case. "young" is a
+// maturity/freshness descriptor, not a cut/cooking-method word like the
+// rest of this list, but the same reasoning applies: it doesn't change
+// the food's per-100g macros, so it's equally safe to drop.
 const PREP_PREFIXES = [
-  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced", "strong",
+  "steamed", "roasted", "grilled", "sauteed", "sautéed", "cooked", "baked", "boiled", "fried", "sliced", "diced", "strong", "julienne", "young",
 ];
 
 // Trailing counterpart to PREP_PREFIXES, added 2026-07-27 for the same
@@ -405,8 +416,20 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
     if (commaSwapped) match = await searchIngredient(commaSwapped, apiKey);
   }
   if (!match) {
-    const prefixStripped = prefixStripFallback(query);
-    if (prefixStripped) match = await searchIngredient(prefixStripped, apiKey);
+    // Retried, not just tried once -- live-confirmed 2026-08-09: a real
+    // ingredient description can stack more than one strippable modifier
+    // ("julienne young ginger" needs BOTH "julienne" and "young" gone
+    // before "ginger" resolves; stripping only the first still fails).
+    // Bounded at 3 rounds -- PREP_PREFIXES is a short, curated list of
+    // single safe-to-drop words, not an open-ended grammar, so a
+    // realistic worst case is 2-3 stacked descriptors, not more.
+    let candidate = query;
+    for (let i = 0; i < 3 && !match; i++) {
+      const stripped = prefixStripFallback(candidate);
+      if (!stripped) break;
+      match = await searchIngredient(stripped, apiKey);
+      candidate = stripped;
+    }
   }
   if (!match) {
     const glutenFreeStripped = glutenFreeQualifierStripFallback(query);

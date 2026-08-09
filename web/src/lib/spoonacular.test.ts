@@ -205,6 +205,21 @@ describe("prefixStripFallback", () => {
     expect(prefixStripFallback("strong mushroom broth")).toBe("mushroom broth");
     expect(prefixStripFallback("STRONG coffee")).toBe("coffee");
   });
+
+  // Live-confirmed 2026-08-09 (F11 chat meal editing): "julienne young
+  // ginger" -- a real ingredient from a live recipe -- needed BOTH
+  // stacked descriptors stripped before matching; neither "julienne" nor
+  // "young" alone was enough. prefixStripFallback itself only strips one
+  // leading word per call (by design, see its own doc comment) -- the
+  // caller (lookupIngredientMacros) is what retries it repeatedly for
+  // exactly this stacked case.
+  it("strips a leading 'julienne' prefix", () => {
+    expect(prefixStripFallback("julienne young ginger")).toBe("young ginger");
+  });
+
+  it("strips a leading 'young' prefix, revealing the second stacked descriptor", () => {
+    expect(prefixStripFallback("young ginger")).toBe("ginger");
+  });
 });
 
 // Live-confirmed 2026-08-09, same F11 session as the "strong" fix above:
