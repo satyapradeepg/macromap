@@ -44,6 +44,16 @@ export interface ProposeMealEditInput {
   dietaryStyles: string[];
   allergies: string[];
   dislikes: string[];
+  // Retry-with-feedback (2026-08-09, live-confirmed model-consistency
+  // issue): a real recipe with several ingredients can get an
+  // inconsistent role assignment across separate calls for the exact same
+  // request (e.g. two ingredients both tagged "protein"), rejected
+  // deterministically by composeMealFromEditDetailed's duplicate_role
+  // check. Same shape/convention as mealProposer.ts's own
+  // priorAttemptFeedback -- one bounded retry, telling the model
+  // specifically what was wrong last time rather than blindly hoping a
+  // second draw happens to differ.
+  priorAttemptFeedback?: string;
 }
 
 // Verbatim copies of mealProposer.ts's own self-check field constants --
@@ -103,7 +113,7 @@ const PROPOSE_MEAL_EDIT_TOOL = {
 };
 
 export function buildEditPrompt(input: ProposeMealEditInput): string {
-  const { currentDishName, currentIngredients, userInstruction, mealType, target, dietaryStyles, allergies, dislikes } = input;
+  const { currentDishName, currentIngredients, userInstruction, mealType, target, dietaryStyles, allergies, dislikes, priorAttemptFeedback } = input;
   const condimentWarnings = condimentRiskWarnings({ dietaryStyles, allergies, dislikes });
   const currentList = currentIngredients.map((i) => `${i.name} (${i.amount} ${i.unit})`).join(", ");
 
@@ -112,6 +122,7 @@ export function buildEditPrompt(input: ProposeMealEditInput): string {
 This meal roughly targets ${Math.round(target.calories)} calories / ${Math.round(target.proteinG)}g protein / ${Math.round(target.carbsG)}g carbs / ${Math.round(target.fatG)}g fat -- for context only, not something to solve exactly; every amount you give below is EXPLICIT and will be used as-is, never resolved against this target.
 
 Apply this specific edit the user asked for: "${userInstruction}"
+${priorAttemptFeedback ? `\nIMPORTANT -- your previous proposal for this exact edit was rejected: ${priorAttemptFeedback} Fix this specific problem in your new proposal below; don't just repeat the same choice.\n` : ""}
 
 Hard constraints -- never violate these, including hidden/derived forms (e.g. mayonnaise contains egg, Worcestershire sauce contains fish, most protein powder/seitan is not gluten-free; if halal or kosher is listed below, that means no pork/bacon/ham and no alcohol/wine/beer/rum as an ingredient -- gelatin and marshmallows are frequently pork-derived, and a wine/beer-based sauce or marinade still counts even if it's "cooked off"; kosher additionally means no shellfish):
 - Dietary style: ${dietaryStyles.length ? dietaryStyles.join(", ") : "none"}
@@ -125,9 +136,10 @@ Requirements:
 3. Give every ingredient a realistic, EXPLICIT gram amount. If the user asked for a relative change ("double the chicken", "a bit less rice"), compute the new gram amount yourself from the current amount given above.
 4. Use real, specific, searchable ingredient names (e.g. "seitan cutlets", not "protein source").
 5. It's fine for the resulting dish to have no ingredient in a given role (e.g. dropping the carb entirely) if that's what the user asked for -- don't invent a replacement they didn't request.
-6. Fill in "changeSummary" after finalizing the ingredient list, describing what actually changed.
-7. Fill in "titleIngredientCheck" next: re-read the dish name and confirm it doesn't name any ingredient, component, or preparation that isn't actually in your final ingredients list. If you find a mismatch, revise the dish name before finalizing.
-8. Fill in "constraintCheck" LAST -- go through each final ingredient by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict, go back and swap that ingredient before submitting.`;
+6. EXACTLY ONE ingredient may have role "protein", EXACTLY ONE may have role "carb", and EXACTLY ONE may have role "fat" -- never two or more of the same one of these three. This matters most for a real recipe with several ingredients that could each plausibly seem protein-ish or carb-ish: pick the single most macro-relevant one for each role and put every other ingredient under "fixed", even ones that don't feel like a garnish (a cooking liquid, a second vegetable, a sauce base are all "fixed" if they're not THE ingredient carrying that role's macros).
+7. Fill in "changeSummary" after finalizing the ingredient list, describing what actually changed.
+8. Fill in "titleIngredientCheck" next: re-read the dish name and confirm it doesn't name any ingredient, component, or preparation that isn't actually in your final ingredients list. If you find a mismatch, revise the dish name before finalizing.
+9. Fill in "constraintCheck" LAST -- go through each final ingredient by name and confirm it doesn't conflict with the dietary style, allergies, or dislikes listed above, including hidden/derived forms. If you find a real conflict, go back and swap that ingredient before submitting.`;
 }
 
 const VALID_ROLES: MealRole[] = ["protein", "carb", "fat", "fixed"];

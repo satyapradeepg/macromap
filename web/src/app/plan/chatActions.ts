@@ -344,8 +344,28 @@ async function applyMealEditResult(
   dietaryCtx: DietaryContext,
   currentComposedIngredientsInGrams: Array<{ name: string; amountG: number }> | null,
   preExistingIngredientNames: string[],
+  // Retry-with-feedback (2026-08-09, live-confirmed model-consistency
+  // issue): a real recipe with several ingredients can get an
+  // inconsistent role assignment across separate Claude calls for the
+  // EXACT SAME request (reproduced live -- the identical message produced
+  // two different duplicate_role failures on consecutive attempts). Only
+  // ever set from handleEditMealRecipe (a fresh proposal genuinely can be
+  // re-asked); resolvePendingClamp omits it -- a clamp replay is a
+  // deterministic re-application of an already-accepted proposal, not a
+  // new request to retry.
+  retryOnDuplicateRole?: (feedback: string) => Promise<MealEditProposal | null>,
 ): Promise<IntentHandlerResult> {
-  const result = await composeMealFromEditDetailed(edit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+  let currentEdit = edit;
+  let result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+
+  if (!result.ok && result.reason.kind === "duplicate_role" && retryOnDuplicateRole) {
+    const feedback = `you assigned more than one ingredient to the "${result.reason.role}" role -- exactly one ingredient may have this role; move every other one to "fixed".`;
+    const retried = await retryOnDuplicateRole(feedback);
+    if (retried) {
+      currentEdit = retried;
+      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+    }
+  }
 
   if (!result.ok) {
     if (result.reason.kind === "amount_out_of_bounds") {
@@ -357,7 +377,7 @@ async function applyMealEditResult(
           kind: "pending_clamp_suggestion",
           dayIndex,
           mealType,
-          proposal: edit,
+          proposal: currentEdit,
           role,
           ingredientName,
           suggestedAmountG,
@@ -450,8 +470,8 @@ async function applyMealEditResult(
   };
 
   return {
-    reply: edit.changeSummary,
-    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: edit.changeSummary },
+    reply: currentEdit.changeSummary,
+    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: currentEdit.changeSummary },
     updatedSlot: slot,
     updatedWeeklyActual: weeklyActual,
   };
@@ -504,7 +524,28 @@ async function handleEditMealRecipe(
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
   const preExistingIngredientNames = currentIngredients.map((i) => i.name);
-  return applyMealEditResult(supabase, plan.id, dayIndex, mealType, edit, dietaryCtx, currentComposedInGrams, preExistingIngredientNames);
+  return applyMealEditResult(
+    supabase,
+    plan.id,
+    dayIndex,
+    mealType,
+    edit,
+    dietaryCtx,
+    currentComposedInGrams,
+    preExistingIngredientNames,
+    (feedback) =>
+      proposeMealEditViaClaude({
+        currentDishName: slot.recipeTitle,
+        currentIngredients,
+        userInstruction: editInstruction,
+        mealType,
+        target,
+        dietaryStyles: dietaryCtx.dietaryStyles,
+        allergies: dietaryCtx.allergies,
+        dislikes: dietaryCtx.dislikes,
+        priorAttemptFeedback: feedback,
+      }),
+  );
 }
 
 // Resolves a pending clamp suggestion -- either from the fast deterministic
