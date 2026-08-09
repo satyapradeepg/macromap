@@ -147,7 +147,26 @@ export function PlanBoard({
     setError(null);
     setUsingCachedFallback(false);
 
-    const result = await generatePlan();
+    // Live-confirmed 2026-08-09 (real user report + reproduced directly):
+    // a slow generation can exceed the platform's own gateway timeout
+    // (measured at exactly 120s), which surfaces as a rejected fetch/
+    // thrown error here, not a normal `{ error: ... }` result -- there was
+    // no try/catch at all, so that throw propagated past `setGenerating
+    // (false)` below and left the button stuck showing "Generating"
+    // forever, recoverable only by a manual page refresh. The generation
+    // itself likely keeps running server-side past the gateway's own
+    // cutoff (a refresh typically shows the completed plan), so the
+    // message below says that honestly rather than implying it failed.
+    let result;
+    try {
+      result = await generatePlan();
+    } catch {
+      setGenerating(false);
+      setError(
+        "This is taking longer than the page can wait for. It may still finish in the background -- try refreshing in a minute to check.",
+      );
+      return;
+    }
     setGenerating(false);
 
     if (result.error) {

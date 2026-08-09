@@ -309,7 +309,24 @@ export function OnboardingWizard({
       setSaving(false);
       setStatusIndex(0);
       setGenerating(true);
-      const genResult = await generatePlan();
+      // Live-confirmed 2026-08-09 (same root cause found on /plan's own
+      // Regenerate button): a slow generation can exceed the platform's
+      // gateway timeout (measured at exactly 120s), surfacing as a
+      // rejected fetch here, not a normal `{ error: ... }` result. With no
+      // try/catch, that throw used to propagate past `setGenerating
+      // (false)` and leave this full-viewport overlay stuck forever. The
+      // profile itself already saved successfully above regardless.
+      let genResult;
+      try {
+        genResult = await generatePlan();
+      } catch {
+        setGenerating(false);
+        setGenerateError(
+          "This is taking longer than the page can wait for. It may still finish in the background -- try refreshing in a minute to check.",
+        );
+        setSaved(true);
+        return;
+      }
       setGenerating(false);
       if (genResult.error) {
         // Profile itself did save -- just surface the generation failure
