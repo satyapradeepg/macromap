@@ -7,6 +7,7 @@
 import type { PlanView, PlanSlotView } from "@/app/plan/data";
 import type { QaTopic } from "./intentClassifier";
 import type { MealType } from "@/lib/mealplan/targets";
+import type { PantryItemView } from "@/app/plan/pantryData";
 
 export const MEAL_TYPE_LABELS: Record<MealType, string> = {
   breakfast: "Breakfast",
@@ -64,15 +65,34 @@ function answerTodaySummary(plan: PlanView): string {
   return `Today: ${lines.join("; ")}. That's ${round(totalCalories)} calories so far today.`;
 }
 
+// Added 2026-08-09 alongside the pantry_contents topic itself -- pantry
+// items aren't part of PlanView, so this takes its own parameter rather
+// than reading it from plan like every other case here.
+function answerPantryContents(items: PantryItemView[]): string {
+  if (items.length === 0) return "Your pantry is empty right now -- tell me what you have and I'll log it.";
+  const lines = items.map((i) => (i.quantityText ? `${i.name} (${i.quantityText})` : i.name));
+  return `Your pantry has: ${lines.join(", ")}.`;
+}
+
+// Live-confirmed 2026-08-09 (F11 chat-driven testing against production):
+// this message used to hardcode "budget/cost tracking" as THE named
+// example of what's unsupported, regardless of what was actually asked --
+// reproduced identically for a pantry question (before pantry_contents
+// existed as its own topic) and for a genuinely unrelated one ("what's
+// the weather like today?"), both misleadingly implied the question had
+// been mistaken for a budget question. Lists the real supported topics
+// instead of guessing at what was actually asked.
 const UNSUPPORTED_MESSAGE =
-  "I can answer questions about how many calories/macros you have left this week, what's in a specific meal, or a summary of today's plan -- budget/cost tracking isn't something I can answer right now.";
+  "I can answer questions about how many calories/macros you have left this week, what's in a specific meal, a summary of today's plan, or what's in your pantry -- anything else (like budget/cost tracking) isn't something I can answer right now.";
 
 export function answerReadOnlyQuestion(
   topic: QaTopic,
   dayIndex: number | null,
   mealType: MealType | null,
   plan: PlanView | null,
+  pantryItems: PantryItemView[] | null = null,
 ): string {
+  if (topic === "pantry_contents") return answerPantryContents(pantryItems ?? []);
   if (topic === "unsupported") return UNSUPPORTED_MESSAGE;
   if (!plan) return NO_PLAN_MESSAGE;
 

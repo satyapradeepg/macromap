@@ -314,8 +314,18 @@ async function handleEditProfile(supabase: SupabaseClient, userId: string, opera
   };
 }
 
-function handleReadOnlyQa(topic: QaTopic, dayIndex: number | null, mealType: MealType | null, plan: PlanView | null): IntentHandlerResult {
-  return { reply: answerReadOnlyQuestion(topic, dayIndex, mealType, plan), actionTaken: { kind: "qa", topic } };
+async function handleReadOnlyQa(
+  supabase: SupabaseClient,
+  userId: string,
+  topic: QaTopic,
+  dayIndex: number | null,
+  mealType: MealType | null,
+  plan: PlanView | null,
+): Promise<IntentHandlerResult> {
+  // Only fetched for this one topic -- every other QA topic answers
+  // entirely from the already-loaded plan, no extra query needed.
+  const pantryItems = topic === "pantry_contents" ? await getPantryItems(supabase, userId) : null;
+  return { reply: answerReadOnlyQuestion(topic, dayIndex, mealType, plan, pantryItems), actionTaken: { kind: "qa", topic } };
 }
 
 // Shared by both the fresh edit-proposal path (handleEditMealRecipe) and
@@ -567,7 +577,7 @@ async function dispatchIntent(
     case "edit_profile":
       return handleEditProfile(supabase, userId, intent.operations);
     case "read_only_qa":
-      return handleReadOnlyQa(intent.qaTopic, intent.dayIndex, intent.mealType, plan);
+      return handleReadOnlyQa(supabase, userId, intent.qaTopic, intent.dayIndex, intent.mealType, plan);
     case "confirm_pending_action":
       // The classifier can misfire here even against its own instructions
       // -- found live 2026-08-09: after a plain clarify question (day

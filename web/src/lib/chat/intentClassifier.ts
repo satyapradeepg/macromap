@@ -19,7 +19,12 @@ const MODEL = "claude-sonnet-5";
 
 import type { MealType } from "@/lib/mealplan/targets";
 
-export type QaTopic = "remaining_weekly_macros" | "specific_meal_details" | "today_summary" | "unsupported";
+// pantry_contents added 2026-08-09 (live bug found via production chat
+// testing): "What's in my pantry?" had no topic to land on at all and
+// fell to 'unsupported', whose message hardcodes budget/cost as the named
+// example regardless of what was actually asked -- see
+// answerReadOnlyQuestion.ts's own comment on that second, independent fix.
+export type QaTopic = "remaining_weekly_macros" | "specific_meal_details" | "today_summary" | "pantry_contents" | "unsupported";
 
 export type ProfileOperation =
   | { field: "dietaryStyles" | "allergies" | "dislikes"; action: "add" | "remove"; value: string }
@@ -58,7 +63,7 @@ export interface ClassifyChatIntentInput {
 const MEAL_TYPES: MealType[] = ["breakfast", "lunch", "dinner", "snack1", "snack2"];
 const PROFILE_LIST_FIELDS = ["dietaryStyles", "allergies", "dislikes"] as const;
 const PROFILE_SET_FIELDS = ["weightKg", "heightCm", "age", "activityLevel", "goal", "biologicalSex"] as const;
-const QA_TOPICS: QaTopic[] = ["remaining_weekly_macros", "specific_meal_details", "today_summary", "unsupported"];
+const QA_TOPICS: QaTopic[] = ["remaining_weekly_macros", "specific_meal_details", "today_summary", "pantry_contents", "unsupported"];
 
 // Self-check field, same mechanical shape/positioning as mealProposer.ts's
 // titleIngredientCheck/constraintCheck -- REQUIRED, placed last, purely
@@ -141,7 +146,7 @@ const CLASSIFY_INTENT_TOOL = {
               type: "string",
               enum: QA_TOPICS,
               description:
-                "For read_only_qa only. Use 'unsupported' for anything not covered by the other three (including any question about budget/grocery cost, which this assistant deliberately does not answer).",
+                "For read_only_qa only. Use 'unsupported' for anything not covered by the other four (including any question about budget/grocery cost, which this assistant deliberately does not answer).",
             },
             message: {
               type: "string",
@@ -170,7 +175,7 @@ Classify this message into one or more of these intents:
 - edit_meal_recipe: the user wants to change something WITHIN a specific meal's existing recipe -- an ingredient quantity, adding/removing an ingredient, or substituting one ingredient for another (e.g. "remove the onions from tonight's dinner", "double the chicken in tomorrow's lunch", "swap the rice for quinoa"). Needs dayIndex, mealType, and editInstruction. Use this instead of swap_meal whenever the request is about MODIFYING the current dish, not replacing it with something different.
 - edit_pantry: the user is telling you what they have or don't have on hand (e.g. "I have chicken and rice", "I used up the eggs"). Needs pantryOperations.
 - edit_profile: the user wants to change something about their diet, allergies, dislikes, weight, height, age, activity level, or goal. Needs profileOperations. Diet/allergy/dislike changes are add/remove against their existing list (e.g. "I'm allergic to peanuts now" = add; "I'm not vegan anymore" = remove), never a full replacement. Weight/height/age/activity/goal/sex changes are a set (a new value).
-- read_only_qa: the user is asking a question, not asking for a change. Needs qaTopic ('remaining_weekly_macros' for "how many calories/protein/etc do I have left this week", 'specific_meal_details' for "what's in tonight's dinner" -- also set dayIndex/mealType for this one, 'today_summary' for a general "what's today look like", 'unsupported' for anything else including budget/cost questions).
+- read_only_qa: the user is asking a question, not asking for a change. Needs qaTopic ('remaining_weekly_macros' for "how many calories/protein/etc do I have left this week", 'specific_meal_details' for "what's in tonight's dinner" -- also set dayIndex/mealType for this one, 'today_summary' for a general "what's today look like", 'pantry_contents' for "what's in my pantry"/"what do I have on hand", 'unsupported' for anything else, e.g. budget/cost questions or something entirely unrelated to meal planning).
 - confirm_pending_action: ONLY valid when a "pending suggestion" paragraph appears above, naming exactly what's pending -- that is the ONLY signal this intent exists at all. If that paragraph is absent from this prompt, there is NOTHING pending, full stop -- a short reply like "yes", "go ahead", or "yes day 6" with no pending-suggestion paragraph above is answering something else (most often a clarify question you or a prior turn asked) and must be classified as whatever normal intent it actually resolves to, never confirm_pending_action. A previous clarify question is NOT a pending suggestion and never enables this intent.
 - clarify: you genuinely cannot tell what the user wants well enough to act (which day, which meal, what change) -- ask a short, specific question back in the message field. Never guess and execute when this is the better fit.
 - refuse: the request is clearly outside what this assistant can do (e.g. asking to change the budget, which is intentionally not exposed here) -- explain why in the message field. This is different from a hard-constraint safety refusal, which happens deterministically downstream, not here -- don't try to pre-judge allergy/diet conflicts yourself; classify the request normally (e.g. still emit edit_pantry, swap_meal, or edit_meal_recipe) and let the app's own safety checks catch a real conflict.
