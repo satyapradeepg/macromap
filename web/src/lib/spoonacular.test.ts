@@ -3,6 +3,7 @@ import {
   commaSwapFallback,
   prefixStripFallback,
   glutenFreeQualifierStripFallback,
+  slashToSpaceFallback,
   parseRecipeInformation,
   parsePrimaryAisle,
   repairOrRejectIngredientName,
@@ -202,6 +203,29 @@ describe("prefixStripFallback", () => {
   it("strips a leading 'strong' prefix", () => {
     expect(prefixStripFallback("strong mushroom broth")).toBe("mushroom broth");
     expect(prefixStripFallback("STRONG coffee")).toBe("coffee");
+  });
+});
+
+// Live-confirmed 2026-08-09, same F11 session as the "strong" fix above:
+// "firm/extra tofu" -- a real ingredient name from a live Spoonacular
+// recipe's own stored data -- returned zero search results, while the
+// exact same words space-separated ("firm extra tofu") matched
+// immediately (confirmed directly against the real search API).
+describe("slashToSpaceFallback", () => {
+  it("replaces a slash with a space", () => {
+    expect(slashToSpaceFallback("firm/extra tofu")).toBe("firm extra tofu");
+  });
+
+  it("collapses any resulting double space", () => {
+    expect(slashToSpaceFallback("firm / extra tofu")).toBe("firm extra tofu");
+  });
+
+  it("returns null when there's no slash at all", () => {
+    expect(slashToSpaceFallback("extra firm tofu")).toBeNull();
+  });
+
+  it("returns null if replacing the slash doesn't actually change anything", () => {
+    expect(slashToSpaceFallback("tofu")).toBeNull();
   });
 });
 

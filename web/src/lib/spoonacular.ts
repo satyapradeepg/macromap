@@ -315,6 +315,26 @@ export function glutenFreeQualifierStripFallback(query: string): string | null {
   return null;
 }
 
+// Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production,
+// same repro as PREP_PREFIXES' "strong" entry above): "firm/extra tofu" --
+// a real ingredient name from a live Spoonacular recipe's own stored data
+// -- returned zero search results, while the exact same words
+// space-separated ("firm extra tofu") matched immediately. The "/" reads
+// to Spoonacular's own recipe-ingredient data as a compact "either/or"
+// label (this same recipe's data literally uses it as shorthand for
+// "firm or extra-firm tofu"), but its ingredient SEARCH endpoint doesn't
+// tokenize across it the way it does whitespace. Replacing "/" with a
+// space doesn't change what food is being searched for (unlike a
+// qualifier-drop, there's no different-product risk here at all -- it's
+// the same words, just re-punctuated), so this is safe to try unconditionally
+// whenever a "/" is present, not scoped to specific known phrases the way
+// PREP_PREFIXES/glutenFreeQualifierStripFallback are.
+export function slashToSpaceFallback(query: string): string | null {
+  if (!query.includes("/")) return null;
+  const reformatted = query.replace(/\//g, " ").replace(/\s+/g, " ").trim();
+  return reformatted && reformatted !== query.trim() ? reformatted : null;
+}
+
 interface IngredientSearchMatch {
   id: number;
 }
@@ -359,6 +379,10 @@ export async function lookupIngredientMacros(query: string): Promise<IngredientM
   if (!match) {
     const glutenFreeStripped = glutenFreeQualifierStripFallback(query);
     if (glutenFreeStripped) match = await searchIngredient(glutenFreeStripped, apiKey);
+  }
+  if (!match) {
+    const slashReformatted = slashToSpaceFallback(query);
+    if (slashReformatted) match = await searchIngredient(slashReformatted, apiKey);
   }
   if (!match) return null;
 
