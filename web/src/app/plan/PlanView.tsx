@@ -247,8 +247,8 @@ export function PlanBoard({
               Export to Calendar
             </button>
           )}
-          <Button variant="primary" onClick={handleGenerate} disabled={generating}>
-            {generating ? "Generating…" : plan ? "Regenerate" : "Generate my meal plan"}
+          <Button variant="primary" onClick={handleGenerate} loading={generating} loadingText="Generating">
+            {plan ? "Regenerate" : "Generate my meal plan"}
           </Button>
         </div>
       </div>
@@ -595,10 +595,11 @@ function MealCard({
                 <Button
                   variant="secondary"
                   onClick={onSwap}
-                  disabled={swapping}
+                  loading={swapping}
+                  loadingText="Swapping"
                   className="px-2 py-1 text-xs"
                 >
-                  {swapping ? "Swapping…" : "Swap"}
+                  Swap
                 </Button>
               </div>
             </div>
@@ -756,7 +757,13 @@ function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView; mealPl
 
           <div className="mt-4">
             <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Instructions</h3>
-            {loading && <p className="mt-2 text-sm text-muted">Loading…</p>}
+            {loading && (
+              <div className="mt-2 flex flex-col gap-2" aria-label="Loading instructions">
+                <div className="h-3.5 w-full animate-pulse motion-reduce:animate-none rounded bg-border" />
+                <div className="h-3.5 w-5/6 animate-pulse motion-reduce:animate-none rounded bg-border" />
+                <div className="h-3.5 w-2/3 animate-pulse motion-reduce:animate-none rounded bg-border" />
+              </div>
+            )}
             {!loading && loadError && (
               <div className="mt-2 flex items-center gap-3">
                 <p className="text-sm text-muted">{loadError}</p>

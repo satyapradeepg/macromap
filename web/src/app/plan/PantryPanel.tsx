@@ -94,10 +94,11 @@ export function PantryPanel({
               <Button
                 variant="ghost"
                 onClick={() => handleRemove(item.id)}
-                disabled={removingId === item.id}
+                loading={removingId === item.id}
+                loadingText="Removing"
                 className="px-0 py-0 text-xs"
               >
-                {removingId === item.id ? "Removing…" : "Remove"}
+                Remove
               </Button>
             </li>
           ))}
@@ -140,8 +141,15 @@ export function PantryPanel({
           placeholder="Note (optional)"
           className="w-32"
         />
-        <Button type="submit" variant="primary" disabled={adding || !name.trim()} className="px-3 py-1.5">
-          {adding ? "Adding…" : "Add"}
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={!name.trim()}
+          loading={adding}
+          loadingText="Adding"
+          className="px-3 py-1.5"
+        >
+          Add
         </Button>
       </form>
 
