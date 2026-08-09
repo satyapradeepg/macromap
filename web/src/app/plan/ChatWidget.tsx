@@ -9,9 +9,10 @@
 // router.push navigation elsewhere in this app, not a server action call
 // itself).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
+import { Spinner } from "@/components/ui/Spinner";
 import { sendChatMessage } from "./chatActions";
 import type { PlanSlotView, PlanView } from "./data";
 import type { PantryItemView } from "./pantryData";
@@ -21,6 +22,17 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+// A profile/constraint edit triggers a real plan regeneration
+// (OnboardingWizard.tsx's own GENERATING_STATUS_MESSAGES documents this
+// same pipeline running 50-90s+) -- but unlike onboarding's screen, THIS
+// widget doesn't know in advance which kind of request a message is, and
+// most chat turns finish in a few seconds. So: an immediate typing
+// indicator covers the common fast case, and only after a real delay does
+// the message change to something that explains the one known slow case,
+// rather than fabricating fake pipeline "stages" for a request that isn't
+// actually regenerating anything.
+const SLOW_REQUEST_THRESHOLD_MS = 8000;
 
 export function ChatWidget({
   onSlotReplaced,
@@ -35,7 +47,13 @@ export function ChatWidget({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [slowRequest, setSlowRequest] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, sending]);
 
   async function handleSend(e: FormEvent) {
     e.preventDefault();
@@ -45,10 +63,14 @@ export function ChatWidget({
     setMessages((prev) => [...prev, { role: "user", content: message }]);
     setInput("");
     setSending(true);
+    setSlowRequest(false);
     setError(null);
 
+    const slowTimer = setTimeout(() => setSlowRequest(true), SLOW_REQUEST_THRESHOLD_MS);
     const result = await sendChatMessage({ message });
+    clearTimeout(slowTimer);
     setSending(false);
+    setSlowRequest(false);
 
     if (result.error) {
       setError(result.error);
@@ -111,6 +133,17 @@ export function ChatWidget({
             </div>
           </div>
         ))}
+        {sending && (
+          <div className="flex justify-start">
+            <div className="flex max-w-[85%] items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted">
+              <Spinner className="h-3.5 w-3.5 shrink-0" />
+              {slowRequest
+                ? "Still working on it -- if this involves regenerating your plan, that can take up to a couple of minutes."
+                : "Thinking…"}
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
       </div>
 
       {error && <p className="px-3 pb-1 text-sm text-red-500">{error}</p>}
