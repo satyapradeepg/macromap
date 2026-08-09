@@ -87,6 +87,44 @@ function emptyResult(error: string): SendChatMessageResult {
   };
 }
 
+export interface ChatHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// Lets the widget resume a conversation across a page reload instead of
+// starting blank every time, even though the transcript has been
+// persisted server-side (chat_messages) since PR1. Capped at the most
+// recent 50 rows (~25 exchanges) -- plenty for "what were we just
+// talking about," not meant as a full searchable history.
+export async function getChatHistory(): Promise<ChatHistoryMessage[]> {
+  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  const { data } = await supabase
+    .from("chat_messages")
+    .select("role, content")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  return (data ?? []).reverse().map((row) => ({ role: row.role as "user" | "assistant", content: row.content }));
+}
+
+// The only way to reset a conversation today short of deleting the whole
+// account (DangerZone.tsx) -- deletes every persisted row for this user,
+// not just the client-side view, so a reload afterward doesn't silently
+// resurrect what was just "cleared."
+export async function clearChatHistory(): Promise<{ error: string | null }> {
+  const supabase = await createClient();
+  const user = await getCurrentUser();
+  if (!user) return { error: "No active session — refresh the page and try again." };
+
+  const { error } = await supabase.from("chat_messages").delete().eq("user_id", user.id);
+  return { error: error?.message ?? null };
+}
+
 interface WideProfileRow {
   weight_kg: number;
   height_cm: number;
