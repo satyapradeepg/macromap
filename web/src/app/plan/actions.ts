@@ -17,7 +17,7 @@ import { resolveRecipeInstructions } from "@/lib/mealplan/recipeInstructions";
 import { generateAiComposedRecipeSteps } from "@/lib/mealplan/aiComposedRecipeInstructions";
 import { getMostRecentPlan, type PlanSlotView, type PlanView } from "./data";
 
-interface ProfileRow {
+export interface ProfileRow {
   daily_calories: number;
   daily_protein_g: number;
   daily_carbs_g: number;
@@ -29,7 +29,14 @@ interface ProfileRow {
   weekly_budget_usd: number | null;
 }
 
-async function loadProfile(
+// Exported for reuse by chatActions.ts (the conversational assistant, F11)
+// -- swap/pantry-edit/meal-edit chat intents only need this same narrow
+// column set; only the profile/constraint-edit intent needs a wider query,
+// which chatActions.ts adds itself rather than widening this one (this
+// exact column list is RLS/correctness-sensitive, not stylistic
+// boilerplate, so it isn't duplicated the way this codebase's Claude-call
+// fetch boilerplate deliberately is).
+export async function loadProfile(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<ProfileRow | null> {
@@ -46,7 +53,8 @@ async function loadProfile(
 // F6/F3 pantry-aware querying. Empty array is the correct/expected result
 // until F6's entry UI exists — pantry entry is fully optional (PRD 7.3 F6),
 // so no rows here just means generation behaves exactly as before.
-async function loadPantryItems(
+// Exported for reuse by chatActions.ts, same rationale as loadProfile above.
+export async function loadPantryItems(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<PantryItem[]> {
