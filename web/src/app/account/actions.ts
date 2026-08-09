@@ -54,6 +54,12 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
   const { error: pantryError } = await supabase.from("pantry_items").delete().eq("user_id", user.id);
   if (pantryError) return { error: pantryError.message };
 
+  // Added with F11's conversational assistant (0035) -- no FK cascade
+  // exists post-0034, so this needs the same explicit delete as every
+  // other user-owned table here, or it's orphaned forever.
+  const { error: chatError } = await supabase.from("chat_messages").delete().eq("user_id", user.id);
+  if (chatError) return { error: chatError.message };
+
   // meal_plan_slots/meal_plan_slot_addons cascade off this via their
   // existing uuid FKs -- no separate delete needed for either.
   const { error: plansError } = await supabase.from("meal_plans").delete().eq("user_id", user.id);

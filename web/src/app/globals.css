@@ -55,6 +55,50 @@
   --color-muted: var(--muted);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
+  /* First custom motion in this app (2026-08-09, ChatWidget) -- every
+     other animated element (Spinner, RecipeModal's skeleton) uses
+     Tailwind's built-in animate-spin/animate-pulse. Kept deliberately
+     small/subtle to match the app's flat, restrained house style rather
+     than reading as flashy. Always paired with motion-reduce:animate-none
+     at each call site, same accessibility convention those two follow. */
+  --animate-chat-in: chat-in 180ms ease-out;
+  --animate-chat-message-in: chat-message-in 200ms ease-out;
+  --animate-chat-bounce: chat-bounce 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes chat-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 body {

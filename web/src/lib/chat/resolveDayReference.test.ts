@@ -66,4 +66,24 @@ describe("resolveDayReference", () => {
   it("returns null when no day reference is present", () => {
     expect(resolveDayReference("what's in my pantry", WEDNESDAY)).toBeNull();
   });
+
+  // The UI's own tabs are "Day 1" (today) through "Day 7" -- 1-indexed,
+  // unlike the internal 0-indexed dayIndex. Found live 2026-08-09: "day 7"
+  // (the UI's last tab) used to fall through unresolved, reach the
+  // classifier, and get told "there's no day 7" -- technically true of
+  // dayIndex, deeply confusing since the user was reading the number off
+  // the actual screen.
+  it("resolves 'day N' matching the UI's 1-indexed tabs to dayIndex N-1", () => {
+    expect(resolveDayReference("swap my day 1 breakfast", WEDNESDAY)).toEqual({ dayIndex: 0, matchedPhrase: "day 1" });
+    expect(resolveDayReference("swap my day 7 breakfast", WEDNESDAY)).toEqual({ dayIndex: 6, matchedPhrase: "day 7" });
+  });
+
+  it("resolves 'day N' regardless of spacing/case", () => {
+    expect(resolveDayReference("Day3 lunch please", WEDNESDAY)).toEqual({ dayIndex: 2, matchedPhrase: "day3" });
+  });
+
+  it("returns null for a 'day N' outside the UI's valid 1-7 range", () => {
+    expect(resolveDayReference("swap my day 8 breakfast", WEDNESDAY)).toBeNull();
+    expect(resolveDayReference("swap my day 0 breakfast", WEDNESDAY)).toBeNull();
+  });
 });

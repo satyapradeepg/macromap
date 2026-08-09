@@ -12,6 +12,15 @@ export interface CandidateIngredient {
   unit: string;
   metricAmount: number;
   metricUnit: string;
+  // Additive (F11 chat-driven meal editing, 2026-08-09) -- only ever set
+  // for newly AI-composed ingredients (orchestrate.ts's
+  // composeProposalToCandidateDetailed/BestEffort); real Spoonacular
+  // recipes and everything generated before this change have no role at
+  // all. Nothing in this module reads it -- it exists purely so a FUTURE
+  // chat edit doesn't need to re-infer role for a slot composed after
+  // this change (today's edit pipeline never depends on it being
+  // present, see aiMealComposition.ts's composeMealFromEditDetailed).
+  role?: "protein" | "carb" | "fat" | "fixed";
 }
 
 export interface RecipeCandidate {
