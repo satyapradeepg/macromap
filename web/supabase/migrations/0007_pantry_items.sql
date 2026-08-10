@@ -1,9 +1,9 @@
 -- Epic E2 rework (F5 Pantry Log, moved up from V2 per the pantry-first
 -- architecture pivot — see docs/PRD-MacroMap.md 7.3 F5, docs/ai-agents.md
--- Agent 3). MVP scope only: manual entry with rough quantities. Barcode
--- entry (F8) and 7-day auto-expiry remain V2 and are not modeled here —
--- add as separate migrations when F8 is built, matching this repo's
--- existing pattern (e.g. 0002/0003 each scoped to one addition).
+-- Agent 3). MVP scope only: manual entry with rough quantities. 7-day
+-- auto-expiry remains V2 and is not modeled here — add as a separate
+-- migration if built, matching this repo's existing pattern (e.g.
+-- 0002/0003 each scoped to one addition).
 --
 -- spoonacular_ingredient_id is nullable and resolved lazily via
 -- /food/ingredients/search (live-confirmed to work, 1.0pt/call) — needed

@@ -28,8 +28,7 @@ create table if not exists public.profiles (
   allergies text[] not null default '{}',
   dislikes text[] not null default '{}',
 
-  -- F2 optional budget + region (zip feeds the Price Agent's regional
-  -- lookups in Epic E2 — see docs/ai-agents.md Agent 3).
+  -- F2 optional budget + region.
   weekly_budget_usd numeric(7, 2),
   zip_code text,
 

@@ -10,7 +10,7 @@
 --
 -- meal_plan_slots: the 21 claimed recipes for a plan (OQ7 concurrency +
 -- claim-resolution). ingredients is persisted here for F4's later grocery
--- dedup (OQ4) — F3/F9 don't read it back, just don't throw it away.
+-- dedup (OQ4) — F3 doesn't read it back, just doesn't throw it away.
 
 create table if not exists public.meal_plans (
   id uuid primary key default gen_random_uuid(),
