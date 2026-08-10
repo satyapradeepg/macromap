@@ -1,6 +1,17 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono, Fraunces } from "next/font/google";
+import { ToastHost } from "@/components/ui/Toast";
 import "./globals.css";
+
+// Runs before hydration/paint so an explicit stored preference applies
+// immediately -- without this, the page would render with globals.css's
+// prefers-color-scheme default first, then visibly flip once React
+// hydrates and reads localStorage. Only sets the attribute when the user
+// has made an explicit choice; otherwise data-theme stays unset and
+// globals.css's prefers-color-scheme media query drives the OS default,
+// matching ThemeToggle.tsx's model of the attribute as an override, not
+// a mirror of every possible state.
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("theme");if(t==="dark"||t==="light"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();`;
 
 const inter = Inter({
   variable: "--font-inter",
@@ -38,6 +49,9 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} ${fraunces.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       {/* overflow-x-hidden is a hard backstop: the page body must never
           scroll horizontally, regardless of what a future page's own
           internal flex/grid structure does -- min-w-0 below (and on each
@@ -56,6 +70,7 @@ export default function RootLayout({
             page's own <main>) so it's automatic for every current and
             future page, not something to remember to re-add each time. */}
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        <ToastHost />
       </body>
     </html>
   );
