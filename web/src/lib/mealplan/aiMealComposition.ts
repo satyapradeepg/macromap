@@ -1225,6 +1225,19 @@ export function describeRejectionForChatUser(reason: CompositionRejection): stri
 // about explicitly rather than silently "succeeding" at doing nothing.
 const NO_OP_AMOUNT_TOLERANCE_G = 1;
 
+// A flat 1g tolerance absorbs unit-conversion rounding noise on
+// normal-scale ingredients, but live-confirmed 2026-08-10: for a
+// sub-gram seasoning (e.g. red pepper flakes at 0.3g), a real, deliberate
+// ~3x increase to 1g falls entirely inside that 1g band and gets
+// swallowed as a "no-op" -- the edit is silently discarded while the
+// user is told it succeeded. Capping the tolerance at half the
+// ingredient's own magnitude keeps the original 1g ceiling for
+// bulk ingredients (where it's just noise) while still catching a
+// proportionally-large change on a tiny base amount.
+function noOpToleranceFor(a: number, b: number): number {
+  return Math.min(NO_OP_AMOUNT_TOLERANCE_G, Math.max(a, b) * 0.5);
+}
+
 export function isNoOpEdit(
   current: Array<{ name: string; amountG: number }>,
   proposedMeal: ComposedMeal,
@@ -1236,7 +1249,7 @@ export function isNoOpEdit(
     const matchIndex = remaining.findIndex(
       (p) =>
         p.ingredientName.trim().toLowerCase() === currentItem.name.trim().toLowerCase() &&
-        Math.abs(p.amountG - currentItem.amountG) < NO_OP_AMOUNT_TOLERANCE_G,
+        Math.abs(p.amountG - currentItem.amountG) < noOpToleranceFor(p.amountG, currentItem.amountG),
     );
     if (matchIndex === -1) return false;
     remaining.splice(matchIndex, 1);
@@ -1244,7 +1257,11 @@ export function isNoOpEdit(
   return true;
 }
 
-export type ComposeEditResult = { ok: true; meal: ComposedMeal } | { ok: false; reason: CompositionRejection };
+// titleRepaired: true when composeMealFromEditDetailed had to deterministically
+// fix a title/ingredient inconsistency (see its own comment on why) -- callers
+// should disclose this to the user rather than silently persisting a renamed
+// dish.
+export type ComposeEditResult = { ok: true; meal: ComposedMeal; titleRepaired: boolean } | { ok: false; reason: CompositionRejection };
 
 // F11 chat-driven meal editing. Reuses every existing grounding/safety
 // helper from composeMealFromProposalDetailed above, but is deliberately
@@ -1346,12 +1363,13 @@ function isWordSubsetEitherWay(a: string[], b: string[]): boolean {
 // of role.
 //
 // So: an ingredient that already existed in the meal before this edit
-// ALWAYS skips the out-of-bounds check (any role) -- its amount isn't a
-// new judgment being introduced, it's a real recipe's own pre-existing
-// data, so the realism bound (which exists to catch a genuinely invented
-// outlier) doesn't apply to it in the first place. A failed LOOKUP,
-// however, is only forgiven (dropped from the result) for `fixed` role --
-// `fixed` is documented above as "isn't macro-solved" (a garnish/aromatic,
+// skips the out-of-bounds check (any role) WHEN ITS AMOUNT IS UNCHANGED --
+// that case isn't a new judgment being introduced, it's a real recipe's
+// own pre-existing data being re-expressed (e.g. a unit conversion), so
+// the realism bound (which exists to catch a genuinely invented outlier)
+// doesn't apply to it in the first place. A failed LOOKUP, however, is
+// only forgiven (dropped from the result) for `fixed` role -- `fixed` is
+// documented above as "isn't macro-solved" (a garnish/aromatic,
 // low-stakes by design), so dropping one is a minor omission; silently
 // dropping a pre-existing protein/carb/fat ingredient that fails to
 // ground would misrepresent the meal's actual macro totals, a
@@ -1361,25 +1379,95 @@ function isWordSubsetEitherWay(a: string[], b: string[]): boolean {
 // isOpenEndedIngredientUnsafeFor above regardless) and only ever apply to
 // an ingredient genuinely already in the meal -- a NEW ingredient of any
 // role, in either failure mode, is held to the full original standard.
+//
+// Live-confirmed 2026-08-10, a real macro-accuracy hole: the bounds
+// exemption above USED TO be unconditional on amount too -- "add 2kg of
+// black beans" to a real chili (black beans already existed there)
+// sailed through with zero realism check, ballooning that single dinner
+// to ~2900 calories, since the amount was never compared to what it
+// actually was before this edit. The exemption's own rationale ("isn't a
+// new judgment, it's pre-existing data") only holds when the amount is
+// genuinely carried over -- a user explicitly requesting a huge new
+// quantity for an ingredient that merely happens to already be in the
+// dish IS a fresh judgment, same as inventing a brand-new ingredient at
+// that amount. Fixed by comparing the proposed amount against the
+// ingredient's amount BEFORE this edit (passed in via
+// preExistingIngredients): exempt only when unchanged (within
+// PRE_EXISTING_AMOUNT_UNCHANGED_TOLERANCE_G, just enough to absorb
+// unit-conversion float noise -- the historical "beer"/"broth" cases
+// above were never actually re-sized by the model, just re-expressed at
+// the same value); a substantially different amount is held to the same
+// realistic-bounds check (with the same graceful clamp-offer UX) as any
+// other ingredient. Falls back to the old fully-exempt behavior when the
+// original amount isn't known in grams (e.g. a real recipe's native
+// non-metric unit) -- conservative, since that's a case this function
+// genuinely can't evaluate, not evidence the amount is safe.
+const PRE_EXISTING_AMOUNT_UNCHANGED_TOLERANCE_G = 2;
+
+export interface PreExistingIngredientRef {
+  name: string;
+  // null when the amount isn't known in grams (e.g. a real recipe's
+  // native non-metric unit) -- falls back to the old unconditional
+  // exemption rather than guessing.
+  amountG: number | null;
+}
+
 export async function composeMealFromEditDetailed(
   edit: MealEditProposal,
   ctx: DietaryContext,
   fetchIngredientMacros: FetchIngredientMacrosFn,
-  preExistingIngredientNames: string[] = [],
+  preExistingIngredients: PreExistingIngredientRef[] = [],
 ): Promise<ComposeEditResult> {
-  const preExistingWordSets = preExistingIngredientNames
-    .map((n) => nameWords(normalizeForPreExistingMatch(n)))
-    .filter((w) => w.length > 0);
+  const preExistingWordSets = preExistingIngredients
+    .map((p) => ({ words: nameWords(normalizeForPreExistingMatch(p.name)), amountG: p.amountG }))
+    .filter((p) => p.words.length > 0);
   const isPreExistingIngredient = (name: string): boolean => {
     const words = nameWords(name);
     if (words.length === 0) return false;
-    return preExistingWordSets.some((existingWords) => isWordSubsetEitherWay(words, existingWords));
+    return preExistingWordSets.some((existing) => isWordSubsetEitherWay(words, existing.words));
+  };
+  // Returns null (unknown) rather than throwing when no match is found --
+  // callers treat "unknown" the same conservative way as "not pre-existing
+  // at all" for this specific check.
+  const findPreExistingAmountG = (name: string): number | null => {
+    const words = nameWords(name);
+    if (words.length === 0) return null;
+    const match = preExistingWordSets.find((existing) => isWordSubsetEitherWay(words, existing.words));
+    return match?.amountG ?? null;
   };
   if (edit.ingredients.length === 0) return { ok: false, reason: { kind: "no_ingredients" } };
 
-  const mismatchedWord = findTitleIngredientMismatch(edit.dishName, edit.ingredients);
-  if (mismatchedWord) {
-    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: edit.dishName, mismatchedWord } };
+  // dishName is mutable from here on: a title/ingredient inconsistency
+  // gets ONE deterministic repair attempt (reusing this file's own
+  // best-effort composer's proven, bounded stripAllTitleMismatches) before
+  // hard-rejecting, at BOTH this early check and the final one below.
+  // Live-confirmed 2026-08-10, two distinct root causes: (1) the proposer
+  // self-censoring a request (e.g. declining a second protein) while
+  // leaving the title referencing the declined ingredient -- the caller's
+  // retry-with-feedback loop can often fix this one since the model
+  // controls both fields; (2) Spoonacular's OWN grounding renaming an
+  // ingredient to its canonical name (e.g. a "ground beef" search
+  // resolving to "ground chuck") AFTER the early check already passed --
+  // no amount of retry-with-feedback can fix this one, since the model
+  // never sees or controls Spoonacular's canonical name, so a
+  // deterministic repair is the only real fix. Never touches ingredients
+  // (composed further below is unaffected either way), so every safety/
+  // duplicate-role/amount check still runs in full against exactly what
+  // was proposed/grounded -- and disclosed via `titleRepaired` rather
+  // than silently swapping the title in, matching this codebase's "an
+  // imperfect but honest correction beats an undisclosed wrong claim"
+  // precedent.
+  let dishName = edit.dishName;
+  let titleRepaired = false;
+  const earlyMismatch = findTitleIngredientMismatch(dishName, edit.ingredients);
+  if (earlyMismatch) {
+    const repaired = stripAllTitleMismatches(dishName, edit.ingredients);
+    if (repaired.dishName.trim() && !findTitleIngredientMismatch(repaired.dishName, edit.ingredients)) {
+      dishName = repaired.dishName;
+      titleRepaired = true;
+    } else {
+      return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName, mismatchedWord: earlyMismatch } };
+    }
   }
 
   for (const ing of edit.ingredients) {
@@ -1426,7 +1514,15 @@ export async function composeMealFromEditDetailed(
       return { ok: false, reason: { kind: "ingredient_not_found", role: ing.role, ingredientName: ing.name } };
     }
     const bounds = PORTION_BOUNDS_G[ing.role];
-    if (!isPreExisting && !isRealisticAmount(ing.amountG, bounds)) {
+    const originalAmountG = isPreExisting ? findPreExistingAmountG(ing.name) : null;
+    const amountGenuinelyUnchanged = originalAmountG !== null && Math.abs(ing.amountG - originalAmountG) < PRE_EXISTING_AMOUNT_UNCHANGED_TOLERANCE_G;
+    // Exempt when pre-existing AND (unchanged from before this edit OR the
+    // original amount isn't known in grams) -- a substantially different
+    // amount on an otherwise-pre-existing ingredient is a fresh judgment,
+    // not carried-over data, and gets the same realistic-bounds check as
+    // any new ingredient (see this function's own comment above).
+    const exemptFromBoundsCheck = isPreExisting && (originalAmountG === null || amountGenuinelyUnchanged);
+    if (!exemptFromBoundsCheck && !isRealisticAmount(ing.amountG, bounds)) {
       return {
         ok: false,
         reason: { kind: "amount_out_of_bounds", role: ing.role, ingredientName: ing.name, amountG: ing.amountG, min: bounds.min, max: bounds.max },
@@ -1448,19 +1544,23 @@ export async function composeMealFromEditDetailed(
   // pre-existing fixed item's failed lookup CAN now silently drop it (see
   // above), so this also catches the dish name still referencing an
   // ingredient that got dropped, not just a hypothetical case.
-  const finalMismatch = findTitleIngredientMismatch(
-    edit.dishName,
-    composed.map((i) => ({ name: i.ingredientName })),
-  );
+  const composedNames = composed.map((i) => ({ name: i.ingredientName }));
+  const finalMismatch = findTitleIngredientMismatch(dishName, composedNames);
   if (finalMismatch) {
-    return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName: edit.dishName, mismatchedWord: finalMismatch } };
+    const repaired = stripAllTitleMismatches(dishName, composedNames);
+    if (repaired.dishName.trim() && !findTitleIngredientMismatch(repaired.dishName, composedNames)) {
+      dishName = repaired.dishName;
+      titleRepaired = true;
+    } else {
+      return { ok: false, reason: { kind: "title_ingredient_mismatch", dishName, mismatchedWord: finalMismatch } };
+    }
   }
 
   const anyCostUnknown = composed.some((i) => i.estimatedCostCents === null);
   return {
     ok: true,
     meal: {
-      dishName: edit.dishName,
+      dishName,
       ingredients: composed,
       totalCalories: composed.reduce((s, i) => s + i.caloriesKcal, 0),
       totalProteinG: composed.reduce((s, i) => s + i.proteinG, 0),
@@ -1468,5 +1568,6 @@ export async function composeMealFromEditDetailed(
       totalFatG: composed.reduce((s, i) => s + i.fatG, 0),
       totalEstimatedCostCents: !anyCostUnknown ? composed.reduce((s, i) => s + (i.estimatedCostCents ?? 0), 0) : null,
     },
+    titleRepaired,
   };
 }

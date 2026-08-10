@@ -319,6 +319,57 @@ function hasCategoryLabelExemption(haystack: string, word: string): boolean {
   return entry !== undefined && hasNegationQualifier(haystack, entry.coreWord);
 }
 
+// Mirror of hasSafePlantCompound's shape, own dedicated modifier list --
+// bare "flour" defaults to presumptively wheat-based (correct for the
+// common case, and hasCategoryLabelExemption above already covers the
+// explicitly-labeled "gluten-free flour" case), but a flour specifically
+// named for a non-wheat source is unambiguously safe regardless of
+// whether the name ALSO says "gluten-free" -- same reasoning as "coconut
+// milk" never needing to say "dairy-free" to be safe. Live-confirmed
+// 2026-08-10: "chickpea flour" (a real, common, inherently gluten-free
+// ingredient -- confirmed directly against Spoonacular's own ingredient
+// database) got flagged unsafe for a gluten_free profile purely because
+// the bare word "flour" matched, with no "-free" qualifier anywhere in
+// the name to trigger hasCategoryLabelExemption. Deliberately short and
+// specific, same "confirmed real collision, not speculative" discipline
+// as PLANT_MODIFIERS -- only well-known, unambiguously non-wheat flour
+// sources (rice/almond/coconut/corn/tapioca/potato are as unambiguous as
+// coconut/almond milk; besan/gram are just the common alternate names for
+// chickpea flour itself; teff added same session after "teff flour
+// injera bread" hit the identical shape -- teff is itself a gluten-free
+// ancient grain).
+const GLUTEN_FREE_FLOUR_MODIFIERS = ["chickpea", "besan", "gram", "rice", "almond", "coconut", "corn", "tapioca", "potato", "teff"];
+
+function hasSafeFlourCompound(haystack: string, word: string): boolean {
+  if (word !== "flour") return false;
+  if (GLUTEN_FREE_FLOUR_MODIFIERS.some((mod) => wordBoundaryIncludes(haystack, `${mod} ${word}`))) return true;
+  const reordered = commaSwapFallback(haystack);
+  return reordered !== null && GLUTEN_FREE_FLOUR_MODIFIERS.some((mod) => wordBoundaryIncludes(reordered, `${mod} ${word}`));
+}
+
+// Same false-positive shape as hasSafeFlourCompound above, for "bread"
+// instead of "flour" -- live-confirmed 2026-08-10: "injera" (a real,
+// traditional teff-based Ethiopian flatbread, unambiguously gluten-free
+// by definition) got flagged unsafe because the AI proposer's own naming
+// included the literal word "bread" (e.g. "teff flour injera bread").
+// Deliberately a single curated WHOLE DISH NAME, not a general "modifier
+// + bread" pattern like the flour case above -- unlike "rice flour"
+// (unambiguous on its own), a bread's other ingredients are more likely
+// to go undisclosed in a short ingredient name, so a generic "mentions a
+// safe grain somewhere" rule risks waving through a genuinely wheat-based
+// bread that happens to also mention rice/corn (e.g. "wheat and corn
+// bread"). Staying narrow to a whole name confirmed gluten-free BY
+// DEFINITION avoids that risk entirely. Add to this list only after
+// confirming live that the SAME shape recurs for another named bread, not
+// speculatively -- same discipline as PRE_EXISTING_NAME_ALIASES/
+// SAFE_ALCOHOL_COMPOUNDS.
+const SAFE_BREAD_COMPOUNDS = ["injera"];
+
+function hasSafeBreadCompound(haystack: string, word: string): boolean {
+  if (word !== "bread") return false;
+  return SAFE_BREAD_COMPOUNDS.some((c) => wordBoundaryIncludes(haystack, c));
+}
+
 // Mirror of hasSafePlantCompound's shape: a handful of common ingredient
 // names contain an ALCOHOL_SYNONYMS word as a real, space-separated
 // substring but carry no meaningful alcohol themselves -- "wine vinegar"
@@ -342,6 +393,8 @@ function containsAny(haystack: string, needles: string[]): string | null {
         !hasSafePlantCompound(haystack, n) &&
         !hasNegationQualifier(haystack, n) &&
         !hasCategoryLabelExemption(haystack, n) &&
+        !hasSafeFlourCompound(haystack, n) &&
+        !hasSafeBreadCompound(haystack, n) &&
         !hasAnimalDairySourceCompound(haystack, n) &&
         !hasSafeAlcoholCompound(haystack, n),
     ) ?? null

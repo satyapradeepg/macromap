@@ -2367,11 +2367,16 @@ export async function swapSlotCandidate(input: SwapSlotInput): Promise<SwapSlotR
     );
 
   const pantryTracker = input.pantryTracker ?? buildPantryRemainingTracker(input.pantryItems, new Map());
-  const cascade = await runCascadeForSlot(perMeal, fetcher, {
-    tier: input.tier,
-    budgetPerMealUsd,
-    pantryTracker,
-  });
+  const cascade = await runCascadeForSlot(
+    perMeal,
+    fetcher,
+    {
+      tier: input.tier,
+      budgetPerMealUsd,
+      pantryTracker,
+    },
+    "swap",
+  );
   if (cascade.blocked || cascade.rankedCandidates.length === 0) {
     return {
       candidate: null,

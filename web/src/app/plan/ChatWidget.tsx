@@ -29,7 +29,17 @@ interface ChatMessage {
 // themselves. Deliberately not auto-sent on click: fills the box so the
 // user can still edit ("swap tomorrow's dinner" -> "swap Friday's
 // dinner") before committing.
-const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "What's left in my week?", "I have chicken and rice"];
+// "I have chicken and rice" (the prior third suggestion) demonstrated the
+// pantry feature but was vague about what it'd do to a first-time user and
+// didn't showcase this app's actual flagship differentiator -- F11 chat
+// meal EDITING (add/remove/adjust a real ingredient), which none of the
+// three previously touched at all. Live-tested 2026-08-10 for reliability
+// before picking this specific wording: a plain seasoning add/increase
+// never conflicts with any dietary style or allergy and is never a
+// duplicate-role candidate, so it's virtually guaranteed to succeed
+// smoothly regardless of the viewer's own profile -- a bad first
+// impression here (an edge-case rejection) would undersell the feature.
+const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "Add extra black pepper to today's lunch", "What's left in my week?"];
 
 // A profile/constraint edit triggers a real plan regeneration
 // (OnboardingWizard.tsx's own GENERATING_STATUS_MESSAGES documents this

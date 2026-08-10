@@ -1076,7 +1076,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "Added more seitan.",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["bot beer"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "bot beer", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const beerLine = result.meal.ingredients.find((i) => i.ingredientName === "beer");
@@ -1101,7 +1101,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "Added seitan.",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["strong mushroom broth"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "strong mushroom broth", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.meal.ingredients).toHaveLength(1);
@@ -1120,7 +1120,7 @@ describe("composeMealFromEditDetailed", () => {
       changeSummary: "n/a",
     };
     // "unobtainium broth" is NOT in the pre-existing list -- a genuinely new addition.
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "seitan cutlets", amountG: null }]);
     expect(result).toEqual({
       ok: false,
       reason: { kind: "ingredient_not_found", role: "fixed", ingredientName: "unobtainium broth" },
@@ -1134,7 +1134,7 @@ describe("composeMealFromEditDetailed", () => {
       ingredients: [{ name: "strong mushroom broth", role: "fixed", amountG: 2018 }],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["strong mushroom broth"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "strong mushroom broth", amountG: null }]);
     expect(result).toEqual({ ok: false, reason: { kind: "no_ingredients" } });
   });
 
@@ -1155,7 +1155,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "Added a lot of egg.",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["eggplant"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "eggplant", amountG: null }]);
     expect(result).toEqual({
       ok: false,
       reason: { kind: "amount_out_of_bounds", role: "fixed", ingredientName: "egg", amountG: 500, min: 1, max: 150 },
@@ -1176,7 +1176,7 @@ describe("composeMealFromEditDetailed", () => {
       changeSummary: "Added beer.",
     };
     // "beer" is NOT in the pre-existing list this time -- it's a new addition.
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["seitan cutlets"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "seitan cutlets", amountG: null }]);
     expect(result).toEqual({
       ok: false,
       reason: { kind: "amount_out_of_bounds", role: "fixed", ingredientName: "beer", amountG: 426.6, min: 1, max: 150 },
@@ -1202,12 +1202,52 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["carrots"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "carrots", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const carrotLine = result.meal.ingredients.find((i) => i.ingredientName === "carrots");
       expect(carrotLine?.amountG).toBe(341);
     }
+  });
+
+  it("still exempts a pre-existing ingredient's bounds check when its KNOWN original amount is genuinely unchanged (float/rounding noise only)", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      carrots: { id: 5, name: "carrots", caloriesPer100g: 41, proteinGPer100g: 0.9, carbsGPer100g: 10, fatGPer100g: 0.2, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Stew",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        { name: "carrots", role: "carb", amountG: 341.4 },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "carrots", amountG: 341 }]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("live-confirmed 2026-08-10: a pre-existing ingredient's SUBSTANTIALLY changed amount is no longer exempt -- 'add 2kg of black beans' to a real chili that already had black beans ballooned that meal to ~2900 calories with zero realism check", async () => {
+    const fetchMacros = lookupFrom({
+      "seitan cutlets": seitan,
+      "black beans": { id: 6, name: "black beans", caloriesPer100g: 132, proteinGPer100g: 8.9, carbsGPer100g: 24, fatGPer100g: 0.5, estimatedCostCentsPer100g: null },
+    });
+    const edit: MealEditProposal = {
+      dishName: "Seitan Chili",
+      ingredients: [
+        { name: "seitan cutlets", role: "protein", amountG: 150 },
+        // The chili already had ~140g of black beans; the user's edit
+        // requests adding a full 2kg more, a genuine new judgment, not
+        // carried-over recipe data.
+        { name: "black beans", role: "carb", amountG: 2140, isPreExisting: true },
+      ],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "black beans", amountG: 140 }]);
+    expect(result).toEqual({
+      ok: false,
+      reason: { kind: "amount_out_of_bounds", role: "carb", ingredientName: "black beans", amountG: 2140, min: 15, max: 250 },
+    });
   });
 
   it("still rejects an out-of-bounds amount for a genuinely NEW ingredient in a non-fixed role", async () => {
@@ -1236,7 +1276,7 @@ describe("composeMealFromEditDetailed", () => {
       ingredients: [{ name: "unfindable protein", role: "protein", amountG: 150 }],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["unfindable protein"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "unfindable protein", amountG: null }]);
     expect(result).toEqual({
       ok: false,
       reason: { kind: "ingredient_not_found", role: "protein", ingredientName: "unfindable protein" },
@@ -1260,7 +1300,7 @@ describe("composeMealFromEditDetailed", () => {
     // the ORIGINAL current-ingredient description (as read from the slot,
     // e.g. Spoonacular's own "Beer" capitalization) may differ in case --
     // the pre-existing check must still recognize it as the same ingredient.
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["  Beer  "]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "  Beer  ", amountG: null }]);
     expect(result.ok).toBe(true);
   });
 
@@ -1284,7 +1324,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["pkt firm/extra tofu"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "pkt firm/extra tofu", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const tofuLine = result.meal.ingredients.find((i) => i.ingredientName === "firm tofu");
@@ -1312,7 +1352,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["group pepper"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "group pepper", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const pepperLine = result.meal.ingredients.find((i) => i.ingredientName === "black pepper");
@@ -1351,7 +1391,7 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["group pepper"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "group pepper", amountG: null }]);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const line = result.meal.ingredients.find((i) => i.ingredientName === "aromatic seasoning blend");
@@ -1397,12 +1437,12 @@ describe("composeMealFromEditDetailed", () => {
       ],
       changeSummary: "n/a",
     };
-    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, ["karo corn syrup"]);
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros, [{ name: "karo corn syrup", amountG: null }]);
     expect(result.ok).toBe(true);
     expect(fetchMacros).toHaveBeenCalledWith("karo corn syrup", "corn syrup");
   });
 
-  it("rejects a title/ingredient mismatch against the composed ingredients", async () => {
+  it("deterministically repairs a title/ingredient mismatch rather than rejecting (live-confirmed 2026-08-10: the AI retry-with-feedback for this isn't 100% reliable)", async () => {
     const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
     const edit: MealEditProposal = {
       dishName: "Seitan and Quinoa Bowl",
@@ -1410,7 +1450,54 @@ describe("composeMealFromEditDetailed", () => {
       changeSummary: "n/a",
     };
     const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
-    expect(result).toEqual({ ok: false, reason: { kind: "title_ingredient_mismatch", dishName: "Seitan and Quinoa Bowl", mismatchedWord: "quinoa" } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.meal.dishName).toBe("Seitan Bowl");
+      expect(result.titleRepaired).toBe(true);
+    }
+  });
+
+  it("still rejects when the repair would leave an empty (unrepairable) title", async () => {
+    const fetchMacros = lookupFrom({ "seitan cutlets": seitan });
+    const edit: MealEditProposal = {
+      dishName: "Quinoa",
+      ingredients: [{ name: "seitan cutlets", role: "protein", amountG: 150 }],
+      changeSummary: "n/a",
+    };
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result).toEqual({ ok: false, reason: { kind: "title_ingredient_mismatch", dishName: "Quinoa", mismatchedWord: "quinoa" } });
+  });
+
+  it("repairs a title mismatch introduced by Spoonacular's OWN post-grounding canonical rename (live-confirmed 2026-08-10: 'ground beef' search resolving to canonical 'ground chuck')", async () => {
+    const fetchMacros = vi.fn(async (query: string) => ({
+      id: 1,
+      // Simulates Spoonacular grounding "ground beef" to its own canonical
+      // "ground chuck" entry while leaving "pork shoulder" as-is.
+      name: query === "ground beef" ? "ground chuck" : query,
+      caloriesPer100g: 254,
+      proteinGPer100g: 17.2,
+      carbsGPer100g: 0,
+      fatGPer100g: 20,
+      estimatedCostCentsPer100g: null,
+    }));
+    const edit: MealEditProposal = {
+      dishName: "Pork and Beef Garbanzo",
+      ingredients: [
+        { name: "pork shoulder", role: "protein", amountG: 200 },
+        { name: "ground beef", role: "fixed", amountG: 100 },
+      ],
+      changeSummary: "n/a",
+    };
+    // Both ingredient names ("pork shoulder", "ground beef") satisfy the
+    // EARLY check fine -- the mismatch only appears after grounding
+    // renames "ground beef" to "ground chuck", which the final check
+    // catches and repairs.
+    const result = await composeMealFromEditDetailed(edit, NONE, fetchMacros);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.meal.dishName).toBe("Pork Garbanzo");
+      expect(result.titleRepaired).toBe(true);
+    }
   });
 
   it("rejects when an ingredient fails to ground", async () => {
@@ -1458,6 +1545,18 @@ describe("isNoOpEdit", () => {
     const current = [{ name: "seitan cutlets", amountG: 150 }];
     const proposed = proposedMeal([{ ingredientName: "seitan cutlets", amountG: 300 }]);
     expect(isNoOpEdit(current, proposed)).toBe(false);
+  });
+
+  it("does not swallow a deliberate small-quantity increase as a no-op (live-confirmed 2026-08-10: red pepper flakes 0.3g -> 1g)", () => {
+    const current = [{ name: "red pepper flakes", amountG: 0.3 }];
+    const proposed = proposedMeal([{ ingredientName: "red pepper flakes", amountG: 1 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(false);
+  });
+
+  it("still treats genuine sub-gram rounding noise as a no-op", () => {
+    const current = [{ name: "red pepper flakes", amountG: 0.3 }];
+    const proposed = proposedMeal([{ ingredientName: "red pepper flakes", amountG: 0.35 }]);
+    expect(isNoOpEdit(current, proposed)).toBe(true);
   });
 
   it("treats a different ingredient count as a real change", () => {

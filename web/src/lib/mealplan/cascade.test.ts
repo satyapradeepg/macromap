@@ -80,6 +80,28 @@ describe("runCascadeForSlot", () => {
       expect(result.blockingHint).toContain("won't fix this");
       expect(result.blockingHint).not.toContain("reducing it by");
     });
+
+    // Live-confirmed 2026-08-10, real production conversation: a user hit
+    // this exact block 3 times trying to swap breakfast toward Indian
+    // dishes (dosa, dosa with chicken curry, a protein curry with naan),
+    // and every reply told them to try "regenerating" -- there's no
+    // regenerate action reachable from a swap, and regenerating the whole
+    // week is a far bigger step than the single swap they wanted.
+    it("never mentions 'regenerating' for a swap-context block -- there's no regenerate action reachable from a swap", async () => {
+      const closeTarget = { proteinG: 58, calories: 500, carbsG: 40, fatG: 15 };
+      const fetch = vi.fn().mockResolvedValue([]);
+      const result = await runCascadeForSlot(closeTarget, fetch, rankOpts, "swap");
+      expect(result.blockingHint).toContain("58g");
+      expect(result.blockingHint).not.toContain("regenerat");
+      expect(result.blockingHint).toContain("swapping again");
+    });
+
+    it("defaults to the generation-context wording when no context is given, unchanged from before this fix", async () => {
+      const closeTarget = { proteinG: 58, calories: 500, carbsG: 40, fatG: 15 };
+      const fetch = vi.fn().mockResolvedValue([]);
+      const result = await runCascadeForSlot(closeTarget, fetch, rankOpts);
+      expect(result.blockingHint).toContain("regenerating");
+    });
   });
 });
 

@@ -37,8 +37,8 @@ describe("validateIntentClassification", () => {
       {
         kind: "edit_pantry",
         operations: [
-          { action: "add", itemName: "chicken breast", quantityText: "2 lbs" },
-          { action: "remove", itemName: "eggs", quantityText: null },
+          { action: "add", itemName: "chicken breast", quantityText: "2 lbs", amount: null, unit: null },
+          { action: "remove", itemName: "eggs", quantityText: null, amount: null, unit: null },
         ],
       },
     ]);
@@ -52,6 +52,42 @@ describe("validateIntentClassification", () => {
     expect(
       validateIntentClassification({ intents: [{ intent: "edit_pantry", pantryOperations: [{ action: "add" }] }] }),
     ).toBeNull();
+  });
+
+  it("extracts structured amount+unit when the model provides both, e.g. '2 lbs of chicken breast'", () => {
+    const result = validateIntentClassification({
+      intents: [
+        {
+          intent: "edit_pantry",
+          pantryOperations: [{ action: "add", itemName: "chicken breast", quantityText: "2 lbs", amount: 2, unit: "lbs" }],
+        },
+      ],
+    });
+    expect(result).toEqual([
+      {
+        kind: "edit_pantry",
+        operations: [{ action: "add", itemName: "chicken breast", quantityText: "2 lbs", amount: 2, unit: "lbs" }],
+      },
+    ]);
+  });
+
+  it("drops a one-sided amount/unit pair rather than trusting a malformed half", () => {
+    const amountOnly = validateIntentClassification({
+      intents: [{ intent: "edit_pantry", pantryOperations: [{ action: "add", itemName: "rice", amount: 2 }] }],
+    });
+    expect(amountOnly?.[0]).toEqual({ kind: "edit_pantry", operations: [{ action: "add", itemName: "rice", quantityText: null, amount: null, unit: null }] });
+
+    const unitOnly = validateIntentClassification({
+      intents: [{ intent: "edit_pantry", pantryOperations: [{ action: "add", itemName: "rice", unit: "lbs" }] }],
+    });
+    expect(unitOnly?.[0]).toEqual({ kind: "edit_pantry", operations: [{ action: "add", itemName: "rice", quantityText: null, amount: null, unit: null }] });
+  });
+
+  it("rejects a non-positive amount as if no amount was given", () => {
+    const result = validateIntentClassification({
+      intents: [{ intent: "edit_pantry", pantryOperations: [{ action: "add", itemName: "rice", amount: -1, unit: "lb" }] }],
+    });
+    expect(result?.[0]).toEqual({ kind: "edit_pantry", operations: [{ action: "add", itemName: "rice", quantityText: null, amount: null, unit: null }] });
   });
 
   it("accepts edit_profile with an add/remove list field and a set field", () => {

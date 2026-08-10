@@ -31,6 +31,7 @@ import {
   describeRejectionForChatUser,
   type MealEditProposal,
   type MealRole,
+  type PreExistingIngredientRef,
 } from "@/lib/mealplan/aiMealComposition";
 import { lookupIngredientMacrosCached } from "@/lib/mealplan/ingredientMacroCache";
 import type { DietaryContext } from "@/lib/mealplan/openEndedIngredientSafety";
@@ -52,8 +53,9 @@ export type ChatActionTaken =
       // composeMealFromEditDetailed with the same pre-existing-ingredient
       // context the original proposal had -- see that function's own
       // comment on why this matters for a real Spoonacular recipe's
-      // untouched ingredients.
-      preExistingIngredientNames: string[];
+      // untouched ingredients (both for identity AND, since 2026-08-10,
+      // for its amount-unchanged bounds exemption).
+      preExistingIngredients: PreExistingIngredientRef[];
     }
   | { kind: "confirm_pending_action" }
   | { kind: "pantry_edit"; operations: Array<{ action: "add" | "remove"; itemName: string }> }
@@ -205,14 +207,14 @@ async function handleSwapMeal(mealPlanId: string, dayIndex: number, mealType: Me
 async function handleEditPantry(
   supabase: SupabaseClient,
   userId: string,
-  operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null }>,
+  operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null; amount: number | null; unit: string | null }>,
 ): Promise<IntentHandlerResult> {
   const messages: string[] = [];
   let items = await getPantryItems(supabase, userId);
 
   for (const op of operations) {
     if (op.action === "add") {
-      const result = await addPantryItem({ name: op.itemName, quantityText: op.quantityText, amount: null, unit: null });
+      const result = await addPantryItem({ name: op.itemName, quantityText: op.quantityText, amount: op.amount, unit: op.unit });
       messages.push(result.error ? `Couldn't add ${op.itemName}: ${result.error}` : `Added ${op.itemName}${op.quantityText ? ` (${op.quantityText})` : ""}.`);
     } else {
       const match = findPantryItemByName(items, op.itemName);
@@ -361,7 +363,7 @@ async function applyMealEditResult(
   edit: MealEditProposal,
   dietaryCtx: DietaryContext,
   currentComposedIngredientsInGrams: Array<{ name: string; amountG: number }> | null,
-  preExistingIngredientNames: string[],
+  preExistingIngredients: PreExistingIngredientRef[],
   // Retry-with-feedback (2026-08-09, live-confirmed model-consistency
   // issue, since generalized beyond just duplicate_role): a real recipe
   // with several ingredients can get an inconsistent role assignment
@@ -381,14 +383,14 @@ async function applyMealEditResult(
   retryEditProposal?: (feedback: string) => Promise<MealEditProposal | null>,
 ): Promise<IntentHandlerResult> {
   let currentEdit = edit;
-  let result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+  let result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredients);
 
   if (!result.ok && result.reason.kind === "duplicate_role" && retryEditProposal) {
     const feedback = `you assigned more than one ingredient to the "${result.reason.role}" role -- exactly one ingredient may have this role; move every other one to "fixed".`;
     const retried = await retryEditProposal(feedback);
     if (retried) {
       currentEdit = retried;
-      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredients);
     }
   }
 
@@ -397,7 +399,7 @@ async function applyMealEditResult(
     const retried = await retryEditProposal(feedback);
     if (retried) {
       currentEdit = retried;
-      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredientNames);
+      result = await composeMealFromEditDetailed(currentEdit, dietaryCtx, lookupIngredientMacrosCached, preExistingIngredients);
     }
   }
 
@@ -415,7 +417,7 @@ async function applyMealEditResult(
           role,
           ingredientName,
           suggestedAmountG,
-          preExistingIngredientNames,
+          preExistingIngredients,
         },
       };
     }
@@ -515,9 +517,14 @@ async function applyMealEditResult(
     addon: null,
   };
 
+  // Disclose a title repair rather than silently persisting a renamed dish
+  // -- see composeMealFromEditDetailed's own comment on titleRepaired.
+  const reply = result.titleRepaired
+    ? `${currentEdit.changeSummary} (Renamed the dish to "${meal.dishName}" so its title matches the actual ingredients.)`
+    : currentEdit.changeSummary;
   return {
-    reply: currentEdit.changeSummary,
-    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: currentEdit.changeSummary },
+    reply,
+    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: reply },
     updatedSlot: slot,
     updatedWeeklyActual: weeklyActual,
   };
@@ -582,7 +589,16 @@ async function handleEditMealRecipe(
   if (!edit) return { reply: "I couldn't process that edit right now -- try rephrasing?", actionTaken: { kind: "error" } };
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
-  const preExistingIngredientNames = currentIngredients.map((i) => i.name);
+  // amountG is null (not "0" or some guessed conversion) when the current
+  // unit isn't already grams -- composeMealFromEditDetailed treats that as
+  // "can't evaluate" and falls back to its old fully-exempt behavior for
+  // this ingredient, same conservative default as before this field
+  // existed, rather than risk a wrong conversion silently under- or
+  // over-constraining a real recipe's own native-unit ingredient.
+  const preExistingIngredients: PreExistingIngredientRef[] = currentIngredients.map((i) => ({
+    name: i.name,
+    amountG: i.unit === "g" ? i.amount : null,
+  }));
   return applyMealEditResult(
     supabase,
     plan.id,
@@ -591,7 +607,7 @@ async function handleEditMealRecipe(
     edit,
     dietaryCtx,
     currentComposedInGrams,
-    preExistingIngredientNames,
+    preExistingIngredients,
     (feedback) =>
       proposeMealEditViaClaude({
         currentDishName: slot.recipeTitle,
@@ -651,7 +667,7 @@ async function resolvePendingClamp(
     clampedEdit,
     dietaryCtx,
     null,
-    pending.preExistingIngredientNames,
+    pending.preExistingIngredients,
   );
 }
 

@@ -33,7 +33,10 @@ export type ProfileOperation =
 export type ClassifiedIntent =
   | { kind: "swap_meal"; dayIndex: number; mealType: MealType }
   | { kind: "edit_meal_recipe"; dayIndex: number; mealType: MealType; editInstruction: string }
-  | { kind: "edit_pantry"; operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null }> }
+  | {
+      kind: "edit_pantry";
+      operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null; amount: number | null; unit: string | null }>;
+    }
   | { kind: "edit_profile"; operations: ProfileOperation[] }
   | { kind: "read_only_qa"; qaTopic: QaTopic; dayIndex: number | null; mealType: MealType | null }
   // Fallback path for the clamp-confirmation flow (F11 meal editing) --
@@ -106,7 +109,8 @@ const CLASSIFY_INTENT_TOOL = {
             },
             editInstruction: {
               type: "string",
-              description: "For edit_meal_recipe only (required) -- the user's requested change, verbatim or lightly cleaned up (e.g. 'remove the onions', 'double the chicken', 'swap the rice for quinoa').",
+              description:
+                "For edit_meal_recipe only (required) -- the user's requested change, verbatim or lightly cleaned up. Can be a small tweak ('remove the onions', 'double the chicken', 'swap the rice for quinoa') OR a full description of a completely different dish the user named or described ('change it to a masala dosa with paneer and potato', 'make it injera with a lentil stew') -- pass the WHOLE description through either way, never shorten it down to just a dish name.",
             },
             confirmed: {
               type: "boolean",
@@ -121,6 +125,16 @@ const CLASSIFY_INTENT_TOOL = {
                   action: { type: "string", enum: ["add", "remove"] },
                   itemName: { type: "string" },
                   quantityText: { type: "string", description: "Free-text quantity if the user gave one, e.g. '2 lbs'. Omit if none was mentioned." },
+                  amount: {
+                    type: "number",
+                    description:
+                      "For add only, if the user gave a clear numeric quantity: the number alone (e.g. 2 for '2 lbs', 500 for '500g'). Omit if no clear number was given.",
+                  },
+                  unit: {
+                    type: "string",
+                    description:
+                      "For add only, paired with amount: the unit word as the user said it (e.g. 'lb', 'lbs', 'g', 'kg', 'oz', 'cup', 'can'). Omit unless amount is also set.",
+                  },
                 },
                 required: ["action", "itemName"],
               },
@@ -172,8 +186,8 @@ ${resolvedDayIndex !== null ? `A deterministic parser already resolved a day ref
 ${pendingSuggestion ? `\nThe assistant's PREVIOUS message offered this pending suggestion, which the user hasn't confirmed or declined yet: "${pendingSuggestion}". If this message reads as a response to that (agreeing, declining, or is otherwise ambiguous about it), use confirm_pending_action. If it's clearly about something else entirely, ignore the pending suggestion and classify normally.` : ""}
 
 Classify this message into one or more of these intents:
-- swap_meal: the user wants a specific meal REPLACED WHOLESALE with a different dish entirely. Needs dayIndex and mealType.
-- edit_meal_recipe: the user wants to change something WITHIN a specific meal's existing recipe -- an ingredient quantity, adding/removing an ingredient, or substituting one ingredient for another (e.g. "remove the onions from tonight's dinner", "double the chicken in tomorrow's lunch", "swap the rice for quinoa"). Needs dayIndex, mealType, and editInstruction. Use this instead of swap_meal whenever the request is about MODIFYING the current dish, not replacing it with something different.
+- swap_meal: the user wants a DIFFERENT meal but does NOT say what it should actually be -- "swap tonight's dinner", "I don't like this, give me something else", "change lunch to something different". There is nothing here for you to act on beyond "not this one" -- swap_meal has no field for a dish description at all, it just picks a different real recipe automatically. Needs dayIndex and mealType.
+- edit_meal_recipe: the user describes what the meal should actually contain or be -- this covers BOTH a small ingredient-level tweak (a quantity, adding/removing one ingredient, substituting one ingredient) AND a full replacement described by name, cuisine, or ingredient list, e.g. "remove the onions from tonight's dinner", "double the chicken in tomorrow's lunch", "swap the rice for quinoa", "change breakfast to a masala dosa with paneer", "make dinner injera with a lentil stew", "turn lunch into falafel with hummus". Live-confirmed mistake to avoid (2026-08-10): a message naming a specific, completely different dish is still edit_meal_recipe, NEVER swap_meal, even though it sounds like a "wholesale replacement" -- the deciding question is only "did the user say what they want it to be," not "how much is changing." If they named or described it at all, however different from what's there now, use edit_meal_recipe with that full description as editInstruction; swap_meal has no way to honor it. Needs dayIndex, mealType, and editInstruction.
 - edit_pantry: the user is telling you what they have or don't have on hand (e.g. "I have chicken and rice", "I used up the eggs"). Needs pantryOperations.
 - edit_profile: the user wants to change something about their diet, allergies, dislikes, weight, height, age, activity level, or goal. Needs profileOperations. Diet/allergy/dislike changes are add/remove against their existing list (e.g. "I'm allergic to peanuts now" = add; "I'm not vegan anymore" = remove), never a full replacement. Weight/height/age/activity/goal/sex changes are a set (a new value).
 - read_only_qa: the user is asking a question, not asking for a change. Needs qaTopic ('remaining_weekly_macros' for "how many calories/protein/etc do I have left this week", 'specific_meal_details' for "what's in tonight's dinner" -- also set dayIndex/mealType for this one, 'today_summary' for a general "what's today look like", 'pantry_contents' for "what's in my pantry"/"what do I have on hand", 'unsupported' for anything else, e.g. budget/cost questions or something entirely unrelated to meal planning).
@@ -207,16 +221,25 @@ function validateOneIntent(raw: unknown): ClassifiedIntent | null {
     }
     case "edit_pantry": {
       if (!Array.isArray(obj.pantryOperations) || obj.pantryOperations.length === 0) return null;
-      const operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null }> = [];
+      const operations: Array<{ action: "add" | "remove"; itemName: string; quantityText: string | null; amount: number | null; unit: string | null }> =
+        [];
       for (const op of obj.pantryOperations) {
         if (typeof op !== "object" || op === null) return null;
         const o = op as Record<string, unknown>;
         if (o.action !== "add" && o.action !== "remove") return null;
         if (typeof o.itemName !== "string" || !o.itemName.trim()) return null;
+        // Require both or neither, same as addPantryItem's own contract --
+        // a malformed one-sided pair (model gave a unit but no number, or
+        // vice versa) is treated as "no structured quantity" rather than
+        // rejecting the whole operation over it.
+        const hasAmount = typeof o.amount === "number" && Number.isFinite(o.amount) && o.amount > 0;
+        const hasUnit = typeof o.unit === "string" && o.unit.trim().length > 0;
         operations.push({
           action: o.action,
           itemName: o.itemName,
           quantityText: typeof o.quantityText === "string" && o.quantityText.trim() ? o.quantityText : null,
+          amount: hasAmount && hasUnit ? (o.amount as number) : null,
+          unit: hasAmount && hasUnit ? (o.unit as string).trim() : null,
         });
       }
       return { kind: "edit_pantry", operations };

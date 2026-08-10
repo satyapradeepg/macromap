@@ -34,16 +34,17 @@ export async function runCascadeForSlot(
   target: { proteinG: number; calories: number; carbsG: number; fatG: number },
   fetchCandidates: FetchCandidatesFn,
   rankOpts: RankCandidatesOptions,
+  context: "generation" | "swap" = "generation",
 ): Promise<SlotCascadeResult> {
   const widestBounds = boundsForTier(target, "p30");
   const candidates = await fetchCandidates(widestBounds, "p30");
   if (candidates.length === 0) {
-    return { rankedCandidates: [], blocked: true, blockingHint: blockingHintFor(target) };
+    return { rankedCandidates: [], blocked: true, blockingHint: blockingHintFor(target, context) };
   }
 
   const ranked = rankCandidates(candidates, target, rankOpts);
   if (ranked.length === 0) {
-    return { rankedCandidates: [], blocked: true, blockingHint: blockingHintFor(target) };
+    return { rankedCandidates: [], blocked: true, blockingHint: blockingHintFor(target, context) };
   }
 
   return { rankedCandidates: ranked, blocked: false, blockingHint: null };
@@ -103,7 +104,22 @@ const TYPICALLY_ACHIEVABLE_PROTEIN_G = 50;
 // much protein), the same class of "don't paper over a genuine limit"
 // framing this project already applies elsewhere (e.g.
 // structuralCalorieFloorExceedsTarget's disclosure).
-function blockingHintFor(target: { proteinG: number; calories: number }): string {
+// context distinguishes the two real callers -- live-confirmed 2026-08-10
+// via an actual production conversation: a user tried repeatedly to swap
+// breakfast to something Indian (dosa, then dosa with chicken curry, then
+// a protein breakfast curry with naan), hit this exact block 3 times in a
+// row, and every reply told them to try "regenerating" -- nonsensical
+// advice for a single-meal SWAP (there's no regenerate action reachable
+// from a swap, and regenerating the whole week is a far bigger, more
+// disruptive step than what they're actually trying to do). "generation"
+// (the default, used by orchestrateGeneration) keeps the original wording
+// since "regenerating" genuinely is the next action there; "swap" (used
+// by swapSlotCandidate) points at the one lever that's actually real in
+// that context -- the daily target in the profile, then trying the swap
+// again -- without inventing a false promise about the exact gram amount
+// needed, since the per-meal/daily split ratio isn't something this
+// function can compute precisely.
+function blockingHintFor(target: { proteinG: number; calories: number }, context: "generation" | "swap" = "generation"): string {
   const proteinG = Math.round(target.proteinG);
   const gapAboveTypical = proteinG - TYPICALLY_ACHIEVABLE_PROTEIN_G;
 
@@ -112,7 +128,11 @@ function blockingHintFor(target: { proteinG: number; calories: number }): string
     // suggest the actual gap (rounded up to the nearest 5g), not a fixed
     // number that may not even apply.
     const suggestedReduction = Math.max(5, Math.ceil(gapAboveTypical / 5) * 5);
-    return `Your protein target for this meal is very high (${proteinG}g) — try reducing it by ${suggestedReduction}g and regenerating.`;
+    const action =
+      context === "swap"
+        ? "try lowering your daily protein target by a bit, then try swapping again"
+        : `try reducing it by ${suggestedReduction}g and regenerating`;
+    return `Your protein target for this meal is very high (${proteinG}g) — ${action}.`;
   }
 
   return `Your protein target for this meal is very high (${proteinG}g) for a single meal — a small tweak won't fix this. Try lowering your overall daily protein or calorie goal to bring individual meal targets down to a realistic range.`;

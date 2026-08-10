@@ -342,6 +342,47 @@ describe("isOpenEndedIngredientUnsafeFor", () => {
       expect(isOpenEndedIngredientUnsafeFor("all-purpose flour", ctx)).not.toBeNull();
     });
 
+    // Live-confirmed 2026-08-10: "chickpea flour" (a real, common,
+    // inherently gluten-free ingredient -- confirmed directly against
+    // Spoonacular's own ingredient database) got flagged unsafe purely
+    // because the bare word "flour" matched, with no "gluten-free"
+    // qualifier anywhere in the name to trigger the category-label
+    // exemption above. Unlike "all-purpose flour"/"bread"/"pasta" (which
+    // default to wheat-based absent a qualifier), a flour specifically
+    // named for a non-wheat source is unambiguously safe on its own,
+    // same as "coconut milk" never needing to say "dairy-free".
+    it("does not flag a flour specifically named for a non-wheat source, with no 'gluten-free' qualifier needed (live-confirmed 2026-08-10)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("chickpea flour", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("besan flour", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("rice flour", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("almond flour", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("coconut flour", ctx)).toBeNull();
+    });
+
+    it("still flags plain/wheat flour even when a comma-reordered non-wheat-flour name would otherwise be adjacent (no false exemption bleed-through)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("wheat flour", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("self-rising flour", ctx)).not.toBeNull();
+    });
+
+    // Live-confirmed 2026-08-10: "teff flour injera bread" (the AI
+    // proposer's own naming for a real, traditional teff-based Ethiopian
+    // flatbread -- unambiguously gluten-free by definition) got flagged
+    // unsafe purely because the word "bread" matched, same false-positive
+    // shape as chickpea flour above.
+    it("does not flag injera (a real, unambiguously gluten-free teff flatbread) even though its name contains 'bread' (live-confirmed 2026-08-10)", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("injera bread", ctx)).toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("teff flour injera bread", ctx)).toBeNull();
+    });
+
+    it("still flags a genuinely wheat-based bread even when an unrelated safe grain is also mentioned in the name", () => {
+      const ctx: DietaryContext = { dietaryStyles: ["gluten_free"], allergies: [], dislikes: [] };
+      expect(isOpenEndedIngredientUnsafeFor("wheat and rice blend bread", ctx)).not.toBeNull();
+      expect(isOpenEndedIngredientUnsafeFor("corn rye bread", ctx)).not.toBeNull();
+    });
+
     it("does not flag egg-free mayonnaise/aioli/custard for an egg allergy (same category-label exemption, egg group)", () => {
       const ctx: DietaryContext = { dietaryStyles: [], allergies: ["egg"], dislikes: [] };
       expect(isOpenEndedIngredientUnsafeFor("egg-free mayonnaise", ctx)).toBeNull();
