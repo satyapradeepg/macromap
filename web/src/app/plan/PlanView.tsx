@@ -294,7 +294,17 @@ export function PlanBoard({
     // inspection (align-items resolved to "normal"/stretch, but the auto
     // margins from mx-auto override it regardless). Kept min-w-0 anyway
     // as cheap insurance against the OTHER cause resurfacing separately.
-    <main className="mx-auto w-full min-w-0 max-w-3xl px-6 py-16">
+    // pb-28 (not the top's py-16/pt-16) -- ChatWidget's collapsed launcher
+    // button is `fixed bottom-4 right-4`, so it floats over whatever
+    // content is currently at the bottom of the viewport rather than
+    // taking up normal flow space. The true, permanent version of that
+    // (not just a momentary mid-scroll overlap that clears on its own)
+    // is at the actual end of the page: without enough reserved space
+    // here, the last few lines of the Grocery list/Pantry sections can
+    // end up permanently stuck under the button with no further scrolling
+    // able to reveal them. 112px is a comfortable margin above the
+    // button's own ~60px footprint (height + its bottom-4 offset).
+    <main className="mx-auto w-full min-w-0 max-w-3xl px-6 pt-16 pb-28">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Your meal plan</h1>
         <div className="flex items-center gap-3">
