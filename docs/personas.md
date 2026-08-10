@@ -32,7 +32,6 @@ A single app that takes his weekly macro targets, generates a varied meal plan, 
 | F9 Recipe video links | Discovers new meals without leaving the app — drives variety |
 | F4 Grocery list | Replaces his Notes app; deduped quantities save time at checkout |
 | F10 Calendar export | Fits his data-driven, structured weekly routine |
-| F7 Meal ratings (V2) | Surfaces his favourite high-protein meals automatically over time |
 
 ### Quote
 > "I know exactly what I need to eat. I just don't want to spend my Sunday figuring out how to get there."
@@ -68,7 +67,6 @@ A frictionless Sunday routine: input her goal, get a plan, get a list, shop, don
 |---|---|
 | F3 Meal plan generation | Eliminates the multi-app Sunday session entirely |
 | F10 Calendar export | Meal plan in her calendar = no mid-week decision fatigue |
-| F5 Nutrition dashboard | Mid-week protein alerts catch adherence drift before it's too late |
 | F9 Recipe video links | Reduces drop-off when she encounters an unfamiliar recipe |
 | F4 Grocery list with prices | Budget awareness without having to track manually |
 | F11 Conversational plan assistant | When mid-week takeout breaks the plan, she can just tell the assistant to swap a meal or adjust rather than starting over — directly addresses her adherence-collapse pain point |
@@ -108,8 +106,6 @@ Free tier is the entry point. Would convert to Pro if the budget-aware grocery l
 | F6 Pantry log (Free, MVP) | Builds meals around what's already at home from day one — directly fixes his "no awareness of what's in the pantry" pain point, no longer a V2 wait |
 | F4 Grocery list (Free tier) | Stops him re-buying ingredients he already has |
 | F11 Conversational plan assistant (Free) | Can just tell it what's in his fridge instead of filling out a form — lowers the entry friction that made him bounce off other apps |
-| F8 Barcode scanning (V2) | Scans items after shopping to auto-populate pantry — removes manual entry friction |
-| Reddit deep-link | Free inspiration from r/EatCheapAndHealthy without leaving the app |
 | F3 Budget-aware planning (Pro) | The intended conversion trigger — if it demonstrably saves him money, he upgrades. **Currently at risk:** the stated budget doesn't yet constrain the real grocery total (see flag above) — resolve before leaning on this row for Jordan-targeted messaging |
 
 ### Quote

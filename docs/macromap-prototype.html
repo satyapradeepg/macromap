@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>MacroMap — Hit your macros. Stay on budget. Without the spreadsheets.</title>
-<meta name="description" content="MacroMap turns a weekly macro and budget goal into a full meal plan, a deduped grocery list, and a nutrition dashboard.">
+<meta name="description" content="MacroMap turns a weekly macro and budget goal into a full meal plan and a deduped grocery list.">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -406,7 +406,7 @@
   <div class="container">
     <span class="eyebrow">How it works</span>
     <h2>One weekly goal. A complete plan.</h2>
-    <p class="section-sub">Six steps, one continuous loop. Click through to see exactly what each one looks like.</p>
+    <p class="section-sub">Five steps, one continuous loop. Click through to see exactly what each one looks like.</p>
 
     <div class="demo">
       <div class="demo-stepper" id="demoStepper">
@@ -414,8 +414,7 @@
         <button class="demo-step-btn" data-step="2" onclick="goDemoStep(2)"><span class="num">2</span><span class="lbl">Set Goal</span></button>
         <button class="demo-step-btn" data-step="3" onclick="goDemoStep(3)"><span class="num">3</span><span class="lbl">Meal Plan</span></button>
         <button class="demo-step-btn" data-step="4" onclick="goDemoStep(4)"><span class="num">4</span><span class="lbl">Grocery List</span></button>
-        <button class="demo-step-btn" data-step="5" onclick="goDemoStep(5)"><span class="num">5</span><span class="lbl">Track</span></button>
-        <button class="demo-step-btn" data-step="6" onclick="goDemoStep(6)"><span class="num">6</span><span class="lbl">Weekly Cycle</span></button>
+        <button class="demo-step-btn" data-step="5" onclick="goDemoStep(5)"><span class="num">5</span><span class="lbl">Weekly Cycle</span></button>
       </div>
 
       <div class="demo-stage">
@@ -640,96 +639,24 @@
           </div>
         </div>
 
-        <!-- STEP 5 — Track -->
+        <!-- STEP 5 — Weekly Cycle -->
         <div class="demo-panel" id="demoStep5">
-          <div class="demo-visual glass">
-            <div class="demo-ring-card stagger-1">
-              <div class="demo-ring-wrap">
-                <svg viewBox="0 0 78 78">
-                  <circle cx="39" cy="39" r="33" fill="none" stroke="var(--border)" stroke-width="7"/>
-                  <circle class="progress" cx="39" cy="39" r="33" fill="none" stroke-width="7" stroke-dasharray="207" stroke-dashoffset="62" stroke-linecap="round"/>
-                </svg>
-                <div class="demo-ring-center mono">
-                  <div class="demo-ring-kcal">2,140</div>
-                  <div class="demo-ring-label" style="font-family:'Inter'">/ 3,200</div>
-                </div>
-              </div>
-              <div style="flex:1">
-                <div class="mock-bar-row"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar bar-green" style="width:71%;"></div></div><span class="val mono">142g</span></div>
-                <div class="mock-bar-row"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar bar-yellow" style="width:68%;"></div></div><span class="val mono">260g</span></div>
-              </div>
-            </div>
-            <div class="mock-title stagger-2" style="margin-bottom:8px">Today's meals</div>
-            <div id="demoMealLog" class="stagger-2">
-              <div class="demo-list-row">
-                <div class="demo-check checked" onclick="toggleDemoCheck(this)">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <span class="name struck">Oatmeal &amp; Scrambled Eggs</span>
-              </div>
-              <div class="demo-list-row">
-                <div class="demo-check checked" onclick="toggleDemoCheck(this)">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <span class="name struck">Chicken Stir Fry with Rice</span>
-              </div>
-              <div class="demo-list-row">
-                <div class="demo-check" onclick="toggleDemoCheck(this)">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <span class="name">Beef Bolognese Pasta</span>
-              </div>
-            </div>
-            <button class="demo-mini-btn stagger-3" style="margin-top:10px" onclick="logOffPlanMeal()">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 
-              Log something off-plan
-            </button>
-          </div>
-          <div class="demo-copy stagger-1">
-            <h3>Track</h3>
-            <p>A daily and weekly nutrition dashboard shows actual vs. target the moment you log a meal as eaten. Went off-plan for takeout mid-week? Log it anyway — the dashboard stays accurate.</p>
-            <div class="step-tags">
-              <span class="step-tag">Daily + weekly view</span>
-              <span class="step-tag">Off-plan logging supported</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- STEP 6 — Weekly Cycle -->
-        <div class="demo-panel" id="demoStep6">
           <div class="demo-visual glass">
             <div class="mock-title stagger-1">Week 7 — ready when you are</div>
             <div class="demo-cycle-card stagger-1">
               <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Pre-filled from your profile</div>
               <div style="font-size:14px;font-weight:600" class="mono">3,200 kcal · 200g P · $120</div>
             </div>
-            <div class="mock-title stagger-2" style="margin-bottom:8px">Last week's ratings <span class="badge-roadmap">ROADMAP</span></div>
-            <div class="demo-rating-row stagger-2">
-              <span>Chicken Stir Fry with Rice</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-            </div>
-            <div class="demo-rating-row stagger-3">
-              <span>Oatmeal &amp; Scrambled Eggs</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-            </div>
-            <div class="demo-rating-row stagger-3">
-              <span class="excluded">Beef Bolognese Pasta</span>
-              <span style="display:flex;align-items:center;gap:6px;color:var(--subtle)">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>
-                excluded next time
-              </span>
-            </div>
             <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="generateNextWeek()">
-              Generate next week's plan 
+              Generate next week's plan
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>
           </div>
           <div class="demo-copy stagger-1">
             <h3>Weekly Cycle</h3>
-            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week's macros, budget, and dietary constraints from your saved profile — no re-onboarding needed. Coming in a future release: meals you rate low will be automatically excluded from future plans.</p>
+            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week's macros, budget, and dietary constraints from your saved profile — no re-onboarding needed.</p>
             <div class="step-tags">
               <span class="step-tag">Auto pre-filled</span>
-              <span class="step-tag">Ratings improve future plans — roadmap</span>
             </div>
           </div>
         </div>
@@ -743,7 +670,7 @@
         </button>
         <div class="demo-dots" id="demoDots">
           <div class="demo-dot active"></div><div class="demo-dot"></div><div class="demo-dot"></div>
-          <div class="demo-dot"></div><div class="demo-dot"></div><div class="demo-dot"></div>
+          <div class="demo-dot"></div><div class="demo-dot"></div>
         </div>
         <button class="btn btn-primary btn-sm" id="demoNextBtn" onclick="nextDemoStep()">
           Next <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
@@ -786,26 +713,9 @@
         <p>Deduped shopping list with live price estimates, manual overrides that stick, and one-tap copy.</p>
       </div>
       <div class="feature-card glass">
-        <span class="icon">📊</span>
-        <h4>Nutrition Dashboard</h4>
-        <p>Daily and 7-day trend views vs. target, plus off-plan meal logging so the numbers stay honest.</p>
-      </div>
-      <div class="feature-card glass">
         <span class="icon">🧂</span>
         <h4>Pantry Log</h4>
         <p>Log what's already at home — the plan is built around it from the start, and your grocery list never suggests buying it again.</p>
-      </div>
-      <div class="feature-card glass">
-        <span class="tier-badge tier-v2">ROADMAP</span>
-        <span class="icon">⭐</span>
-        <h4>Meal Ratings</h4>
-        <p>Thumbs up or down after eating — low-rated meals quietly stop appearing in future plans.</p>
-      </div>
-      <div class="feature-card glass">
-        <span class="tier-badge tier-v2">ROADMAP</span>
-        <span class="icon">📷</span>
-        <h4>Barcode Scanning</h4>
-        <p>Point your camera at a barcode to add it to your pantry — no manual typing.</p>
       </div>
       <div class="feature-card glass">
         <span class="icon">▶️</span>
@@ -903,7 +813,7 @@
   }
 
   // Demo Logic
-  const DEMO_TOTAL = 6;
+  const DEMO_TOTAL = 5;
   let demoStep = 1;
   let demoUnit = 'lbs';
   let tickerTimer;
@@ -1009,27 +919,8 @@
     showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swapped to ' + next);
   }
 
-  function toggleDemoCheck(el) {
-    el.classList.toggle('checked');
-    const nameEl = el.parentElement.querySelector('.name');
-    if (el.classList.contains('checked')) {
-      if (nameEl) nameEl.classList.add('struck');
-    } else {
-      if (nameEl) nameEl.classList.remove('struck');
-    }
-  }
-
-  function logOffPlanMeal() {
-    const log = document.getElementById('demoMealLog');
-    const row = document.createElement('div');
-    row.className = 'demo-list-row';
-    row.innerHTML = '<div class="demo-check checked"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div><span class="name struck">Takeout — logged manually</span>';
-    log.appendChild(row);
-    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Logged — dashboard totals updated');
-  }
-
   function generateNextWeek() {
-    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg> New plan generated — 1 meal excluded');
+    showDemoToast('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg> New plan generated');
     setTimeout(() => goDemoStep(3), 900);
   }
 

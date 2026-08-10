@@ -119,13 +119,13 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 ---
 
-## H6 — Pantry engagement: users will log their pantry without barcode scanning
+## H6 — Pantry engagement: users will log their pantry manually
 
 **Hypothesis:** Given manual pantry entry is available from MVP (F6, moved up from V2 — see PRD), users will enter 3+ pantry items within their first two plan-generation sessions, enough for the pantry layer to meaningfully bias meal selection.
 
 **Source:** PRD Assumption A4 — *"if friction is too high, pantry feature won't be used"*
 
-**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6) — only barcode scanning (F8) remains V2. This hypothesis is testable from MVP launch, not gated on V2. **Updated July 25 2026:** matching is now an LLM identity classifier plus real Spoonacular unit conversion (not plain string/unit matching), and pantry depletion now also feeds meal ranking and the standalone swap action, not just the grocery list — see ai-agents.md Agent 4. Doesn't change this hypothesis's test method, but "meaningfully bias meal selection" is now a materially stronger claim than when this was written.
+**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6). This hypothesis is testable from MVP launch, not gated on V2. **Updated July 25 2026:** matching is now an LLM identity classifier plus real Spoonacular unit conversion (not plain string/unit matching), and pantry depletion now also feeds meal ranking and the standalone swap action, not just the grocery list — see ai-agents.md Agent 4. Doesn't change this hypothesis's test method, but "meaningfully bias meal selection" is now a materially stronger claim than when this was written.
 
 **Test method:**
 - Measure pantry log completion rate: % of users who add ≥1 item before or during their first plan generation
@@ -137,7 +137,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 - Average pantry size ≥5 items at end of that window
 - ≥25% of a pantry-enabled plan's 21 meals use at least one pantry ingredient
 
-**Failure action:** If completion <20%, fast-track barcode scanning (F8) into MVP instead of V2, or surface a pantry onboarding prompt immediately after Step 1 (TDEE calculation) rather than waiting for Step 2.
+**Failure action:** If completion <20%, surface a pantry onboarding prompt immediately after Step 1 (TDEE calculation) rather than waiting for Step 2.
 
 ---
 
@@ -147,7 +147,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Source:** New mechanism introduced alongside pantry-first generation and the conversational assistant (see PRD F3, ai-agents.md Agent 2) — not yet validated with users. Elevates the risk already flagged in H1 / PRD Assumption A1.
 
-**Status (July 15 2026):** the composition fallback is now real, tested code (`aiMealComposition.ts`/`mealProposer.ts`), not just a design — including a portion-realism guardrail added after a live test found naive sizing could ask for an unrealistic 346g of tofu to hit a protein target. Still not live-tested with users, or even with a real Anthropic API key yet (deferred by explicit decision) — this hypothesis remains untested, just less speculative about what the mechanism will actually produce when it does run.
+**Status (updated August 2026):** the composition fallback is real, tested code (`aiMealComposition.ts`/`mealProposer.ts`) — including a portion-realism guardrail added after a live test found naive sizing could ask for an unrealistic 346g of tofu to hit a protein target. `ANTHROPIC_API_KEY` is now configured and this path, along with the chat assistant and plan critique, is live in production — several rounds of live-testing bugs have already been found and fixed against real usage (quota-tolerance math, safety false positives, swap/edit misclassification). This hypothesis is now testable end-to-end; the actual user-rating/swap-rate data called for below has not been collected yet, so it remains open, just no longer blocked on infrastructure.
 
 **Test method:**
 - Tag every meal server-side as `spoonacular` / `ai-composed` / `ai-edited` / `snack-addon` at generation time
