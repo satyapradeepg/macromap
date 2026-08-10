@@ -5,6 +5,8 @@ import {
   glutenFreeQualifierStripFallback,
   slashToSpaceFallback,
   brandNamePrefixStripFallback,
+  parentheticalStripFallback,
+  parentheticalContentFallback,
   parseRecipeInformation,
   parsePrimaryAisle,
   repairOrRejectIngredientName,
@@ -320,6 +322,46 @@ describe("glutenFreeQualifierStripFallback", () => {
   it("does not touch an unrelated allergen-free qualifier -- deliberately scoped to gluten-free only", () => {
     expect(glutenFreeQualifierStripFallback("dairy-free yogurt")).toBeNull();
     expect(glutenFreeQualifierStripFallback("yogurt (dairy-free)")).toBeNull();
+  });
+});
+
+// Live-confirmed 2026-08-10 (real production chat, a user trying to
+// compose an Indian breakfast): "chana dal (split chickpeas), cooked"
+// returned zero Spoonacular results, while bare "chana dal" matches
+// directly (confirmed live against the search API).
+describe("parentheticalStripFallback", () => {
+  it("drops a parenthetical translation and a trailing comma-clause together", () => {
+    expect(parentheticalStripFallback("chana dal (split chickpeas), cooked")).toBe("chana dal");
+  });
+
+  it("drops just the parenthetical when there is no trailing clause", () => {
+    expect(parentheticalStripFallback("idli rice (parboiled rice)")).toBe("idli rice");
+  });
+
+  it("returns null when no parenthetical is present at all, even with a trailing comma-clause", () => {
+    // Deliberately NOT a general ", descriptor" stripper on its own --
+    // "milk, condensed" -> "milk" would be a genuinely different product.
+    expect(parentheticalStripFallback("milk, condensed")).toBeNull();
+    expect(parentheticalStripFallback("seitan, crumbled")).toBeNull();
+  });
+
+  it("returns null when stripping would leave nothing", () => {
+    expect(parentheticalStripFallback("(split chickpeas)")).toBeNull();
+  });
+});
+
+describe("parentheticalContentFallback", () => {
+  it("extracts the content inside the parentheses as a separate attempt", () => {
+    expect(parentheticalContentFallback("chana dal (split chickpeas), cooked")).toBe("split chickpeas");
+    expect(parentheticalContentFallback("idli rice (parboiled rice)")).toBe("parboiled rice");
+  });
+
+  it("returns null when there is no parenthetical", () => {
+    expect(parentheticalContentFallback("chana dal")).toBeNull();
+  });
+
+  it("still extracts the content when parens wrap the entire query -- the parens themselves make it a different string", () => {
+    expect(parentheticalContentFallback("(chana dal)")).toBe("chana dal");
   });
 });
 

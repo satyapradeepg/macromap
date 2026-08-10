@@ -337,6 +337,55 @@ export function glutenFreeQualifierStripFallback(query: string): string | null {
   return null;
 }
 
+// Live-confirmed 2026-08-10 (real production chat, a user repeatedly
+// trying to compose an Indian breakfast): the AI proposer names an
+// unfamiliar regional ingredient as "RegionalName (PlainTranslation)" --
+// e.g. "chana dal (split chickpeas), cooked" -- and Spoonacular's search
+// matches neither the whole string nor, often, the outer name alone (the
+// trailing ", cooked" clause alone is enough to break it: bare "chana
+// dal" matches directly, confirmed live, but "chana dal, cooked" does
+// not). Two independent, deterministic attempts, both safe since neither
+// invents a different food -- they only remove or extract text the name
+// ALREADY contains:
+// 1. parentheticalStripFallback: drop the "(...)" AND any trailing
+//    comma-clause, keeping the outer name -- fixes the "chana dal" case.
+// 2. parentheticalContentFallback: try the translation INSIDE the
+//    parens instead -- covers the case where the outer regional name is
+//    what Spoonacular doesn't recognize but the plain English content
+//    is (not yet confirmed live to fix a real case on its own, but
+//    "split chickpeas" -> Spoonacular's own "chana dal" entry via a
+//    single live check makes this a reasonable, low-risk second attempt,
+//    same "confirmed real collision, try the safe adjacent transform too"
+//    discipline as this file's other fallbacks).
+// Neither fixes every case -- "idli rice (parboiled rice)" resolves under
+// NEITHER the outer name nor the parenthetical content (confirmed live,
+// zero results either way), the same accepted hard-limitation shape as
+// "extra-lean ground turkey": some real regional ingredients genuinely
+// aren't in Spoonacular's database under any phrasing.
+export function parentheticalStripFallback(query: string): string | null {
+  // Gated on an actual parenthetical being present -- the trailing-clause
+  // strip below is deliberately NOT a general "drop any ', descriptor'"
+  // fallback on its own (that would risk something like "milk,
+  // condensed" -> "milk", a genuinely different product with different
+  // macros, the same class of risk PREP_PREFIXES/glutenFreeQualifierStrip
+  // Fallback's own docs warn about). Scoping it to only fire alongside a
+  // parenthetical removal keeps it matched to the one confirmed real
+  // shape (a regional name + translation, sometimes with a trailing
+  // prep-state clause) rather than becoming a general risk.
+  if (!/\([^)]*\)/.test(query)) return null;
+  const withoutParens = query.replace(/\s*\([^)]*\)/g, "");
+  const withoutTrailingClause = withoutParens.replace(/,\s*[a-z][\w\s-]*$/i, "");
+  const cleaned = withoutTrailingClause.replace(/\s+/g, " ").trim();
+  return cleaned && cleaned !== query.trim() ? cleaned : null;
+}
+
+export function parentheticalContentFallback(query: string): string | null {
+  const match = /\(([^)]+)\)/.exec(query);
+  if (!match) return null;
+  const content = match[1].trim();
+  return content && content.toLowerCase() !== query.trim().toLowerCase() ? content : null;
+}
+
 // Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production,
 // same repro as PREP_PREFIXES' "strong" entry above): "firm/extra tofu" --
 // a real ingredient name from a live Spoonacular recipe's own stored data
@@ -472,6 +521,14 @@ export async function lookupIngredientMacros(
   if (!match) {
     const brandStripped = brandNamePrefixStripFallback(query);
     if (brandStripped) match = await searchIngredient(brandStripped, apiKey);
+  }
+  if (!match) {
+    const parentheticalStripped = parentheticalStripFallback(query);
+    if (parentheticalStripped) match = await searchIngredient(parentheticalStripped, apiKey);
+  }
+  if (!match) {
+    const parentheticalContent = parentheticalContentFallback(query);
+    if (parentheticalContent) match = await searchIngredient(parentheticalContent, apiKey);
   }
   if (!match && aiSuggestedSearchTerm && aiSuggestedSearchTerm.trim() && aiSuggestedSearchTerm.trim().toLowerCase() !== query.trim().toLowerCase()) {
     match = await searchIngredient(aiSuggestedSearchTerm.trim(), apiKey);
