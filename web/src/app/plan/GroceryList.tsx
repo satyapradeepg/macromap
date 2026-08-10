@@ -58,8 +58,36 @@ function groceryListToFile(groupedLines: Array<[string, GroceryLineView[]]>): st
     .join("\n\n");
 }
 
+// Best-effort keyword match against KNOWN_SPOONACULAR_AISLES
+// (ingredientAisle.ts) -- deliberately not exhaustive, same reasoning as
+// that file's own aisle list: an AI-estimated aisle for an unusual
+// ingredient can produce a label outside this list entirely, so this
+// always has a generic fallback rather than assuming full coverage.
+function aisleIcon(aisle: string): string {
+  const a = aisle.toLowerCase();
+  if (a.includes("produce")) return "🥕";
+  if (a.includes("meat")) return "🍗";
+  if (a.includes("seafood")) return "🐟";
+  if (a.includes("cheese") || a.includes("dairy") || a.includes("milk") || a.includes("egg")) return "🧀";
+  if (a.includes("bakery") || a.includes("bread")) return "🍞";
+  if (a.includes("baking")) return "🧂";
+  if (a.includes("pasta") || a.includes("rice")) return "🍚";
+  if (a.includes("canned") || a.includes("jarred")) return "🥫";
+  if (a.includes("spice") || a.includes("seasoning")) return "🌶️";
+  if (a.includes("oil") || a.includes("vinegar") || a.includes("dressing")) return "🫙";
+  if (a.includes("nut butter") || a.includes("jam") || a.includes("honey")) return "🍯";
+  if (a.includes("nut")) return "🥜";
+  if (a.includes("tea") || a.includes("coffee")) return "☕";
+  if (a.includes("beverage")) return "🥤";
+  if (a.includes("frozen")) return "🧊";
+  if (a.includes("ethnic")) return "🍛";
+  if (a.includes("health")) return "🌱";
+  return "🛒";
+}
+
 export function GroceryList({ lines }: { lines: GroceryLineView[] }) {
   const [copied, setCopied] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const groupedLines = groupByAisle(lines);
 
   async function handleCopy() {
@@ -78,16 +106,29 @@ export function GroceryList({ lines }: { lines: GroceryLineView[] }) {
     URL.revokeObjectURL(url);
   }
 
+  // Visual-only, resets on reload -- a shopping checklist you can tick
+  // through, not a persisted server-side field. No schema/action change
+  // needed for this; if usage data ever shows people want it to survive a
+  // reload, that's a real follow-up, not this pass.
+  function toggleChecked(key: string) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
+    <div>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">Grocery list</h2>
+        <h2 className="font-display text-base font-bold text-foreground">Grocery list</h2>
         {lines.length > 0 && (
           <div className="flex items-center gap-3">
-            <button type="button" onClick={handleCopy} className="text-xs font-semibold text-muted">
+            <button type="button" onClick={handleCopy} className="text-xs font-semibold text-accent">
               {copied ? "Copied!" : "Copy list"}
             </button>
-            <button type="button" onClick={handleExport} className="text-xs font-semibold text-muted">
+            <button type="button" onClick={handleExport} className="text-xs font-semibold text-accent">
               Export
             </button>
           </div>
@@ -101,29 +142,49 @@ export function GroceryList({ lines }: { lines: GroceryLineView[] }) {
       {lines.length === 0 ? (
         <p className="mt-3 text-xs text-muted">Nothing to shop for yet — generate a plan first.</p>
       ) : (
-        <div className="mt-3 flex flex-col gap-4">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {groupedLines.map(([aisle, aisleLines]) => (
-            <div key={aisle}>
-              <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{aisle}</h3>
-              <ul className="mt-1.5 flex flex-col gap-1.5">
-                {aisleLines.map((line, index) => (
-                  // Index appended: lineKey() (ingredientId+unit) isn't a
-                  // render-uniqueness guarantee on its own -- a manual-
-                  // combine split or a shared synthetic placeholder id
-                  // (e.g. -1 for composed ingredients with no real
-                  // Spoonacular id) can legitimately repeat it.
-                  <li key={`${lineKey(line)}-${index}`} className="text-sm text-foreground">
-                    {formatAmount(line.totalAmount, line.unit)} {line.name}
-                    {line.needsManualCombine && (
-                      <span className="ml-1.5 text-xs text-muted">— combine manually, units didn&apos;t match</span>
-                    )}
-                    {!line.needsManualCombine && line.viaAiEstimate && (
-                      <span className="ml-1.5 text-xs text-muted">
-                        — combined via AI density estimate, double-check the total
-                      </span>
-                    )}
-                  </li>
-                ))}
+            <div key={aisle} className="rounded-xl bg-background p-3.5">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-sm" aria-hidden="true">{aisleIcon(aisle)}</span>
+                <h3 className="text-[11.5px] font-bold tracking-wide text-muted uppercase">{aisle}</h3>
+              </div>
+              <ul className="flex flex-col">
+                {aisleLines.map((line, index) => {
+                  const itemKey = `${lineKey(line)}-${index}`;
+                  const isChecked = checked.has(itemKey);
+                  return (
+                    <li key={itemKey}>
+                      <button
+                        type="button"
+                        onClick={() => toggleChecked(itemKey)}
+                        className="flex w-full items-center gap-2 border-b border-dashed border-line-soft py-1.5 text-left last:border-b-0"
+                      >
+                        <span
+                          className={`h-3.5 w-3.5 shrink-0 rounded border transition-colors ${
+                            isChecked ? "border-good bg-good" : "border-border"
+                          }`}
+                        />
+                        <span className={`flex-1 text-sm ${isChecked ? "text-muted line-through" : "text-foreground"}`}>
+                          {line.name}
+                          {line.needsManualCombine && (
+                            <span className="block text-xs text-muted no-underline">
+                              combine manually, units didn&apos;t match
+                            </span>
+                          )}
+                          {!line.needsManualCombine && line.viaAiEstimate && (
+                            <span className="block text-xs text-muted no-underline">
+                              combined via AI density estimate, double-check
+                            </span>
+                          )}
+                        </span>
+                        <span className="shrink-0 font-mono text-xs text-muted tabular-nums">
+                          {formatAmount(line.totalAmount, line.unit)}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}

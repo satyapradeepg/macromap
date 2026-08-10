@@ -69,8 +69,8 @@ export function PantryPanel({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <h2 className="text-sm font-semibold text-foreground">Pantry</h2>
+    <div>
+      <h2 className="font-display text-base font-bold text-foreground">Pantry</h2>
       <p className="mt-1 text-xs text-muted">
         Add ingredients you already have on hand — generation is biased toward using them. A rough note is
         fine, but adding a quantity + unit (e.g. 2, lb) lets us subtract what you have from the grocery list
