@@ -1,48 +1,105 @@
 @import "tailwindcss";
 
-/* Design tokens ported from docs/macromap-prototype.html so the real app
-   matches the already-validated look. Light is default; dark overrides via
-   prefers-color-scheme AND a [data-theme] attribute for a future manual toggle. */
+/* Design tokens for the "precision ledger" redesign (2026-08-10) --
+   warm ivory/charcoal ledger palette + per-macro hues, replacing the
+   original flat gray/orange set. Existing token NAMES are kept (so no
+   call site needs touching in this pass) with new values; new tokens
+   are added alongside for the redesign's macro rings/cards/grocery
+   ledger work in later phases. Light is default; dark overrides via
+   prefers-color-scheme AND a [data-theme] attribute for the manual
+   toggle (wired up in the next phase). */
 :root {
-  --background: #f3f4f6;
-  --surface: #ffffff;
-  --border: #e5e7eb;
-  --accent: #e04a14;
-  --accent-2: #ff5a1f;
-  --foreground: #111827;
-  --muted: #4b5563;
+  --background: #f6f1e7;
+  --surface: #fffdf8;
+  --border: #ddd0b8;
+  --accent: #d9531f;
+  --accent-2: #f0763f;
+  --foreground: #1c1712;
+  --muted: #4a4038;
+
+  --paper-sunken: #eee6d6;
+  --line-soft: #e8ddc7;
+  --protein: #b93a5c;
+  --protein-tint: #f3dde3;
+  --carbs: #b9852a;
+  --carbs-tint: #f2e7cd;
+  --fat: #3e7a6e;
+  --fat-tint: #dcece7;
+  --good: #3e7a4a;
+  --warn: #b8431a;
+  --shadow-card-val: 0 1px 2px rgba(28, 23, 18, 0.06), 0 8px 24px -12px rgba(28, 23, 18, 0.18);
+  --shadow-lift-val: 0 4px 8px rgba(28, 23, 18, 0.08), 0 16px 40px -16px rgba(28, 23, 18, 0.28);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0e0e10;
-    --surface: #16161a;
-    --border: #2a2a32;
-    --accent: #ff5a1f;
-    --accent-2: #ff8a66;
-    --foreground: #f2f2f4;
-    --muted: #9a9aa5;
+    --background: #1b1611;
+    --surface: #241e17;
+    --border: #3a3025;
+    --accent: #ef7440;
+    --accent-2: #ffab7a;
+    --foreground: #f3ead9;
+    --muted: #c9bca6;
+
+    --paper-sunken: #14100c;
+    --line-soft: #2c2419;
+    --protein: #e2678a;
+    --protein-tint: #3a2029;
+    --carbs: #dcac52;
+    --carbs-tint: #3a2f18;
+    --fat: #63a897;
+    --fat-tint: #17332c;
+    --good: #6cb87c;
+    --warn: #ef7440;
+    --shadow-card-val: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+    --shadow-lift-val: 0 4px 8px rgba(0, 0, 0, 0.35), 0 16px 40px -16px rgba(0, 0, 0, 0.6);
   }
 }
 
 :root[data-theme="dark"] {
-  --background: #0e0e10;
-  --surface: #16161a;
-  --border: #2a2a32;
-  --accent: #ff5a1f;
-  --accent-2: #ff8a66;
-  --foreground: #f2f2f4;
-  --muted: #9a9aa5;
+  --background: #1b1611;
+  --surface: #241e17;
+  --border: #3a3025;
+  --accent: #ef7440;
+  --accent-2: #ffab7a;
+  --foreground: #f3ead9;
+  --muted: #c9bca6;
+
+  --paper-sunken: #14100c;
+  --line-soft: #2c2419;
+  --protein: #e2678a;
+  --protein-tint: #3a2029;
+  --carbs: #dcac52;
+  --carbs-tint: #3a2f18;
+  --fat: #63a897;
+  --fat-tint: #17332c;
+  --good: #6cb87c;
+  --warn: #ef7440;
+  --shadow-card-val: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  --shadow-lift-val: 0 4px 8px rgba(0, 0, 0, 0.35), 0 16px 40px -16px rgba(0, 0, 0, 0.6);
 }
 
 :root[data-theme="light"] {
-  --background: #f3f4f6;
-  --surface: #ffffff;
-  --border: #e5e7eb;
-  --accent: #e04a14;
-  --accent-2: #ff5a1f;
-  --foreground: #111827;
-  --muted: #4b5563;
+  --background: #f6f1e7;
+  --surface: #fffdf8;
+  --border: #ddd0b8;
+  --accent: #d9531f;
+  --accent-2: #f0763f;
+  --foreground: #1c1712;
+  --muted: #4a4038;
+
+  --paper-sunken: #eee6d6;
+  --line-soft: #e8ddc7;
+  --protein: #b93a5c;
+  --protein-tint: #f3dde3;
+  --carbs: #b9852a;
+  --carbs-tint: #f2e7cd;
+  --fat: #3e7a6e;
+  --fat-tint: #dcece7;
+  --good: #3e7a4a;
+  --warn: #b8431a;
+  --shadow-card-val: 0 1px 2px rgba(28, 23, 18, 0.06), 0 8px 24px -12px rgba(28, 23, 18, 0.18);
+  --shadow-lift-val: 0 4px 8px rgba(28, 23, 18, 0.08), 0 16px 40px -16px rgba(28, 23, 18, 0.28);
 }
 
 @theme inline {
@@ -53,8 +110,25 @@
   --color-accent-2: var(--accent-2);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+
+  --color-paper-sunken: var(--paper-sunken);
+  --color-line-soft: var(--line-soft);
+  --color-protein: var(--protein);
+  --color-protein-tint: var(--protein-tint);
+  --color-carbs: var(--carbs);
+  --color-carbs-tint: var(--carbs-tint);
+  --color-fat: var(--fat);
+  --color-fat-tint: var(--fat-tint);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
+  --font-display: var(--font-fraunces);
+
+  --shadow-card: var(--shadow-card-val);
+  --shadow-lift: var(--shadow-lift-val);
+
   /* First custom motion in this app (2026-08-09, ChatWidget) -- every
      other animated element (Spinner, RecipeModal's skeleton) uses
      Tailwind's built-in animate-spin/animate-pulse. Kept deliberately
