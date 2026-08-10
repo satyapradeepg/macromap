@@ -341,7 +341,7 @@ export function OnboardingWizard({
   if (saved) {
     return (
       <main className="mx-auto w-full min-w-0 max-w-md px-6 py-24 text-center">
-        <h1 className="text-2xl font-bold">Profile saved</h1>
+        <h1 className="font-display text-2xl font-bold">Profile saved</h1>
         <p className="mt-2 text-muted">
           {calories} kcal · {protein}g protein · {carbs}g carbs · {fat}g fat,
           daily.
@@ -380,7 +380,7 @@ export function OnboardingWizard({
       </div>
       <p className="mt-1.5 text-xs font-semibold tracking-wide text-muted uppercase">Step {step} of 2</p>
 
-      <h1 className="mt-2 text-2xl font-bold">
+      <h1 className="font-display mt-2 text-2xl font-bold">
         {step === 1
           ? "Let's calculate your targets"
           : "Your suggested daily targets"}
