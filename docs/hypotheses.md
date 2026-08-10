@@ -54,7 +54,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 - Post-launch: ≥15% of free users convert within 90 days (KR3)
 - Churn due to "too expensive": <20% of cancellations
 
-**Failure action:** If conversion <10%, test a $6/month price point or adjust the Pro feature gate to include more value (e.g., move calendar export to Free, gate recipe video embeds instead).
+**Failure action:** If conversion <10%, test a $6/month price point or adjust the Pro feature gate to include more value (e.g., move calendar export to Free).
 
 ---
 
@@ -93,29 +93,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Failure action:** If repeat rate >30%, expand query diversity by rotating between Spoonacular's cuisine types, adding a "no-repeat" hard constraint (`excludeIds`), or triggering earlier upgrade to a broader Spoonacular tier.
 
-**Early positive signal (July 15 2026 live engine audit):** real Spoonacular recipes landed 21/21 distinct across a single week, zero repeats, in every profile tested that filled its recipe slots — not yet the 4-week window this hypothesis is scoped to, but a good sign within the window measured. **A related but distinct gap found in the same audit, not covered by this hypothesis:** composed snacks (a separate mechanism from Spoonacular recipe search, see F3/F6) are structurally capped at ~3-4 combos/week by a fixed 9-ingredient pool, and narrower still when allergies or a tight budget restrict the safe/preferred options further — one live test found a tight-budget profile getting the identical snack 14/14 times; fixed the same day (see PRD F3), it now alternates between 2 combos. Both symptoms are held back by the same small pool, not by Spoonacular's corpus. See `engine-audit-2026-07-15.md`.
-
----
-
-## H5 — Price accuracy: grocery price estimates are close enough that users don't feel misled
-
-**Hypothesis:** F4's price estimates (Spoonacular's ingredient cost data, primary source as of July 2026 — see PRD F4/ai-agents.md Agent 3; Tavily Search API only as a fallback when Spoonacular has no cost data) are accurate enough (within 20% of actual checkout price) that users don't feel misled when they shop.
-
-**Source:** PRD Assumption A3 — *"budget users will notice"*
-
-**Architecture note (updated July 2026):** originally scoped as purely a Tavily-accuracy question. Switched to Spoonacular-primary after live testing found Tavily's LLM-synthesized price answer could extract the wrong figure from a multi-price search result — Spoonacular's structured `estimatedCost` field doesn't have that failure mode and was live-validated as plausible across weight/volume/count-based ingredients. This hypothesis is now about the *combined* system's real-world accuracy, not Tavily specifically. Separately, **OQ9 (new, PRD)** flags that this price estimate is never reconciled against F2/F3's budget-aware filtering (a different, recipe-level estimate) — worth testing alongside this hypothesis, not instead of it.
-
-**Test method:**
-- Track manual price correction rate in F4: what % of estimates get overridden (from either source)?
-- Post-shop prompt (week 2): "How close was your estimated total to your actual receipt?" (Much lower / About right / Much higher)
-- Monitor correlation between price correction rate and Pro churn
-- **Separately (OQ9) — live result, 2026-07-25:** tested across 4 profiles spanning $35–$275 stated weekly budget (plus one with no budget) — all four landed in the same $78–90/week real total, confirming stated budget currently has no measurable effect on the real number. This is a stronger, structural failure than the receipt-accuracy question above (a reconciliation gap, not an estimate-accuracy one) — see product-brief.md Section 07 (now High severity) and PRD OQ9. No product decision made yet on the fix.
-
-**Success threshold:**
-- Manual override rate < 25% of items
-- ≥60% of users rate estimate accuracy as "About right"
-
-**Failure action:** If override rate >40%, surface the manual override more prominently and/or integrate Kroger API sooner for US users where real retail data is available.
+**Early positive signal (July 15 2026 live engine audit):** real Spoonacular recipes landed 21/21 distinct across a single week, zero repeats, in every profile tested that filled its recipe slots — not yet the 4-week window this hypothesis is scoped to, but a good sign within the window measured. **A related but distinct gap found in the same audit, not covered by this hypothesis:** composed snacks (a separate mechanism from Spoonacular recipe search, see F3/F6) are structurally capped at ~3-4 combos/week by a fixed 9-ingredient pool, and narrower still when allergies restrict the safe/preferred options further. Held back by the small pool size, not by Spoonacular's corpus. See `engine-audit-2026-07-15.md`.
 
 ---
 
@@ -188,7 +166,6 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 | H8 | AI-composed recipe/snack acceptance | Week 1 post-launch | High — new mechanism, same retention risk as H1 |
 | H3 | Time savings | Week 2 post-launch | High — core value prop |
 | H7 | Weekly retention | Week 4 post-launch | High — business model |
-| H5 | Price accuracy | Week 2 post-launch | Medium — Pro feature risk |
 | H4 | Recipe variety | Month 1 post-launch | Medium — variety drives retention |
 | H6 | Pantry engagement | Week 1–2 post-launch | Medium — now testable at MVP, not gated on V2 |
 

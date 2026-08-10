@@ -2,8 +2,8 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<title>MacroMap — Hit your macros. Stay on budget. Without the spreadsheets.</title>
-<meta name="description" content="MacroMap turns a weekly macro and budget goal into a full meal plan and a deduped grocery list.">
+<title>MacroMap — Hit your macros. Without the spreadsheets.</title>
+<meta name="description" content="MacroMap turns a weekly macro goal into a full meal plan and a deduped grocery list.">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -151,9 +151,8 @@
   .agent-node svg { color: var(--accent); }
 
   .data-line { position: absolute; height: 2px; background: linear-gradient(90deg, var(--accent) 0%, transparent 100%); width: 40px; right: 152px; z-index: 1; opacity: 0.6; }
-  .line-1 { top: 30%; transform: rotate(-15deg); }
-  .line-2 { top: 50%; width: 32px; right: 160px;}
-  .line-3 { top: 70%; transform: rotate(15deg); }
+  .line-1 { top: 35%; transform: rotate(-15deg); }
+  .line-3 { top: 65%; transform: rotate(15deg); }
 
   @media (max-width: 760px) { .hero h1 { font-size: 36px; } .orchestrator-diagram { flex-direction: column; } .data-line { display: none; } }
 
@@ -262,9 +261,6 @@
   }
   .demo-mini-btn:hover { border-color: var(--accent); color: var(--accent2); background: var(--accent-bg); }
 
-  .demo-budget-bar { background: var(--surface2); border: 1px dashed var(--muted); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; font-size: 13px; }
-  .demo-budget-bar .amt { font-weight: 700; }
-  .demo-budget-bar .amt.ok { color: var(--green); text-shadow: 0 0 10px rgba(34,197,94,0.3); }
 
   .demo-list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
   .demo-list-row:last-child { border-bottom: none; }
@@ -273,7 +269,6 @@
   .demo-list-row .name { flex: 1; }
   .demo-list-row .name.struck { text-decoration: line-through; color: var(--subtle); }
   .demo-list-row .meta { color: var(--muted); font-size: 11.5px; margin-right: 4px; }
-  .demo-list-row .price { font-weight: 600; min-width: 50px; text-align: right; }
 
   .demo-ring-card { display: flex; gap: 20px; align-items: center; margin-bottom: 18px; }
   .demo-ring-wrap { position: relative; width: 78px; height: 78px; flex-shrink: 0; }
@@ -348,7 +343,7 @@
   <div class="container">
     <span class="eyebrow">AI-powered meal planning</span>
     <h1>From weekly goal to <span class="grad">grocery bag</span> — without the spreadsheets.</h1>
-    <p class="lead">Tell MacroMap your macro target and budget. It builds your week of meals, your shopping list, and tracks your progress — all in one place.</p>
+    <p class="lead">Tell MacroMap your macro target. It builds your week of meals and your shopping list — all in one place.</p>
     <div class="hero-ctas">
       <a href="#how-it-works" class="btn btn-primary">Explore the workflow</a>
       <a href="#features" class="btn btn-outline glass">View all features</a>
@@ -363,16 +358,11 @@
         <div class="sub mono">Core Orchestrator</div>
       </div>
       <div class="data-line line-1"></div>
-      <div class="data-line line-2"></div>
       <div class="data-line line-3"></div>
       <div class="agent-nodes">
         <div class="node agent-node glass">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
           Recipe Agent
-        </div>
-        <div class="node agent-node glass">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-          Price Agent
         </div>
         <div class="node agent-node glass">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
@@ -387,17 +377,16 @@
   <div class="container problem-grid">
     <div>
       <span class="eyebrow">The problem</span>
-      <h2>Four apps. One goal. Zero conversations between them.</h2>
-      <p>People eating to a macro or budget target lose hours every week planning meals, checking nutrition, building grocery lists, and doing mental math to stay on budget. The tools exist — they just don't talk to each other.</p>
+      <h2>Three apps. One goal. Zero conversations between them.</h2>
+      <p>People eating to a macro target lose hours every week planning meals, checking nutrition, and building grocery lists. The tools exist — they just don't talk to each other.</p>
       <div class="broken-apps">
         <span class="app-chip">📱 Recipe app</span>
         <span class="app-chip">📱 Macro tracker</span>
         <span class="app-chip">📱 Notes app grocery list</span>
-        <span class="app-chip">📱 Mental math for budget</span>
       </div>
     </div>
     <div class="quote-card glass">
-      "I use a lot of websites and personal notes to track everything. It takes so much time just to make sure I'm hitting my protein and staying in budget."
+      "I use a lot of websites and personal notes to track everything. It takes so much time just to make sure I'm hitting my protein."
     </div>
   </div>
 </section>
@@ -469,9 +458,7 @@
             <div class="mock-bar-row stagger-2"><span class="lbl">Protein</span><div class="mock-bar-wrap"><div class="mock-bar bar-green" style="width:75%;"></div></div><span class="val mono">200g</span></div>
             <div class="mock-bar-row stagger-2"><span class="lbl">Carbs</span><div class="mock-bar-wrap"><div class="mock-bar bar-yellow" style="width:90%;"></div></div><span class="val mono">380g</span></div>
             <div class="mock-bar-row stagger-2"><span class="lbl">Fat</span><div class="mock-bar-wrap"><div class="mock-bar bar-orange" style="width:40%;"></div></div><span class="val mono">90g</span></div>
-            <div class="mock-field stagger-3" style="margin-top:18px"><label>Weekly grocery budget (optional)</label><input type="text" class="mono" value="$120" readonly></div>
-            <div class="mock-field stagger-3" style="margin-top:10px"><label>Zip code</label><input type="text" class="mono" value="94103" readonly></div>
-            <div class="mock-field stagger-3" style="margin-top:10px"><label>Pantry (optional)</label><input type="text" class="mono" value="chicken breast, rice, soy sauce" readonly></div>
+            <div class="mock-field stagger-3" style="margin-top:18px"><label>Pantry (optional)</label><input type="text" class="mono" value="chicken breast, rice, soy sauce" readonly></div>
             <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="nextDemoStep()">
               Looks good
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
@@ -479,10 +466,8 @@
           </div>
           <div class="demo-copy stagger-1">
             <h3>Set Weekly Goal</h3>
-            <p>Confirm your weekly macro targets, an optional grocery budget, your zip code — used to localize grocery price estimates — and optionally what's already in your pantry. Budget is optional — leave it blank and MacroMap just shows you the total cost with no filtering applied. Pantry items bias Step 3's recipe picks toward what you already have; skip it and generation works exactly the same as before.</p>
+            <p>Confirm your weekly macro targets and optionally what's already in your pantry. Pantry items bias Step 3's recipe picks toward what you already have; skip it and generation works exactly the same as before.</p>
             <div class="step-tags">
-              <span class="step-tag">Budget optional</span>
-              <span class="step-tag">Zip → local prices</span>
               <span class="step-tag">Pantry optional</span>
               <span class="step-tag">Saved as your baseline</span>
             </div>
@@ -510,9 +495,6 @@
                 </div>
               </div>
               <div class="demo-meal-actions">
-                <a href="#" class="demo-mini-btn">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
-                </a>
                 <button class="demo-mini-btn" onclick="swapDemoMeal('b',this)">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
                 </button>
@@ -531,9 +513,6 @@
                 </div>
               </div>
               <div class="demo-meal-actions">
-                <a href="#" class="demo-mini-btn">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
-                </a>
                 <button class="demo-mini-btn" onclick="swapDemoMeal('l',this)">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
                 </button>
@@ -552,9 +531,6 @@
                 </div>
               </div>
               <div class="demo-meal-actions">
-                <a href="#" class="demo-mini-btn">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg> Watch
-                </a>
                 <button class="demo-mini-btn" onclick="swapDemoMeal('d',this)">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Swap
                 </button>
@@ -563,11 +539,10 @@
           </div>
           <div class="demo-copy stagger-1">
             <h3>Generate Meal Plan</h3>
-            <p>21 meals — 3 a day, 7 days — matched to your macros, dietary preferences, allergies, budget, and pantry. Don't like a meal? Tap "Swap" for an alternative, or just tell the chat assistant — try Swap on the left.</p>
+            <p>21 meals — 3 a day, 7 days — matched to your macros, dietary preferences, allergies, and pantry. Don't like a meal? Tap "Swap" for an alternative, or just tell the chat assistant — try Swap on the left.</p>
             <div class="step-tags">
               <span class="step-tag">Macro-matched</span>
               <span class="step-tag">Pantry-aware</span>
-              <span class="step-tag">Budget-aware</span>
               <span class="step-tag">Allergy-safe</span>
             </div>
             <div class="fallback-note">
@@ -580,17 +555,12 @@
         <!-- STEP 4 — Grocery List -->
         <div class="demo-panel" id="demoStep4">
           <div class="demo-visual glass">
-            <div class="demo-budget-bar mono stagger-1">
-              <span>Est. total <strong>$87.40</strong></span>
-              <span class="amt ok">$32.60 under budget ✓</span>
-            </div>
             <div class="demo-list-row stagger-2">
               <div class="demo-check" onclick="toggleDemoCheck(this)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
               <span class="name">Chicken breast</span>
               <span class="meta">2.5 lbs</span>
-              <span class="price mono">$12.50</span>
             </div>
             <div class="demo-list-row stagger-2">
               <div class="demo-check" onclick="toggleDemoCheck(this)">
@@ -598,7 +568,6 @@
               </div>
               <span class="name">Lean ground beef</span>
               <span class="meta">1.5 lbs</span>
-              <span class="price mono">$10.25</span>
             </div>
             <div class="demo-list-row stagger-3">
               <div class="demo-check checked" onclick="toggleDemoCheck(this)">
@@ -606,7 +575,6 @@
               </div>
               <span class="name struck">Eggs</span>
               <span class="meta">12 pack</span>
-              <span class="price mono">$4.50</span>
             </div>
             <div class="demo-list-row stagger-3">
               <div class="demo-check" onclick="toggleDemoCheck(this)">
@@ -614,7 +582,6 @@
               </div>
               <span class="name">Broccoli</span>
               <span class="meta">1 head</span>
-              <span class="price mono">$2.50</span>
             </div>
             <div class="demo-list-row stagger-4">
               <div class="demo-check" onclick="toggleDemoCheck(this)">
@@ -622,19 +589,13 @@
               </div>
               <span class="name">Olive oil</span>
               <span class="meta">16 oz</span>
-              <span class="price mono" style="color:var(--red)">$—</span>
             </div>
           </div>
           <div class="demo-copy stagger-1">
             <h3>Grocery List</h3>
-            <p>Every ingredient across all 21 meals, deduplicated and summed into one list — no more "3 lbs of chicken breast" split across four lines, plus live price estimates and a running weekly total.</p>
+            <p>Every ingredient across all 21 meals, deduplicated and summed into one list — no more "3 lbs of chicken breast" split across four lines.</p>
             <div class="step-tags">
               <span class="step-tag">Deduped quantities</span>
-              <span class="step-tag">Live price estimates</span>
-            </div>
-            <div class="fallback-note">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-              <span><strong>Price you can trust:</strong> if an estimate isn't available, the item still shows up with an "add manually" prompt. Correct a price once and MacroMap remembers it next time.</span>
             </div>
           </div>
         </div>
@@ -645,7 +606,7 @@
             <div class="mock-title stagger-1">Week 7 — ready when you are</div>
             <div class="demo-cycle-card stagger-1">
               <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Pre-filled from your profile</div>
-              <div style="font-size:14px;font-weight:600" class="mono">3,200 kcal · 200g P · $120</div>
+              <div style="font-size:14px;font-weight:600" class="mono">3,200 kcal · 200g P</div>
             </div>
             <button class="btn btn-primary stagger-4" style="width:100%;margin-top:16px" onclick="generateNextWeek()">
               Generate next week's plan
@@ -654,7 +615,7 @@
           </div>
           <div class="demo-copy stagger-1">
             <h3>Weekly Cycle</h3>
-            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week's macros, budget, and dietary constraints from your saved profile — no re-onboarding needed.</p>
+            <p>Day 7 (or whenever you're ready), MacroMap pre-fills next week's macros and dietary constraints from your saved profile — no re-onboarding needed.</p>
             <div class="step-tags">
               <span class="step-tag">Auto pre-filled</span>
             </div>
@@ -684,7 +645,7 @@
   <div class="container">
     <span class="eyebrow">Features</span>
     <h2>Everything the workflow needs — nothing it doesn't.</h2>
-    <p class="section-sub">Eleven features across four connected data sources: recipes, nutrition, prices, and your own preferences.</p>
+    <p class="section-sub">Seven features across connected data sources: recipes, nutrition, and your own preferences.</p>
 
     <div class="feature-grid">
       <div class="feature-card glass">
@@ -705,22 +666,17 @@
       <div class="feature-card glass">
         <span class="icon">🍽️</span>
         <h4>Meal Plan Generation</h4>
-        <p>21 macro-matched meals a week, sourced from a 5,000+ recipe library and your own pantry, with budget-aware filtering. When nothing fits, the assistant composes or tweaks a recipe — or adds a small side — to close the gap.</p>
+        <p>21 macro-matched meals a week, sourced from a 5,000+ recipe library and your own pantry. When nothing fits, the assistant composes or tweaks a recipe — or adds a small side — to close the gap.</p>
       </div>
       <div class="feature-card glass">
         <span class="icon">🛒</span>
         <h4>Grocery List</h4>
-        <p>Deduped shopping list with live price estimates, manual overrides that stick, and one-tap copy.</p>
+        <p>Deduped shopping list with consolidated quantities and one-tap copy.</p>
       </div>
       <div class="feature-card glass">
         <span class="icon">🧂</span>
         <h4>Pantry Log</h4>
         <p>Log what's already at home — the plan is built around it from the start, and your grocery list never suggests buying it again.</p>
-      </div>
-      <div class="feature-card glass">
-        <span class="icon">▶️</span>
-        <h4>Recipe Videos</h4>
-        <p>A "watch how to cook this" link on every meal card, for recipes you haven't made before.</p>
       </div>
       <div class="feature-card glass">
         <span class="icon">📅</span>
@@ -734,7 +690,7 @@
 <section id="personas">
   <div class="container">
     <span class="eyebrow">Who it's for</span>
-    <h2>Built around three real routines.</h2>
+    <h2>Built around two real routines.</h2>
     <p class="section-sub">Every feature maps back to one of these weekly patterns.</p>
 
     <div class="persona-grid">
@@ -746,7 +702,7 @@
             <div class="persona-goal">Bulking · Austin, TX</div>
           </div>
         </div>
-        <p style="font-size:13.5px;color:var(--muted)">Software engineer, 3 years lifting. Knows his numbers cold but loses 2–3 hours every Sunday cross-referencing protein-per-dollar across four apps.</p>
+        <p style="font-size:13.5px;color:var(--muted)">Software engineer, 3 years lifting. Knows his numbers cold but loses 2–3 hours every Sunday cross-referencing recipes across three apps.</p>
         <blockquote>"I know exactly what I need to eat. I just don't want to spend my Sunday figuring out how to get there."</blockquote>
         <div class="persona-meta mono"><span>3,200 kcal · 200g P</span><span style="font-family:'Inter'">Pro, day one</span></div>
       </div>
@@ -762,19 +718,6 @@
         <p style="font-size:13.5px;color:var(--muted)">Marketing manager, long hours. Adherence collapses mid-week when the plan isn't laid out clearly and she ends up ordering takeout.</p>
         <blockquote>"I don't have time to be my own nutritionist. Just tell me what to buy."</blockquote>
         <div class="persona-meta mono"><span>1,650 kcal · 140g P</span><span style="font-family:'Inter'">Pro, if it saves time</span></div>
-      </div>
-
-      <div class="persona-card glass">
-        <div class="persona-head">
-          <div class="persona-avatar" style="background: linear-gradient(135deg, var(--subtle), var(--muted)); box-shadow:none;">J</div>
-          <div>
-            <div class="persona-name">Jordan, 21</div>
-            <div class="persona-goal">Maintaining · Columbus, OH</div>
-          </div>
-        </div>
-        <p style="font-size:13.5px;color:var(--muted)">Kinesiology student on a hard $50/week limit. Knows the theory, struggles to apply it without wasting money on ingredients that go unused.</p>
-        <blockquote>"I know eggs and rice are cheap and healthy. I just want someone to make it less boring without blowing my budget."</blockquote>
-        <div class="persona-meta mono"><span>$50/week limit</span><span style="font-family:'Inter'">Free → slow convert</span></div>
       </div>
     </div>
   </div>
@@ -822,7 +765,6 @@
     "Orchestrator: Resolving 21 slots concurrently...",
     "Spoonacular: Fetching macro-matched candidates...",
     "Orchestrator: Reconciling weekly ±5% band...",
-    "Spoonacular: Estimating ingredient prices...",
     "Orchestrator: Deduping ingredient IDs..."
   ];
 
