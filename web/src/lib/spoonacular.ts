@@ -23,7 +23,7 @@
 // here always includes bounds, so this costs nothing extra in practice and
 // protects against ever silently getting zeroed-out macros again.
 //
-// Pantry preference (F6/F3) is deliberately NOT sent here as Spoonacular's
+// Pantry preference (F5/F3) is deliberately NOT sent here as Spoonacular's
 // includeIngredients param, despite PRD 7.3 F3 describing it as "passed to
 // the Spoonacular query" — pantry contents are per-user, and folding them
 // into the real request would fragment the cross-user recipe_query_cache
@@ -227,7 +227,7 @@ export function commaSwapFallback(query: string): string | null {
 // shape/cut risk profile as "sliced" already here, dicing doesn't change
 // per-100g macros either.
 //
-// "strong" added 2026-08-09, live-confirmed via F11 chat-driven meal
+// "strong" added 2026-08-09, live-confirmed via F7 chat-driven meal
 // editing against production: "strong mushroom broth" (a real ingredient
 // name already present in a live Spoonacular recipe) returned zero
 // results from ingredient search. Unlike the cut/cooking-method words
@@ -236,7 +236,7 @@ export function commaSwapFallback(query: string): string | null {
 // fundamentally the same food for per-100g macro purposes (mostly water),
 // not a reformulated product the way an "X-free" qualifier can be (see
 // glutenFreeQualifierStripFallback's own comment on that distinction).
-// "julienne"/"young" added 2026-08-09 (F11 chat meal editing, live user
+// "julienne"/"young" added 2026-08-09 (F7 chat meal editing, live user
 // report -- a chicken breakfast recipe's own real ingredient data
 // included "julienne young ginger", zero search results even after
 // stripping "julienne" alone -- "young ginger" ALONE also has zero
@@ -386,7 +386,7 @@ export function parentheticalContentFallback(query: string): string | null {
   return content && content.toLowerCase() !== query.trim().toLowerCase() ? content : null;
 }
 
-// Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production,
+// Live-confirmed 2026-08-09 (F7 chat-driven meal editing, production,
 // same repro as PREP_PREFIXES' "strong" entry above): "firm/extra tofu" --
 // a real ingredient name from a live Spoonacular recipe's own stored data
 // -- returned zero search results, while the exact same words
@@ -406,7 +406,7 @@ export function slashToSpaceFallback(query: string): string | null {
   return reformatted && reformatted !== query.trim() ? reformatted : null;
 }
 
-// Live-confirmed 2026-08-09 (same F11 session, found testing an 18-
+// Live-confirmed 2026-08-09 (same F7 session, found testing an 18-
 // ingredient real recipe): "mori-nu tofu" -- a real tofu BRAND name from
 // that recipe's own Spoonacular ingredient data -- returned zero search
 // results, while bare "tofu" matches immediately. Deliberately a SEPARATE

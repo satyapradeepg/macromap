@@ -1,4 +1,4 @@
-// Epic E2 rework (F6 Pantry Log) — read-side shape for a user's pantry
+// Epic E2 rework (F5 Pantry Log) — read-side shape for a user's pantry
 // items, shared by page.tsx (initial load) and pantryActions.ts. Not a
 // Server Action file — plain data access, mirrors data.ts's pattern for
 // meal plans.

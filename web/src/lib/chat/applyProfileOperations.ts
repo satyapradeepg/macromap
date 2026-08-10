@@ -1,4 +1,4 @@
-// Deterministic core of the assistant's edit_profile intent (F11): turns
+// Deterministic core of the assistant's edit_profile intent (F7): turns
 // a classified list of add/remove/set operations into the full profile
 // fields saveProfile() (app/onboarding/actions.ts) needs, applied on top
 // of the user's CURRENT profile row -- never a full replacement, since a

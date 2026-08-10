@@ -187,7 +187,7 @@ function buildPantryPools(pantryItems: PantryExclusionItem[]): PantryPool[] {
   });
 }
 
-// F6: reduces a grocery line by pantry quantities already on hand,
+// F5: reduces a grocery line by pantry quantities already on hand,
 // drawing down each matching pantry item's SHARED pool (see PantryPool)
 // rather than reapplying its full amount per line. Falls back to
 // excluding the line ENTIRELY (the original all-or-nothing behavior) only

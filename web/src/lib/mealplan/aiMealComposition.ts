@@ -70,7 +70,7 @@ export interface ComposedMealIngredient {
   carbsG: number;
   fatG: number;
   estimatedCostCents: number | null;
-  // Additive (F11 chat-driven meal editing, 2026-08-09): recorded on newly
+  // Additive (F7 chat-driven meal editing, 2026-08-09): recorded on newly
   // composed ingredients going forward so a future edit doesn't need to
   // re-infer role for a slot generated after this change -- optional
   // because it was never persisted before this, so an OLD slot's
@@ -82,7 +82,7 @@ export interface ComposedMealIngredient {
   role?: MealRole;
 }
 
-// F11 chat-driven meal editing (2026-08-09): the edit-proposal LLM call
+// F7 chat-driven meal editing (2026-08-09): the edit-proposal LLM call
 // always returns the COMPLETE new ingredient list (not a diff), with an
 // explicit gram amount for every ingredient, changed or not -- see
 // mealEditProposer.ts. This is the key difference from MealProposal/
@@ -438,7 +438,7 @@ export type CompositionRejection =
       gapNeeded: number;
     }
   | { kind: "title_ingredient_mismatch"; dishName: string; mismatchedWord: string }
-  // F11 chat-driven meal editing only (composeMealFromEditDetailed below) --
+  // F7 chat-driven meal editing only (composeMealFromEditDetailed below) --
   // an edit's ingredients always carry an EXPLICIT amountG (never solved
   // against a gap), so the failure shape is simpler than portion_out_of_bounds:
   // just "this stated amount is outside the realistic bound for this role,"
@@ -1263,7 +1263,7 @@ export function isNoOpEdit(
 // dish.
 export type ComposeEditResult = { ok: true; meal: ComposedMeal; titleRepaired: boolean } | { ok: false; reason: CompositionRejection };
 
-// F11 chat-driven meal editing. Reuses every existing grounding/safety
+// F7 chat-driven meal editing. Reuses every existing grounding/safety
 // helper from composeMealFromProposalDetailed above, but is deliberately
 // NOT a variant of it -- an edit never solves an amount against a macro
 // target (every amountG here is already explicit, from the edit

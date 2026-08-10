@@ -1,5 +1,5 @@
 // Deterministic day-reference resolver for the conversational assistant
-// (F11). Reuses the exact day_index=0=today rolling-week convention
+// (F7). Reuses the exact day_index=0=today rolling-week convention
 // app/plan/calendarExport.ts's dateForDayIndex documents: day_index 0 is
 // always today, day_index N is N days from now -- so every weekday name
 // resolves somewhere inside [0,6] by construction, no "already passed"

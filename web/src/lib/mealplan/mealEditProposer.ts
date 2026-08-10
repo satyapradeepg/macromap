@@ -1,5 +1,5 @@
 // Calls Claude to propose the COMPLETE new ingredient list for a
-// chat-requested meal edit (F11) -- sibling to mealProposer.ts, same
+// chat-requested meal edit (F7) -- sibling to mealProposer.ts, same
 // conventions (raw fetch, forced tool_choice, self-check field), but a
 // different schema shape: every ingredient carries a REQUIRED explicit
 // amountG (never optional the way fixedAmountG is in mealProposer.ts),

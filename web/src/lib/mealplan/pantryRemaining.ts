@@ -1,4 +1,4 @@
-// Epic F3/F6 follow-up (quantity-aware pantry depletion) -- extends the
+// Epic F3/F5 follow-up (quantity-aware pantry depletion) -- extends the
 // boolean-only pantryOverlapDeduction (ranking.ts) with a live, mutable
 // "how much is left" tracker that depletes as slots get claimed across a
 // generation pass, instead of giving every slot the same static signal
@@ -11,7 +11,7 @@
 // wordBoundaryIncludes below).
 //
 // Strict superset of today's behavior by construction: a pantry item
-// with no structured amount/unit (the common case -- F6 quantity entry
+// with no structured amount/unit (the common case -- F5 quantity entry
 // is optional) becomes an "unlimited" pool that contributes the same
 // boolean bonus as today and never depletes; a pantry item whose identity
 // match or unit conversion couldn't be resolved (LLM/API failure, or an

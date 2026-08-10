@@ -1,6 +1,6 @@
 "use server";
 
-// Epic E2 rework (F6 Pantry Log) — manual add/remove Server Actions. F6 is
+// Epic E2 rework (F5 Pantry Log) — manual add/remove Server Actions. F5 is
 // fully optional (PRD 7.3): skipping pantry entry leaves generation and the
 // grocery list unchanged. Entries feed F3's pantry-aware ranking
 // (ranking.ts's pantryOverlapDeduction) via actions.ts's loadPantryItems —

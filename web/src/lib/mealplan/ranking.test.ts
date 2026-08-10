@@ -437,7 +437,7 @@ describe("rankCandidates", () => {
     });
   });
 
-  describe("pantry overlap (F6/F3)", () => {
+  describe("pantry overlap (F5/F3)", () => {
     const chicken = { id: 101, name: "chicken breast", amount: 1, unit: "lb", metricAmount: 450, metricUnit: "g" };
     const rice = { id: 202, name: "white rice", amount: 1, unit: "cup", metricAmount: 190, metricUnit: "g" };
 

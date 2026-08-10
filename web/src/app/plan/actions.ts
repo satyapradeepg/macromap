@@ -29,7 +29,7 @@ export interface ProfileRow {
   weekly_budget_usd: number | null;
 }
 
-// Exported for reuse by chatActions.ts (the conversational assistant, F11)
+// Exported for reuse by chatActions.ts (the conversational assistant, F7)
 // -- swap/pantry-edit/meal-edit chat intents only need this same narrow
 // column set; only the profile/constraint-edit intent needs a wider query,
 // which chatActions.ts adds itself rather than widening this one (this
@@ -50,8 +50,8 @@ export async function loadProfile(
   return data;
 }
 
-// F6/F3 pantry-aware querying. Empty array is the correct/expected result
-// until F6's entry UI exists — pantry entry is fully optional (PRD 7.3 F6),
+// F5/F3 pantry-aware querying. Empty array is the correct/expected result
+// until F5's entry UI exists — pantry entry is fully optional (PRD 7.3 F5),
 // so no rows here just means generation behaves exactly as before.
 // Exported for reuse by chatActions.ts, same rationale as loadProfile above.
 export async function loadPantryItems(

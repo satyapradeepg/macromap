@@ -1,4 +1,4 @@
-// Epic E2 rework — F6/F3 real snack slots (snack1/snack2). Composes 2-3
+// Epic E2 rework — F5/F3 real snack slots (snack1/snack2). Composes 2-3
 // whole-food ingredients to hit a snack slot's target macros, instead of
 // searching Spoonacular's recipe corpus (live-tested: type=snack is
 // dominated by low-protein soups/dips/salads, as few as 8 real matches at

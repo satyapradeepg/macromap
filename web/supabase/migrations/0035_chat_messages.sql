@@ -1,4 +1,4 @@
--- Conversational plan assistant (F11): an append-only transcript of every
+-- Conversational plan assistant (F7): an append-only transcript of every
 -- chat turn, per user. user_id is text (not uuid) to match profiles.id's
 -- type since the 0034 Auth0 identity swap -- Auth0 subject ids aren't
 -- valid uuids. action_taken records what the assistant actually did (or

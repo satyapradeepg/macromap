@@ -1,4 +1,4 @@
-// Cheap deterministic yes/no check for the clamp-confirmation flow (F11
+// Cheap deterministic yes/no check for the clamp-confirmation flow (F7
 // meal editing): when the assistant's PREVIOUS message offered a specific
 // suggestion ("want me to use 280g instead?"), most replies are a plain
 // yes/no -- this catches that common case without spending a classifier

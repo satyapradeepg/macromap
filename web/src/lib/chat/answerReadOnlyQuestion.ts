@@ -1,4 +1,4 @@
-// Deterministic dispatcher for the assistant's read-only Q&A intent (F11).
+// Deterministic dispatcher for the assistant's read-only Q&A intent (F7).
 // No Claude call for the numeric content at all -- the actual answer is
 // always formatted from already-loaded PlanView/plan data, matching this
 // codebase's universal grounding rule (every macro number traces back to
@@ -74,7 +74,7 @@ function answerPantryContents(items: PantryItemView[]): string {
   return `Your pantry has: ${lines.join(", ")}.`;
 }
 
-// Live-confirmed 2026-08-09 (F11 chat-driven testing against production):
+// Live-confirmed 2026-08-09 (F7 chat-driven testing against production):
 // this message used to hardcode "budget/cost tracking" as THE named
 // example of what's unsupported, regardless of what was actually asked --
 // reproduced identically for a pantry question (before pantry_contents

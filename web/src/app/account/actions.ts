@@ -54,7 +54,7 @@ export async function deleteAccount(): Promise<{ error: string | null }> {
   const { error: pantryError } = await supabase.from("pantry_items").delete().eq("user_id", user.id);
   if (pantryError) return { error: pantryError.message };
 
-  // Added with F11's conversational assistant (0035) -- no FK cascade
+  // Added with F7's conversational assistant (0035) -- no FK cascade
   // exists post-0034, so this needs the same explicit delete as every
   // other user-owned table here, or it's orphaned forever.
   const { error: chatError } = await supabase.from("chat_messages").delete().eq("user_id", user.id);

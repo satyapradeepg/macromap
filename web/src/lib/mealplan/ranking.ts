@@ -12,7 +12,7 @@ export interface CandidateIngredient {
   unit: string;
   metricAmount: number;
   metricUnit: string;
-  // Additive (F11 chat-driven meal editing, 2026-08-09) -- only ever set
+  // Additive (F7 chat-driven meal editing, 2026-08-09) -- only ever set
   // for newly AI-composed ingredients (orchestrate.ts's
   // composeProposalToCandidateDetailed/BestEffort); real Spoonacular
   // recipes and everything generated before this change have no role at
@@ -37,12 +37,12 @@ export interface RecipeCandidate {
   ingredients: CandidateIngredient[];
 }
 
-// F6/F3 pantry-aware querying. spoonacularIngredientId is resolved lazily
-// (F6 is manual-entry-first) — null until resolved, in which case matching
+// F5/F3 pantry-aware querying. spoonacularIngredientId is resolved lazily
+// (F5 is manual-entry-first) — null until resolved, in which case matching
 // falls back to a loose name comparison (see pantryOverlapDeduction below).
 // amount/unit (migration 0018) are an OPTIONAL structured quantity -- null
 // when a pantry entry only ever had free-text quantity_text (the common
-// case, F6 quantity entry is optional), in which case pantryRemaining.ts
+// case, F5 quantity entry is optional), in which case pantryRemaining.ts
 // treats this item as an unlimited pool (today's exact boolean behavior,
 // never depletes) rather than guessing at a quantity that was never given.
 export interface PantryItem {

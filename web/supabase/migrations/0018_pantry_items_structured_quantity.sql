@@ -1,4 +1,4 @@
--- F6 pantry log + F4 grocery list — structured, OPTIONAL quantity so the
+-- F5 pantry log + F4 grocery list — structured, OPTIONAL quantity so the
 -- grocery list can subtract what's already on hand instead of the current
 -- all-or-nothing exclusion (aggregate.ts's matchesPantryItem drops a
 -- whole grocery line on any name/id match, regardless of how much is

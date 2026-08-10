@@ -1,5 +1,5 @@
 // Classifies a free-text chat message into one or more structured
-// intents for the conversational plan assistant (F11). Follows this
+// intents for the conversational plan assistant (F7). Follows this
 // codebase's universal Claude call-site convention (raw fetch, no SDK,
 // forced tool_choice, self-check field, never-trust-the-shape validator)
 // -- see mealProposer.ts for the sibling this was modeled on.
@@ -39,7 +39,7 @@ export type ClassifiedIntent =
     }
   | { kind: "edit_profile"; operations: ProfileOperation[] }
   | { kind: "read_only_qa"; qaTopic: QaTopic; dayIndex: number | null; mealType: MealType | null }
-  // Fallback path for the clamp-confirmation flow (F11 meal editing) --
+  // Fallback path for the clamp-confirmation flow (F7 meal editing) --
   // chatActions.ts's own cheap deterministic yes/no keyword check handles
   // the common case BEFORE this classifier even runs; this intent only
   // fires when that check couldn't confidently tell (an ambiguous
@@ -55,7 +55,7 @@ export interface ClassifyChatIntentInput {
   todayWeekdayName: string;
   // Set only when the assistant's PREVIOUS message offered a specific
   // suggestion the user hasn't responded to yet (the clamp-confirmation
-  // flow, F11 meal editing) -- a plain-English summary of what's pending,
+  // flow, F7 meal editing) -- a plain-English summary of what's pending,
   // so the model can recognize a yes/no reply in that context via
   // confirm_pending_action. chatActions.ts's own cheap deterministic
   // keyword check handles the common case before this classifier even

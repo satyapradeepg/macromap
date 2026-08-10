@@ -1,5 +1,5 @@
--- Epic E2 rework (F6 Pantry Log, moved up from V2 per the pantry-first
--- architecture pivot — see docs/PRD-MacroMap.md 7.3 F6, docs/ai-agents.md
+-- Epic E2 rework (F5 Pantry Log, moved up from V2 per the pantry-first
+-- architecture pivot — see docs/PRD-MacroMap.md 7.3 F5, docs/ai-agents.md
 -- Agent 4). MVP scope only: manual entry with rough quantities. Barcode
 -- entry (F8) and 7-day auto-expiry remain V2 and are not modeled here —
 -- add as separate migrations when F8 is built, matching this repo's

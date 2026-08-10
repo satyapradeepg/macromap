@@ -1,6 +1,6 @@
 "use client";
 
-// Conversational plan assistant (F11) -- a floating widget, not a modal:
+// Conversational plan assistant (F7) -- a floating widget, not a modal:
 // deliberately no backdrop (unlike RecipeModal's fixed-overlay idiom this
 // otherwise mirrors) since the point is to keep browsing/editing the plan
 // while chatting, not to block it. Plain useState + a direct await on the
@@ -31,7 +31,7 @@ interface ChatMessage {
 // dinner") before committing.
 // "I have chicken and rice" (the prior third suggestion) demonstrated the
 // pantry feature but was vague about what it'd do to a first-time user and
-// didn't showcase this app's actual flagship differentiator -- F11 chat
+// didn't showcase this app's actual flagship differentiator -- F7 chat
 // meal EDITING (add/remove/adjust a real ingredient), which none of the
 // three previously touched at all. Live-tested 2026-08-10 for reliability
 // before picking this specific wording: a plain seasoning add/increase

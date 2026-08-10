@@ -1,11 +1,11 @@
 "use server";
 
-// Conversational plan assistant (F11) -- the orchestrating server action.
+// Conversational plan assistant (F7) -- the orchestrating server action.
 // Deliberately a single forced-choice classifier + deterministic router,
 // not an open multi-tool agentic loop -- see the plan doc for why. Every
 // mutation this dispatches to is an EXISTING action (swapMeal,
 // addPantryItem/removePantryItem, saveProfile+generatePlan); this file
-// never invents a new write path, matching F11's own PRD line: "chat is a
+// never invents a new write path, matching F7's own PRD line: "chat is a
 // second interface onto existing state changes."
 
 import type { SupabaseClient } from "@supabase/supabase-js";

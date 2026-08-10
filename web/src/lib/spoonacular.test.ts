@@ -212,7 +212,7 @@ describe("prefixStripFallback", () => {
     expect(prefixStripFallback("seitan, crumbled")).toBe("seitan");
   });
 
-  // Live-confirmed 2026-08-09 (F11 chat-driven meal editing, production):
+  // Live-confirmed 2026-08-09 (F7 chat-driven meal editing, production):
   // "strong mushroom broth" -- a real ingredient name already present in a
   // live Spoonacular recipe -- returned zero search results.
   it("strips a leading 'strong' prefix", () => {
@@ -220,7 +220,7 @@ describe("prefixStripFallback", () => {
     expect(prefixStripFallback("STRONG coffee")).toBe("coffee");
   });
 
-  // Live-confirmed 2026-08-09 (F11 chat meal editing): "julienne young
+  // Live-confirmed 2026-08-09 (F7 chat meal editing): "julienne young
   // ginger" -- a real ingredient from a live recipe -- needed BOTH
   // stacked descriptors stripped before matching; neither "julienne" nor
   // "young" alone was enough. prefixStripFallback itself only strips one
@@ -236,7 +236,7 @@ describe("prefixStripFallback", () => {
   });
 });
 
-// Live-confirmed 2026-08-09, same F11 session as the "strong" fix above:
+// Live-confirmed 2026-08-09, same F7 session as the "strong" fix above:
 // "firm/extra tofu" -- a real ingredient name from a live Spoonacular
 // recipe's own stored data -- returned zero search results, while the
 // exact same words space-separated ("firm extra tofu") matched
@@ -259,7 +259,7 @@ describe("slashToSpaceFallback", () => {
   });
 });
 
-// Live-confirmed 2026-08-09, same F11 session: "mori-nu tofu" -- a real
+// Live-confirmed 2026-08-09, same F7 session: "mori-nu tofu" -- a real
 // tofu BRAND name from a live Spoonacular recipe's own stored data --
 // returned zero search results, while bare "tofu" matches immediately.
 describe("brandNamePrefixStripFallback", () => {
