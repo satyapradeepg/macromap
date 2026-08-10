@@ -22,7 +22,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Source:** PRD Assumption A1 — *"if users don't trust the numbers, retention collapses"*
 
-**Note:** Originally scoped to TDEE/macro-target trust only. Now higher-stakes: with AI-composed/edited recipes and snack add-ons (see PRD F3), some meals are no longer pure Spoonacular lookups — trust risk extends from "are these numbers right" to "did the AI actually build a real, cookable meal." See H8 for the recipe-composition-specific test.
+**Note:** Originally scoped to TDEE/macro-target trust only. Now higher-stakes: with AI-composed/edited recipes and snack add-ons (see PRD F3), some meals are no longer pure Spoonacular lookups — trust risk extends from "are these numbers right" to "did the AI actually build a real, cookable meal." See H6 for the recipe-composition-specific test.
 
 **Test method:**
 - Track "macro override rate" during onboarding: what % of users change the suggested values by >20%?
@@ -42,7 +42,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Hypothesis:** Users in the primary segment (cutting or bulking) will convert from Free to Pro at $9/month within 90 days if the product delivers on its core promise.
 
-**Source:** PRD Assumption A5 — *"High risk — mispricing kills conversion"*
+**Source:** PRD Assumption A4 — *"High risk — mispricing kills conversion"*
 
 **Test method:**
 - Pre-launch: run 5–10 structured interviews with Marcus/Priya-type users; ask "how much would you pay?" before showing the price
@@ -93,17 +93,17 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 **Failure action:** If repeat rate >30%, expand query diversity by rotating between Spoonacular's cuisine types, adding a "no-repeat" hard constraint (`excludeIds`), or triggering earlier upgrade to a broader Spoonacular tier.
 
-**Early positive signal (July 15 2026 live engine audit):** real Spoonacular recipes landed 21/21 distinct across a single week, zero repeats, in every profile tested that filled its recipe slots — not yet the 4-week window this hypothesis is scoped to, but a good sign within the window measured. **A related but distinct gap found in the same audit, not covered by this hypothesis:** composed snacks (a separate mechanism from Spoonacular recipe search, see F3/F6) are structurally capped at ~3-4 combos/week by a fixed 9-ingredient pool, and narrower still when allergies restrict the safe/preferred options further. Held back by the small pool size, not by Spoonacular's corpus. See `engine-audit-2026-07-15.md`.
+**Early positive signal (July 15 2026 live engine audit):** real Spoonacular recipes landed 21/21 distinct across a single week, zero repeats, in every profile tested that filled its recipe slots — not yet the 4-week window this hypothesis is scoped to, but a good sign within the window measured. **A related but distinct gap found in the same audit, not covered by this hypothesis:** composed snacks (a separate mechanism from Spoonacular recipe search, see F3/F5) are structurally capped at ~3-4 combos/week by a fixed 9-ingredient pool, and narrower still when allergies restrict the safe/preferred options further. Held back by the small pool size, not by Spoonacular's corpus. See `engine-audit-2026-07-15.md`.
 
 ---
 
-## H6 — Pantry engagement: users will log their pantry manually
+## H5 — Pantry engagement: users will log their pantry manually
 
-**Hypothesis:** Given manual pantry entry is available from MVP (F6, moved up from V2 — see PRD), users will enter 3+ pantry items within their first two plan-generation sessions, enough for the pantry layer to meaningfully bias meal selection.
+**Hypothesis:** Given manual pantry entry is available from MVP (F5, moved up from V2 — see PRD), users will enter 3+ pantry items within their first two plan-generation sessions, enough for the pantry layer to meaningfully bias meal selection.
 
-**Source:** PRD Assumption A4 — *"if friction is too high, pantry feature won't be used"*
+**Source:** PRD Assumption A3 — *"if friction is too high, pantry feature won't be used"*
 
-**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F6). This hypothesis is testable from MVP launch, not gated on V2. **Updated July 25 2026:** matching is now an LLM identity classifier plus real Spoonacular unit conversion (not plain string/unit matching), and pantry depletion now also feeds meal ranking and the standalone swap action, not just the grocery list — see ai-agents.md Agent 4. Doesn't change this hypothesis's test method, but "meaningfully bias meal selection" is now a materially stronger claim than when this was written.
+**Note:** Pantry entry, generation-time use, and grocery-list exclusion now ship in MVP (F5). This hypothesis is testable from MVP launch, not gated on V2. **Updated July 25 2026:** matching is now an LLM identity classifier plus real Spoonacular unit conversion (not plain string/unit matching), and pantry depletion now also feeds meal ranking and the standalone swap action, not just the grocery list — see ai-agents.md Agent 3. Doesn't change this hypothesis's test method, but "meaningfully bias meal selection" is now a materially stronger claim than when this was written.
 
 **Test method:**
 - Measure pantry log completion rate: % of users who add ≥1 item before or during their first plan generation
@@ -119,7 +119,7 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 
 ---
 
-## H8 — AI-composed recipes & snack add-ons: users accept them as real meals
+## H6 — AI-composed recipes & snack add-ons: users accept them as real meals
 
 **Hypothesis:** When Spoonacular has no macro/pantry match and Claude composes or edits a recipe (or adds a snack/side to close a macro gap), users rate these AI-touched meals as realistic and cookable at roughly the same rate as pure Spoonacular recipes — this doesn't become a trust-eroding "the AI made something weird" moment.
 
@@ -163,11 +163,11 @@ A statement that can be proven wrong by real data. For each assumption MacroMap 
 |---|---|---|---|
 | H2 | $9/month pricing | Before launch (interviews) | High — kills conversion |
 | H1 | Macro trust | Week 1 post-launch | High — kills retention |
-| H8 | AI-composed recipe/snack acceptance | Week 1 post-launch | High — new mechanism, same retention risk as H1 |
+| H6 | AI-composed recipe/snack acceptance | Week 1 post-launch | High — new mechanism, same retention risk as H1 |
 | H3 | Time savings | Week 2 post-launch | High — core value prop |
 | H7 | Weekly retention | Week 4 post-launch | High — business model |
 | H4 | Recipe variety | Month 1 post-launch | Medium — variety drives retention |
-| H6 | Pantry engagement | Week 1–2 post-launch | Medium — now testable at MVP, not gated on V2 |
+| H5 | Pantry engagement | Week 1–2 post-launch | Medium — now testable at MVP, not gated on V2 |
 
 ---
 

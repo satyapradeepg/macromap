@@ -29,7 +29,7 @@ A single app that takes his weekly macro targets, generates a varied meal plan, 
 |---|---|
 | F3 Meal plan generation | Replaces his 2–3 hour Sunday spreadsheet session |
 | F4 Grocery list | Replaces his Notes app; deduped quantities save time at checkout |
-| F10 Calendar export | Fits his data-driven, structured weekly routine |
+| F6 Calendar export | Fits his data-driven, structured weekly routine |
 
 ### Quote
 > "I know exactly what I need to eat. I just don't want to spend my Sunday figuring out how to get there."
@@ -63,9 +63,9 @@ A frictionless Sunday routine: input her goal, get a plan, get a list, shop, don
 | Feature | Why it helps Priya |
 |---|---|
 | F3 Meal plan generation | Eliminates the multi-app Sunday session entirely |
-| F10 Calendar export | Meal plan in her calendar = no mid-week decision fatigue |
+| F6 Calendar export | Meal plan in her calendar = no mid-week decision fatigue |
 | F4 Grocery list | Consolidated, deduped, no manual tracking |
-| F11 Conversational plan assistant | When mid-week takeout breaks the plan, she can just tell the assistant to swap a meal or adjust rather than starting over — directly addresses her adherence-collapse pain point |
+| F7 Conversational plan assistant | When mid-week takeout breaks the plan, she can just tell the assistant to swap a meal or adjust rather than starting over — directly addresses her adherence-collapse pain point |
 
 ### Quote
 > "I don't have time to be my own nutritionist. Just tell me what to buy."

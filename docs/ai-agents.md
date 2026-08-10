@@ -10,11 +10,11 @@
 
 MacroMap is built as an **AI agent system** — a central orchestrator (Claude) coordinates a set of specialised MCP (Model Context Protocol) agents, each owning one data domain. The orchestrator reasons across all agents simultaneously to produce contextual recommendations that no single data source could generate alone.
 
-**Architecture update (pantry-first, conversational, AI-composed recipes):** three changes to the original design, all folded into the sections below. (1) Pantry contents are now read *before* recipe queries fire, not just used to filter the grocery list afterward — this moves Pantry Agent data (previously V2-only) into the MVP critical path. (2) The Orchestrator is now a persistent, conversational session across the whole flow, not a one-shot trigger on "Generate" / "Swap" — the user can edit pantry, swap meals, or change constraints in plain language at any point. (3) When Spoonacular search can't produce an acceptable recipe (cascade exhausted, or pantry ingredients ignored), Claude can compose or edit a recipe, and can attach a small snack/add-on to a meal to close a macro gap — in both cases every macro number is still resolved from Spoonacular's ingredient-level nutrition data, never estimated by the LLM. See Agent 1, Agent 2, and Agent 4 below, and PRD F3/F6/F11.
+**Architecture update (pantry-first, conversational, AI-composed recipes):** three changes to the original design, all folded into the sections below. (1) Pantry contents are now read *before* recipe queries fire, not just used to filter the grocery list afterward — this moves Pantry Agent data (previously V2-only) into the MVP critical path. (2) The Orchestrator is now a persistent, conversational session across the whole flow, not a one-shot trigger on "Generate" / "Swap" — the user can edit pantry, swap meals, or change constraints in plain language at any point. (3) When Spoonacular search can't produce an acceptable recipe (cascade exhausted, or pantry ingredients ignored), Claude can compose or edit a recipe, and can attach a small snack/add-on to a meal to close a macro gap — in both cases every macro number is still resolved from Spoonacular's ingredient-level nutrition data, never estimated by the LLM. See Agent 1, Agent 2, and Agent 3 below, and PRD F3/F5/F7.
 
-**Fourth change, added July 15 2026: post-generation plan critique.** After a plan is fully generated, one more Claude call reviews the whole week at once and flags slots worth reconsidering — repetitive recipes, or a meal that's a notably worse macro fit than the rest of the week. Every flagged slot's actual fate is still decided deterministically (a real alternative, scored and compared, never just trusted). See Agent 1's new bullet and Agent 2's repair note below. **Update:** this and (3) above were gated behind `ANTHROPIC_API_KEY` while it was unconfigured — the key is now configured and both are live in production, actively being refined against real usage (see the August 2026 chat-editing bug-fix rounds referenced throughout this doc and hypotheses.md H8).
+**Fourth change, added July 15 2026: post-generation plan critique.** After a plan is fully generated, one more Claude call reviews the whole week at once and flags slots worth reconsidering — repetitive recipes, or a meal that's a notably worse macro fit than the rest of the week. Every flagged slot's actual fate is still decided deterministically (a real alternative, scored and compared, never just trusted). See Agent 1's new bullet and Agent 2's repair note below. **Update:** this and (3) above were gated behind `ANTHROPIC_API_KEY` while it was unconfigured — the key is now configured and both are live in production, actively being refined against real usage (see the August 2026 chat-editing bug-fix rounds referenced throughout this doc and hypotheses.md H6).
 
-**Fifth change, built + live-tested July 2026: grocery list quantities corrected against real data.** A deterministic fix, no LLM involved: each grocery ingredient's quantity now correctly reflects *only* the portion actually planned for that meal — scaled by the same per-slot macro-fit factor Agent 2 already computes, divided by the recipe's native serving count (Spoonacular's ingredient amounts are for the whole recipe batch, not one serving). Pantry exclusion (Agent 4) also gained an optional quantitative mode alongside its original all-or-nothing behavior. See F4/F6 in the PRD and Agent 4 below.
+**Fifth change, built + live-tested July 2026: grocery list quantities corrected against real data.** A deterministic fix, no LLM involved: each grocery ingredient's quantity now correctly reflects *only* the portion actually planned for that meal — scaled by the same per-slot macro-fit factor Agent 2 already computes, divided by the recipe's native serving count (Spoonacular's ingredient amounts are for the whole recipe batch, not one serving). Pantry exclusion (Agent 3) also gained an optional quantitative mode alongside its original all-or-nothing behavior. See F4/F5 in the PRD and Agent 3 below.
 
 ```
 User Goal Input
@@ -39,7 +39,7 @@ User Goal Input
 
 **What it does:**
 - Accepts user inputs: macro targets, dietary preferences, allergies, pantry contents
-- Reads Pantry Agent contents *before* querying recipes (moved up from V2 — see Agent 4) and passes them to the Recipe Agent as a soft preference, biasing candidate selection toward on-hand ingredients without overriding any hard constraint
+- Reads Pantry Agent contents *before* querying recipes (moved up from V2 — see Agent 3) and passes them to the Recipe Agent as a soft preference, biasing candidate selection toward on-hand ingredients without overriding any hard constraint
 - Decides which recipes to query (what constraints to pass to the Recipe Agent)
 - Applies the cascade tolerance fallback (±10% → ±20% → ±30%) when no recipe matches
 - Fires all 21 Recipe Agent calls concurrently (OQ7), then resolves variety collisions locally in a fixed slot order once all 21 ranked candidate lists return — each slot claims its top unclaimed candidate, stepping down to its own next-ranked candidate on collision (no extra API call); re-queries only if a slot's whole list is exhausted
@@ -47,8 +47,8 @@ User Goal Input
 - **Snack/add-on selection:** when a meal or the weekly total is short of its macro target, can attach one small single-ingredient add-on (fruit, nuts, yogurt, protein powder) to a meal rather than distorting a full recipe's proportions — capped at ≤15–20% of that meal's calories and one add-on per slot. Tried before further cascade widening or a slack-meal requery.
 - Runs a weekly reconciliation pass after all 21 meals are selected: sums actual macros, compares against a ±5% weekly band (tighter than the per-meal ±10-30% cascade); prefers closing the gap with a snack/add-on first, and only re-queries up to 3 slack meals if the gap is too large for that — capped at 3 extra queries per plan to protect API quota
 - Deduplicates and aggregates ingredients across all 35 meal/snack slots (7 days × breakfast/lunch/dinner/snack1/snack2) into a single grocery list — keyed on Spoonacular's canonical ingredient `id` (not raw ingredient text) and unit-reconciled via the `measures.metric` data already returned by the Recipe Agent, so quantities are summed locally with no extra API call. **Each slot's ingredient amounts are scaled to reflect only the portion actually planned for that one meal** (the same per-slot macro-fit factor applied to macros, divided by the recipe's native serving count) — fixed July 2026 after live data showed ingredients weren't being scaled at all, which was the dominant cause of an inflated grocery total.
-- Excludes pantry items from the grocery list entirely, or — when a pantry entry has a comparable structured quantity (amount + unit) — reduces the needed amount by what's already on hand instead (see Agent 4)
-- Runs as a persistent conversational session (F11): handles free-text requests to edit pantry, swap a meal, or change a constraint by calling the same underlying actions listed above — chat is a second interface onto these actions, not a separate mutation path
+- Excludes pantry items from the grocery list entirely, or — when a pantry entry has a comparable structured quantity (amount + unit) — reduces the needed amount by what's already on hand instead (see Agent 3)
+- Runs as a persistent conversational session (F7): handles free-text requests to edit pantry, swap a meal, or change a constraint by calling the same underlying actions listed above — chat is a second interface onto these actions, not a separate mutation path
 - **New (built July 15 2026): post-generation plan critique.** After reconciliation and the AI composition fallback both finish, makes one more Claude call — this time reviewing the entire generated week at once, not one meal at a time. Every other step above resolves one slot (or a handful of slack slots) in isolation; this is the only point in the flow where anything actually looks at all 35 slots together, which is what makes it possible to notice a recipe repeating 4 times or one meal being a much worse fit than the rest of the week even though it individually passed. The critique itself is judgment only — a list of flagged slots and why — never a replacement or a "this is better" verdict. See Agent 2's note below for what happens to a flagged slot.
 
 **When it runs:** Persistent across the session (Steps 2–5 of the PRD flow) — not just a one-shot trigger. Full plan generation still fires on "Generate my meal plan"; individual actions (pantry edit, meal swap, constraint change) fire whenever the user does them via UI or chat.
@@ -67,7 +67,7 @@ User Goal Input
 - Receives from Orchestrator: target protein/carb/fat/calorie ranges, dietary flags (vegetarian, gluten-free, etc.), excluded allergens, excluded recipe IDs (recently shown), and pantry ingredients (if entered — passed as `includeIngredients`, a soft preference that biases ranking, never a hard filter)
 - Queries Spoonacular `/recipes/complexSearch` with `minProtein`, `maxProtein`, `minCalories`, `maxCalories`, `diet`, `excludeIngredients`, `excludeIds`, `includeIngredients`, plus `addRecipeInformation=true` and `fillIngredients=true` so `extendedIngredients` comes back with a full `measures` object (`us`/`metric` amount + unit) in the same call — this feeds both OQ4's serving-scaling and F4's cross-recipe dedup/unit-conversion, no second call needed. These two flags each cost 0.025 points per recipe returned (live-confirmed against a real key, July 2026 — see PRD OQ6). **Candidate count, corrected to match what shipped:** the original plan (3–5 candidates for a unique tuple, 7–8 for a shared meal-type tuple, implying 3 distinct queries/plan) assumed each meal type had its own target — the real per-meal target is identical across breakfast/lunch/dinner (daily ÷ 3), so all 21 slots share one constraint tuple and the shipped code fetches **one shared query at `number=60`** for the whole plan, not three separate ones. This is cheaper than the original plan, and PRD OQ6 has the resulting recomputed real capacity ceiling.
 - When the query returns multiple candidates at the current tolerance tier, ranks them deterministically: score = `|protein_actual − protein_target| / protein_target × 2 + |calories_actual − calories_target| / calories_target` (lowest wins), with a deduction for pantry-ingredient overlap. Ties broken by `aggregateLikes`. No LLM judgment in this step. Note: the "not used elsewhere this week" variety signal cannot apply during this initial per-slot ranking, since all 21 slots resolve concurrently (OQ7) — real variety enforcement happens in the Orchestrator's cross-slot claim-resolution pass afterward, not here.
-- **Pantry-overlap deduction is now quantity-aware, not static (built July 25 2026, `pantryRemaining.ts`):** a live "remaining quantity" tracker depletes as slots get claimed during generation, so a recipe's pantry credit shrinks as other slots use up the same on-hand stock, instead of every slot seeing an identical boolean bonus regardless of what's already spoken for. **Known, accepted limitation:** the very first parallel-scored ranking of all 21 slots reads from one shared snapshot before anything is claimed, so it can't yet reflect same-pass depletion — only slots re-scored afterward (retries, reconciliation, protein-floor repair, plan-critique repair, and the standalone swap action) see genuine, shrinking pantry credit. See Agent 4 for the matching/conversion mechanics this tracker relies on.
+- **Pantry-overlap deduction is now quantity-aware, not static (built July 25 2026, `pantryRemaining.ts`):** a live "remaining quantity" tracker depletes as slots get claimed during generation, so a recipe's pantry credit shrinks as other slots use up the same on-hand stock, instead of every slot seeing an identical boolean bonus regardless of what's already spoken for. **Known, accepted limitation:** the very first parallel-scored ranking of all 21 slots reads from one shared snapshot before anything is claimed, so it can't yet reflect same-pass depletion — only slots re-scored afterward (retries, reconciliation, protein-floor repair, plan-critique repair, and the standalone swap action) see genuine, shrinking pantry credit. See Agent 3 for the matching/conversion mechanics this tracker relies on.
 - Returns: recipe name, ingredient list with quantities, per-serving nutrition data
 - If zero results: widens tolerance range and retries (cascade fallback, up to 3 rounds)
 - **If cascade fallback still returns nothing acceptable, or every candidate ignores pantry ingredients the user entered:** the Orchestrator triggers the AI composition/edit fallback instead of failing the slot. Claude proposes a recipe (new, or an edit to a returned candidate) using pantry ingredients and the macro target as inputs. Every ingredient in that proposal is then resolved via Spoonacular's ingredient-level endpoints — `/food/ingredients/search` to get a canonical ingredient `id`, `/food/ingredients/{id}/information` for its nutrition per unit — and macros are summed deterministically from that data. Claude decides the recipe/edit; it never supplies the macro number itself. If an ingredient can't be resolved this way, it's swapped for one that can be, or the fallback is abandoned and the slot falls through to OQ2's final "blocking constraint" prompt.
@@ -88,11 +88,11 @@ User Goal Input
 
 ---
 
-## Agent 4 — Pantry Agent (Custom MCP)
+## Agent 3 — Pantry Agent (Custom MCP)
 
 **Role:** The personalisation layer. Owns all user-specific persistent state: pantry inventory, dietary constraints, allergen flags, and dislikes.
 
-**MVP scope note (updated):** dietary constraints, allergen flags, dislikes, and pantry inventory are all active from day one (F2, F6) — the Orchestrator reads pantry contents *before* querying the Recipe Agent, not just to exclude items from the grocery list afterward; see PRD F3/F6.
+**MVP scope note (updated):** dietary constraints, allergen flags, dislikes, and pantry inventory are all active from day one (F2, F5) — the Orchestrator reads pantry contents *before* querying the Recipe Agent, not just to exclude items from the grocery list afterward; see PRD F3/F5.
 
 **What it does:**
 - Stores and retrieves: pantry items (name, expiry date, a free-text rough-quantity note, and — **built July 2026** — an optional structured quantity: a numeric amount + unit, e.g. "2, lb"), dietary restrictions, allergy flags, disliked ingredients
@@ -100,7 +100,7 @@ User Goal Input
 - **Matching a pantry item to a grocery-list line or recipe ingredient is now an LLM identity classifier, not string/unit comparison (rebuilt July 2026, `identityMatch.ts`):** a Claude Haiku-tier forced-tool-call judges whether the two names refer to the *same purchasable item* (e.g. "jasmine rice" vs. "white rice" — yes; "green onions" vs. "onion" — no), because one real ingredient routinely resolves to several different Spoonacular ids across a plan's recipes, which made id-based or plain-substring matching unreliable. Judgments are cached **globally**, not per-user, since ingredient identity doesn't depend on who's asking — cost amortizes toward zero as the common vocabulary gets seen once.
 - **Once matched, the needed amount is reduced by what's on hand** using a pool that's drawn down across every matching line (not reapplied redundantly per line — a real double-counting bug found and fixed). Same-unit-category conversion is deterministic arithmetic, same as before; **cross-category conversion (e.g. a pantry entry in ml offsetting a recipe line in grams) is now resolved via a real Spoonacular density-conversion API call** (`unitConversion.ts`, `/recipes/convert`, live-confirmed density-accurate — 500ml olive oil → 456.5g, matching real olive-oil density), not an LLM guess and not a same-category-only restriction. Also cached globally. **Falls back to the original all-or-nothing exclusion** only when *no* matching pantry item has a usable/convertible quantity — never a regression for pantry entries that only ever used the free-text note.
 - **Feeds meal ranking's live depletion tracker too, not just the grocery list (built July 25 2026, `pantryRemaining.ts`):** the same matching logic (in an unresolved, no-LLM form for latency-sensitive call sites) underlies the quantity-aware pantry-overlap deduction described in Agent 2, so pantry stock consumed by one slot is reflected when scoring later slots and swaps in the same plan.
-- Accepts chat-driven edits from the Orchestrator's conversational session (F11) — same storage, no separate write path
+- Accepts chat-driven edits from the Orchestrator's conversational session (F7) — same storage, no separate write path
 - Updates after each shop: marks pantry items as added from grocery list
 - Expires pantry items after 7 days unless refreshed (V2 — manual pantry entry itself is MVP, this automation is not)
 
@@ -110,7 +110,7 @@ User Goal Input
 
 ---
 
-## Agent 6 — Calendar Export Agent (No API)
+## Agent 4 — Calendar Export Agent (No API)
 
 **Role:** Converts the weekly meal plan into a downloadable `.ics` calendar file.
 
@@ -127,10 +127,10 @@ User Goal Input
 ## How the Agents Work Together — Full Flow
 
 ```
-1. User completes onboarding (F1, F2) and, optionally, pantry entry (F6, moved up from V2)
+1. User completes onboarding (F1, F2) and, optionally, pantry entry (F5, moved up from V2)
    └── Pantry Agent stores constraints: goal, macros, allergies, preferences
    └── Pantry *inventory* can now be populated here too (Step 2 of the PRD flow, or later
-         via the conversational assistant, F11) — no longer gated to V2
+         via the conversational assistant, F7) — no longer gated to V2
 
 2. User taps "Generate meal plan"
    └── Orchestrator reads Pantry Agent's stored constraints and any pantry inventory
@@ -189,13 +189,13 @@ User Goal Input
    └── Deduplicates across all 35 meal/snack slots (7 days × 5 slot types)
    └── Removes, or quantitatively reduces, any items already in Pantry Agent
          inventory depending on whether a comparable structured quantity was
-         given — now MVP, not V2-gated (see PRD F3/F6)
+         given — now MVP, not V2-gated (see PRD F3/F5)
 
 5. Orchestrator renders outputs
    ├── Meal plan (F3): 7-day view with per-meal macros
    └── Grocery list (F4): deduped items
 
-6. User taps "↺ Swap meal" — or asks the conversational assistant (F11) to do the same
+6. User taps "↺ Swap meal" — or asks the conversational assistant (F7) to do the same
    └── Orchestrator calls Recipe Agent for one slot
        ├── Excludes the rejected recipe ID
        ├── Applies the same cascade fallback as initial generation, then the AI
@@ -205,7 +205,7 @@ User Goal Input
        ├── Returns a new recipe for that slot only
        └── Updates grocery list and nutrition totals
 
-6a. At any point in Steps 2–5, user chats with the conversational assistant (F11)
+6a. At any point in Steps 2–5, user chats with the conversational assistant (F7)
     └── Free-text request (edit pantry, swap a meal, change a constraint) is parsed and
           mapped to the same action the corresponding UI control would trigger — no
           separate mutation path
@@ -235,7 +235,7 @@ User Goal Input
 | Grocery list generation | Yes (aggregation) | Deterministic once recipes are selected |
 | AI composition/edit fallback (when cascade fails or pantry is ignored) | Partial | Deciding what recipe/edit to propose given pantry + macro constraints is a judgment call AI is good at; the resulting macros are never AI-estimated — every ingredient resolves to Spoonacular's ingredient endpoint and is summed deterministically, same as the dedup row above |
 | Snack/add-on selection to close a macro gap | Partial | Same split as above: Claude picks which single-ingredient item makes sense, the calorie-share cap and macro math are deterministic |
-| Chat-driven pantry/meal/constraint edits (F11) | No | Free-text intent parsing needs an LLM; the resulting mutation is the same deterministic action the UI already performs — no new write path |
+| Chat-driven pantry/meal/constraint edits (F7) | No | Free-text intent parsing needs an LLM; the resulting mutation is the same deterministic action the UI already performs — no new write path |
 | Post-generation plan critique (which slots to reconsider) | No | Spotting a repeated recipe or an outlier macro fit across 35 slots at once is a holistic pattern-match no per-slot deterministic step can perform — nothing else in this flow ever sees the whole week simultaneously |
 | Accepting or rejecting a critique-flagged repair | Yes (logic) | Real macro-deviation score comparison plus a duplicate-title check, both deterministic — the critic flags candidates for a second look, it never decides which result is better |
 
