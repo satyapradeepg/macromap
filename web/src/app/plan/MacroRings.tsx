@@ -1,0 +1,100 @@
+import type { MacroTargets } from "@/lib/mealplan/targets";
+import { weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
+
+// Extracted from PlanView.tsx's inline MacroStat (2026-08-10 redesign) --
+// same actual/target math, now rendered as a ring per macro (matching the
+// approved direction.html mockup) instead of a flat bar, plus an explicit
+// over/under/on-target delta chip. The old flat-bar version silently
+// clamped display at 100%, so a macro running 30% over target looked
+// identical to one exactly on target -- the delta chip is a real
+// information gap this closes, not just a cosmetic change. ±5% matches
+// the same weekly reconciliation band used server-side
+// (reconciliation.ts's toleranceBand/isWithinBand).
+const ACCURACY_HEADLINE: Record<ReturnType<typeof weeklyAccuracyTier>, string> = {
+  on_target: "This week is within your weekly targets",
+  close: "This week lands close to your weekly targets",
+  off_target: "This week is meaningfully off your weekly targets",
+};
+
+type RingSpec = {
+  label: string;
+  unit: string;
+  actual: number;
+  target: number;
+  color: string;
+};
+
+function ring(pct: number, color: string, r = 34) {
+  const c = 2 * Math.PI * r;
+  const off = c * (1 - Math.min(pct, 1));
+  return (
+    <>
+      <circle cx="42" cy="42" r={r} fill="none" stroke="var(--border)" strokeWidth="7" />
+      <circle
+        cx="42"
+        cy="42"
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={off}
+        transform="rotate(-90 42 42)"
+        className="[transition:stroke-dashoffset_900ms_ease-out] motion-reduce:transition-none"
+      />
+    </>
+  );
+}
+
+function MacroRing({ label, unit, actual, target, color }: RingSpec) {
+  const pct = target > 0 ? actual / target : 0;
+  const over = pct > 1.05;
+  const under = pct < 0.95;
+  const state = over ? "over" : under ? "under" : "ontarget";
+  const roundedActual = Math.round(actual);
+  const roundedTarget = Math.round(target);
+  const deltaAbs = Math.round(Math.abs(actual - target));
+  const deltaText = over ? `+${deltaAbs}${unit} over` : under ? `−${deltaAbs}${unit} under` : "on target";
+
+  return (
+    <div className="flex flex-col items-center gap-1.5 text-center">
+      <svg viewBox="0 0 84 84" className="h-20 w-20">
+        {ring(pct, color)}
+      </svg>
+      <span className="text-[10.5px] font-semibold tracking-wide text-muted uppercase">{label}</span>
+      <span className="font-mono text-[13px] font-semibold tabular-nums">
+        {roundedActual}
+        {unit} <span className="font-normal text-muted">/ {roundedTarget}{unit}</span>
+      </span>
+      <span
+        className={`rounded-full px-2 py-0.5 font-mono text-[10.5px] font-bold tabular-nums ${
+          state === "ontarget" ? "bg-good/15 text-good" : "bg-warn/15 text-warn"
+        }`}
+      >
+        {deltaText}
+      </span>
+    </div>
+  );
+}
+
+export function MacroRings({ actual, target }: { actual: MacroTargets; target: MacroTargets }) {
+  const tier = weeklyAccuracyTier(actual, target);
+  const rings: RingSpec[] = [
+    { label: "Calories", unit: " cal", actual: actual.calories, target: target.calories, color: "var(--accent)" },
+    { label: "Protein", unit: "g", actual: actual.proteinG, target: target.proteinG, color: "var(--protein)" },
+    { label: "Carbs", unit: "g", actual: actual.carbsG, target: target.carbsG, color: "var(--carbs)" },
+    { label: "Fat", unit: "g", actual: actual.fatG, target: target.fatG, color: "var(--fat)" },
+  ];
+
+  return (
+    <div className="mt-6 rounded-2xl border border-border bg-surface p-4 shadow-[var(--shadow-card)] sm:p-6">
+      <p className="text-sm font-semibold text-foreground">{ACCURACY_HEADLINE[tier]}</p>
+      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {rings.map((r) => (
+          <MacroRing key={r.label} {...r} />
+        ))}
+      </div>
+    </div>
+  );
+}

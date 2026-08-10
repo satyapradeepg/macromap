@@ -2,7 +2,8 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
-import { Pill } from "@/components/ui/Pill";
+import { MacroRings } from "./MacroRings";
+import { DayRibbon } from "./DayRibbon";
 import {
   MEAL_TYPES,
   DAYS_PER_WEEK,
@@ -11,7 +12,7 @@ import {
   type MealType,
   type MacroTargets,
 } from "@/lib/mealplan/targets";
-import { toleranceBand, isWithinBand, weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
+import { toleranceBand, isWithinBand } from "@/lib/mealplan/reconciliation";
 import { unsupportedDietaryStyles } from "@/lib/mealplan/dietaryMapping";
 import { prepNoteFor } from "@/lib/mealplan/staticIngredientMacros";
 import { generatePlan, swapMeal, getRecipeInstructions, getAiComposedRecipeInstructions } from "./actions";
@@ -319,25 +320,7 @@ export function PlanBoard({
         </div>
       </div>
 
-      {plan && (
-        <div className="mt-6 rounded-lg border border-border bg-surface p-4">
-          <p className="text-sm font-semibold text-foreground">
-            {
-              {
-                on_target: "This week is within your weekly targets",
-                close: "This week lands close to your weekly targets",
-                off_target: "This week is meaningfully off your weekly targets",
-              }[weeklyAccuracyTier(plan.weeklyActual, plan.weeklyTarget)]
-            }
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <MacroStat label="Calories" unit=" cal" actual={plan.weeklyActual.calories} target={plan.weeklyTarget.calories} />
-            <MacroStat label="Protein" unit="g" actual={plan.weeklyActual.proteinG} target={plan.weeklyTarget.proteinG} />
-            <MacroStat label="Carbs" unit="g" actual={plan.weeklyActual.carbsG} target={plan.weeklyTarget.carbsG} />
-            <MacroStat label="Fat" unit="g" actual={plan.weeklyActual.fatG} target={plan.weeklyTarget.fatG} />
-          </div>
-        </div>
-      )}
+      {plan && <MacroRings actual={plan.weeklyActual} target={plan.weeklyTarget} />}
 
       {plan && plan.unresolvedDietaryConcerns.length > 0 && (
         // Ephemeral, same as blockedSlots -- orchestrate.ts's repair pass
@@ -406,25 +389,12 @@ export function PlanBoard({
 
       {plan && (
         <div className="mt-8">
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {DAY_LABELS.map((label, dayIndex) => {
-              const status = dayStatus(plan, dayIndex);
-              const isSelected = dayIndex === selectedDay;
-              return (
-                <Pill
-                  key={dayIndex}
-                  active={isSelected}
-                  onClick={() => setSelectedDay(dayIndex)}
-                  className="flex shrink-0 items-center gap-1.5"
-                >
-                  {label}
-                  {status === "within_band" && (
-                    <span className={isSelected ? "text-white" : "text-accent-2"}>●</span>
-                  )}
-                </Pill>
-              );
-            })}
-          </div>
+          <DayRibbon
+            dayLabels={DAY_LABELS}
+            selectedDay={selectedDay}
+            onSelect={setSelectedDay}
+            statusFor={(dayIndex) => dayStatus(plan, dayIndex)}
+          />
 
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {MEAL_TYPES.map((mealType) => {
@@ -477,33 +447,6 @@ export function PlanBoard({
         onPantryReplaced={handleChatPantryReplaced}
       />
     </main>
-  );
-}
-
-function MacroStat({
-  label,
-  actual,
-  target,
-  unit,
-}: {
-  label: string;
-  actual: number;
-  target: number;
-  unit: string;
-}) {
-  const pct = target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : 0;
-  return (
-    <div>
-      <span className="text-xs font-semibold tracking-wide text-muted uppercase">{label}</span>
-      <div className="mt-0.5 font-mono text-xs text-muted">
-        {Math.round(actual)}
-        {unit} / {Math.round(target)}
-        {unit}
-      </div>
-      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-border">
-        <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   );
 }
 
