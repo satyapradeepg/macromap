@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { addPantryItem, removePantryItem } from "./pantryActions";
 import type { PantryItemView } from "./pantryData";
+import { notify } from "@/lib/toast";
 
 export function PantryPanel({
   initialItems,
@@ -46,6 +47,7 @@ export function PantryPanel({
       return;
     }
     setItems((prev) => [...prev, result.item!]);
+    notify(`Added ${result.item.name} to pantry`);
     setName("");
     setQuantityText("");
     setAmount("");
@@ -65,6 +67,7 @@ export function PantryPanel({
       return;
     }
     setItems((prev) => prev.filter((item) => item.id !== id));
+    notify("Removed from pantry");
     onPantryChange?.();
   }
 

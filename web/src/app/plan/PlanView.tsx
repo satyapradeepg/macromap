@@ -22,7 +22,10 @@ import { GroceryList } from "./GroceryList";
 import type { GroceryLineView } from "./groceryData";
 import { fetchGroceryList } from "./groceryActions";
 import { buildMealPlanIcs } from "./calendarExport";
+import { runWithViewTransition } from "@/lib/viewTransition";
 import { MealCard, MEAL_TYPE_LABELS } from "./MealCard";
+import { GeneratingProgress } from "@/components/ui/GeneratingProgress";
+import { notify } from "@/lib/toast";
 import { ChatWidget } from "./ChatWidget";
 
 // day_index (0-6) was never actually tied to a real Monday-Sunday week --
@@ -106,6 +109,7 @@ export function PlanBoard({
   const belowStructuralFloor = structuralCalorieFloorExceedsTarget(dailyCalories);
 
   async function handleGenerate() {
+    const hadExistingPlan = !!plan;
     setGenerating(true);
     setError(null);
     setUsingCachedFallback(false);
@@ -140,6 +144,12 @@ export function PlanBoard({
     setBlockedSlots(result.plan?.blockedSlots ?? []);
     setUsingCachedFallback(result.usingCachedFallback);
     setSelectedDay(0);
+    // Not toasted when usingCachedFallback -- that path already has its
+    // own persistent inline banner ("Using last week's plan..."), a toast
+    // alongside it would be redundant at best, conflicting at worst.
+    if (result.plan && !result.usingCachedFallback) {
+      notify(hadExistingPlan ? "Plan regenerated" : "Plan generated");
+    }
 
     // A fresh generation replaces every slot's ingredients, so the grocery
     // list must be recomputed against the new plan rather than reused.
@@ -203,6 +213,7 @@ export function PlanBoard({
           : prev,
       );
       setBlockedSlots((prev) => prev.filter((b) => slotMapKey(b.dayIndex, b.mealType) !== key));
+      notify("Meal swapped");
 
       // The swapped slot's ingredients changed, so the grocery list must be
       // recomputed against the same plan rather than reused.
@@ -268,8 +279,11 @@ export function PlanBoard({
     // able to reveal them. 112px is a comfortable margin above the
     // button's own ~60px footprint (height + its bottom-4 offset).
     <main className="mx-auto w-full min-w-0 max-w-3xl px-6 pt-16 pb-28">
+      {generating && (
+        <GeneratingProgress heading={plan ? "Regenerating your meal plan" : "Generating your meal plan"} />
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold">Your meal plan</h1>
+        <h1 className="font-display text-2xl font-bold">Your meal plan</h1>
         <div className="flex items-center gap-3">
           {plan && (
             <button type="button" onClick={handleExportCalendar} className="text-xs font-semibold text-muted">
@@ -354,7 +368,7 @@ export function PlanBoard({
           <DayRibbon
             dayLabels={DAY_LABELS}
             selectedDay={selectedDay}
-            onSelect={setSelectedDay}
+            onSelect={(dayIndex) => runWithViewTransition(() => setSelectedDay(dayIndex))}
             statusFor={(dayIndex) => dayStatus(plan, dayIndex)}
           />
 

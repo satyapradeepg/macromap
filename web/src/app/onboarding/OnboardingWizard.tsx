@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Pill } from "@/components/ui/Pill";
-import { Spinner } from "@/components/ui/Spinner";
+import { GeneratingProgress } from "@/components/ui/GeneratingProgress";
 import {
   ACTIVITY_MULTIPLIERS,
   AGE_RANGE,
@@ -39,20 +39,6 @@ const GOAL_OPTIONS: { value: Goal; label: string; emoji: string }[] = [
   { value: "cut", label: "Cut", emoji: "📉" },
   { value: "bulk", label: "Bulk", emoji: "💪" },
   { value: "maintain", label: "Maintain", emoji: "⚖️" },
-];
-
-// This wait can run 50-90s+ (orchestrate.ts's real generation pipeline --
-// pantry-aware querying, tolerance widening, AI-composition fallback) with
-// literally zero motion beforehand (2026-08-08 UI pass). Named after the
-// pipeline's own real stages rather than generic "please wait" filler.
-// Advances once per interval and holds on the last message rather than
-// looping, so it reads as progress, not a stuck repeat.
-const GENERATING_STATUS_MESSAGES = [
-  "Checking your pantry for ingredients you already have…",
-  "Matching recipes to your macro targets…",
-  "Filtering for your dietary restrictions and allergies…",
-  "Balancing macros across the week…",
-  "Almost ready…",
 ];
 
 // `satisfies readonly DietaryStyle[]` (audit round 3, finding 12): a new
@@ -186,18 +172,9 @@ export function OnboardingWizard({
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [usingCachedFallback, setUsingCachedFallback] = useState(false);
-  const [statusIndex, setStatusIndex] = useState(0);
 
   const router = useRouter();
   const [continuing, startContinuing] = useTransition();
-
-  useEffect(() => {
-    if (!generating) return;
-    const interval = setInterval(() => {
-      setStatusIndex((i) => Math.min(i + 1, GENERATING_STATUS_MESSAGES.length - 1));
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [generating]);
 
   function handleCalculate() {
     const weightKg =
@@ -307,7 +284,6 @@ export function OnboardingWizard({
 
     if (alsoGenerate) {
       setSaving(false);
-      setStatusIndex(0);
       setGenerating(true);
       // Live-confirmed 2026-08-09 (same root cause found on /plan's own
       // Regenerate button): a slow generation can exceed the platform's
@@ -354,22 +330,12 @@ export function OnboardingWizard({
   }
 
   if (generating) {
-    // Fixed full-viewport overlay, not a block in normal flow -- on
-    // /account this component sits between AccountIdentity and DangerZone
-    // (siblings rendered by the page, not by this component, see
-    // account/page.tsx), which used to leave both visible around a plain
-    // static message. A spinner competing with unrelated page chrome
-    // around it reads as more broken than static text did, so this covers
-    // the whole viewport regardless of where those siblings render.
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
-        <main className="mx-auto w-full min-w-0 max-w-md px-6 text-center">
-          <Spinner className="mx-auto h-8 w-8 text-accent" />
-          <h1 className="mt-4 text-2xl font-bold">Generating your meal plan</h1>
-          <p className="mt-2 text-muted">{GENERATING_STATUS_MESSAGES[statusIndex]}</p>
-        </main>
-      </div>
-    );
+    // On /account this component sits between AccountIdentity and
+    // DangerZone (siblings rendered by the page, not by this component,
+    // see account/page.tsx) -- GeneratingProgress's own fixed full-
+    // viewport overlay covers the whole screen regardless, so those
+    // siblings don't stay visible around it.
+    return <GeneratingProgress heading="Generating your meal plan" />;
   }
 
   if (saved) {

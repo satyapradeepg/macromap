@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import type { MacroTargets } from "@/lib/mealplan/targets";
 import { weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 
@@ -49,6 +52,18 @@ function ring(pct: number, color: string, r = 34) {
 
 function MacroRing({ label, unit, actual, target, color }: RingSpec) {
   const pct = target > 0 ? actual / target : 0;
+  // Rendered at 0 on mount and flipped to the real value one tick later so
+  // the CSS transition on the ring's own stroke-dashoffset (see ring())
+  // actually has a value change to animate -- setting the final value
+  // directly on the very first render paints it immediately with nothing
+  // to transition from. Re-fires on pct change too (e.g. swapping a meal
+  // updates weeklyActual), so a value change always animates, not just
+  // the initial mount.
+  const [animatedPct, setAnimatedPct] = useState(0);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setAnimatedPct(pct));
+    return () => cancelAnimationFrame(raf);
+  }, [pct]);
   const over = pct > 1.05;
   const under = pct < 0.95;
   const state = over ? "over" : under ? "under" : "ontarget";
@@ -60,7 +75,7 @@ function MacroRing({ label, unit, actual, target, color }: RingSpec) {
   return (
     <div className="flex flex-col items-center gap-1.5 text-center">
       <svg viewBox="0 0 84 84" className="h-20 w-20">
-        {ring(pct, color)}
+        {ring(animatedPct, color)}
       </svg>
       <span className="text-[10.5px] font-semibold tracking-wide text-muted uppercase">{label}</span>
       <span className="font-mono text-[13px] font-semibold tabular-nums">

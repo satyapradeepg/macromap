@@ -138,6 +138,10 @@
   --animate-chat-in: chat-in 180ms ease-out;
   --animate-chat-message-in: chat-message-in 200ms ease-out;
   --animate-chat-bounce: chat-bounce 1.4s ease-in-out infinite;
+  /* Indeterminate bar for GeneratingProgress (2026-08-10 redesign) --
+     same small/subtle house style as the chat keyframes above, paired
+     with motion-reduce:animate-none at its one call site. */
+  --animate-progress-slide: progress-slide 1.6s ease-in-out infinite;
 }
 
 @keyframes chat-in {
@@ -175,7 +179,23 @@
   }
 }
 
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
+  transition: background-color 200ms ease-out, color 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
 }
