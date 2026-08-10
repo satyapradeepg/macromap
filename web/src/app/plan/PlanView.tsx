@@ -307,11 +307,11 @@ export function PlanBoard({
         // expected empty in the overwhelming majority of plans, so this
         // gets a visually distinct (not just muted-gray) warning treatment
         // rather than blending in with routine plan-quality notes.
-        <div className="mt-4 rounded-lg border border-amber-600/40 bg-amber-50 p-4 dark:bg-amber-950/30">
-          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+        <div className="mt-4 rounded-lg border border-warn/40 bg-warn/10 p-4">
+          <p className="text-sm font-semibold text-warn">
             Couldn&apos;t fully resolve a dietary concern
           </p>
-          <ul className="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-300">
+          <ul className="mt-2 space-y-1 text-sm text-foreground">
             {plan.unresolvedDietaryConcerns.map((concern, i) => (
               <li key={i}>
                 <span className="font-medium">
