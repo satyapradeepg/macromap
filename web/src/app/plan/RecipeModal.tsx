@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { getRecipeInstructions, getAiComposedRecipeInstructions } from "./actions";
 import type { PlanSlotView } from "./data";
 import { pluralizeUnit } from "./unitFormatting";
@@ -75,19 +76,38 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
   // Without this, the background page can still scroll while the modal is
   // open (this is a fixed overlay, not a true focus trap) -- on mobile
   // that scroll hides/shows the browser's own toolbar, which changes the
-  // *actual* viewport height moment to moment. `85vh` below recalculates
+  // *actual* viewport height moment to moment. `85dvh` below recalculates
   // against that shifting height on every scroll tick, which is what reads
   // as the modal glitching/flickering to a different size while scrolling
-  // "outside" it without closing it.
+  // "outside" it without closing it. Locking `documentElement` too (not
+  // just `body`) is required -- layout.tsx's `<html>` carries the actual
+  // scroll box in this app (`document.scrollingElement === document.
+  // documentElement`, confirmed live), so a body-only lock silently does
+  // nothing and the background keeps scrolling anyway.
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = previousOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overflow = previousBodyOverflow;
     };
   }, []);
 
-  return (
+  // Portaled to <body> rather than rendered where MealCard placed it --
+  // MealCard's own card root has `hover:-translate-y-0.5` (an active
+  // transform while hovered/tapped), and per spec any ancestor with a
+  // non-none transform becomes the containing block for a `fixed`
+  // descendant. Without the portal, this modal would silently become
+  // fixed relative to that card instead of the viewport whenever it's
+  // hovered (or stuck in a touch-device's persistent tap-hover state),
+  // which is what made it drift and snap while scrolling the page behind
+  // it -- confirmed live, this was the real cause, not just the dvh/
+  // scroll-lock issue above.
+  return createPortal(
     <div
       className="animate-chat-in motion-reduce:animate-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
@@ -218,6 +238,7 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

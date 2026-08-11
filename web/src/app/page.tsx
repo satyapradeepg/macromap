@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUser } from "@/lib/identity";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 // A returning, already-onboarded user skips the pitch and goes straight to
 // their plan; a logged-in user who hasn't finished onboarding yet continues
@@ -27,10 +28,11 @@ export default async function Home() {
           without an explicit width this would size to its widest
           descendant's content instead of the viewport (live-confirmed
           2026-07-25, see PlanView.tsx's <main> for the full story). */}
-      <div className="pt-8">
+      <div className="flex items-center justify-between pt-8">
         <span className="text-sm font-extrabold tracking-tight">
           Macro<span className="text-accent">Map</span>
         </span>
+        <ThemeToggle />
       </div>
 
       <div className="flex flex-1 flex-col justify-center py-16">
