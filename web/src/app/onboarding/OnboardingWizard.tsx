@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/Input";
 import { Pill } from "@/components/ui/Pill";
 import { GeneratingProgress } from "@/components/ui/GeneratingProgress";
 import {
-  ACTIVITY_MULTIPLIERS,
   AGE_RANGE,
   HEIGHT_CM_RANGE,
   WEIGHT_KG_RANGE,
@@ -29,10 +28,10 @@ import { saveProfile } from "./actions";
 import { generatePlan } from "@/app/plan/actions";
 
 const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
-  { value: "sedentary", label: "Sedentary" },
-  { value: "lightly_active", label: "Lightly active" },
-  { value: "active", label: "Active" },
-  { value: "very_active", label: "Very active" },
+  { value: "sedentary", label: "Sedentary (little or no exercise)" },
+  { value: "lightly_active", label: "Lightly active (exercise 1-3 days/week)" },
+  { value: "active", label: "Moderately active (exercise 3-5 days/week)" },
+  { value: "very_active", label: "Very active (hard exercise 6-7 days/week)" },
 ];
 
 const GOAL_OPTIONS: { value: Goal; label: string; emoji: string }[] = [
@@ -529,7 +528,7 @@ export function OnboardingWizard({
               </option>
               {ACTIVITY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.label} ({ACTIVITY_MULTIPLIERS[o.value]}×)
+                  {o.label}
                 </option>
               ))}
             </select>

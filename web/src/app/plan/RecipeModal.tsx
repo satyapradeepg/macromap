@@ -72,13 +72,28 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  // Without this, the background page can still scroll while the modal is
+  // open (this is a fixed overlay, not a true focus trap) -- on mobile
+  // that scroll hides/shows the browser's own toolbar, which changes the
+  // *actual* viewport height moment to moment. `85vh` below recalculates
+  // against that shifting height on every scroll tick, which is what reads
+  // as the modal glitching/flickering to a different size while scrolling
+  // "outside" it without closing it.
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   return (
     <div
       className="animate-chat-in motion-reduce:animate-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-lift)]"
+        className="flex max-h-[85dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-lift)]"
         onClick={(e) => e.stopPropagation()}
       >
         {slot.imageUrl ? (

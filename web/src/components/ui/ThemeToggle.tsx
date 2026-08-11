@@ -2,6 +2,29 @@
 
 import { useEffect, useState } from "react";
 
+// Fired on window after every manual toggle so all mounted instances stay
+// in sync -- LogoutBar.tsx renders TWO of these at once (desktop nav +
+// mobile nav), both always in the DOM with CSS just hiding one via
+// display:none, not unmounting it. Without this, clicking one left the
+// other's local isDark stale until it happened to remount, so it could
+// show the wrong icon, or "undo" the first click instead of continuing to
+// toggle once it became visible.
+const THEME_CHANGE_EVENT = "macromap:theme-change";
+
+// The attribute is only ever set once a manual choice has been made
+// (layout.tsx's inline pre-hydration script only writes it from
+// localStorage, and only if a prior manual choice exists there). Before
+// that, it's genuinely unset and globals.css's prefers-color-scheme media
+// query is what's actually rendering -- falling back to the system
+// preference here (instead of defaulting to false/light) is required for
+// the toggle to ever reflect reality on a first visit with a dark OS.
+function readIsDark(): boolean {
+  const attr = document.documentElement.getAttribute("data-theme");
+  if (attr === "dark") return true;
+  if (attr === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 // No next-themes dependency, no React Context -- theme lives on the DOM
 // (documentElement's data-theme attribute), not in component state, so
 // server components never need to know it. layout.tsx's inline <script>
@@ -12,20 +35,21 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
-    // One-shot read of a browser-only DOM attribute set by layout.tsx's
-    // inline pre-hydration script -- can't be computed during the
-    // initial (server) render, and nothing outside this component's own
-    // click handler mutates it afterward, so there's no external store
-    // to subscribe to beyond this single mount read.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsDark(document.documentElement.getAttribute("data-theme") === "dark");
+    setIsDark(readIsDark());
+    function onThemeChange() {
+      setIsDark(readIsDark());
+    }
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange);
   }, []);
 
   function toggle() {
     const next = isDark ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
     window.localStorage.setItem("theme", next);
-    setIsDark(!isDark);
+    setIsDark(next === "dark");
+    window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
   }
 
   return (
