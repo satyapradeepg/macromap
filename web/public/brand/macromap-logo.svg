@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 72" width="320" height="72" role="img" aria-label="MacroMap">
   <text
-    x="0"
+    x="160"
     y="52"
+    text-anchor="middle"
     font-family="Georgia, 'Iowan Old Style', 'Times New Roman', serif"
     font-size="44"
     font-weight="700"
