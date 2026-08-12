@@ -29,7 +29,15 @@ type RingSpec = {
 
 function ring(pct: number, color: string, r = 34) {
   const c = 2 * Math.PI * r;
-  const off = c * (1 - Math.min(pct, 1));
+  const base = Math.min(pct, 1);
+  const off = c * (1 - base);
+  // Overflow (>100% of target) re-traces the same arc from the top in a
+  // darkened shade of the macro color, drawn over the now-fully-closed base
+  // ring -- so how far over target reads as how much of the ring went dark,
+  // instead of a full ring at 100% looking identical to one at 130%.
+  const overflow = Math.min(Math.max(pct - 1, 0), 1);
+  const overflowOff = c * (1 - overflow);
+  const darkColor = `color-mix(in srgb, ${color} 55%, black)`;
   return (
     <>
       <circle cx="42" cy="42" r={r} fill="none" stroke="var(--border)" strokeWidth="7" />
@@ -46,6 +54,21 @@ function ring(pct: number, color: string, r = 34) {
         transform="rotate(-90 42 42)"
         className="[transition:stroke-dashoffset_900ms_ease-out] motion-reduce:transition-none"
       />
+      {overflow > 0 && (
+        <circle
+          cx="42"
+          cy="42"
+          r={r}
+          fill="none"
+          stroke={darkColor}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={overflowOff}
+          transform="rotate(-90 42 42)"
+          className="[transition:stroke-dashoffset_900ms_ease-out] motion-reduce:transition-none"
+        />
+      )}
     </>
   );
 }
