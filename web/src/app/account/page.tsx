@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentUser } from "@/lib/identity";
 import { LogoutBar } from "../LogoutBar";
 import { OnboardingWizard, type OnboardingInitialProfile } from "../onboarding/OnboardingWizard";
+import { PantryPanel } from "../plan/PantryPanel";
+import { getPantryItems } from "../plan/pantryData";
 import { AccountIdentity } from "./AccountIdentity";
 import { DangerZone } from "./DangerZone";
 
@@ -49,6 +51,8 @@ export default async function AccountPage() {
     redirect("/onboarding");
   }
 
+  const pantryItems = await getPantryItems(supabase, user.id);
+
   const initialProfile: OnboardingInitialProfile = {
     weightKg: profile.weight_kg,
     heightCm: profile.height_cm,
@@ -75,6 +79,17 @@ export default async function AccountPage() {
         <div className="mt-6">
           <AccountIdentity email={user.email} name={user.name} />
         </div>
+        <details className="mt-4 rounded-lg border border-border bg-surface">
+          <summary className="cursor-pointer list-none p-4 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center justify-between">
+              Pantry
+              <span className="text-xs font-normal text-muted">Optional</span>
+            </span>
+          </summary>
+          <div className="border-t border-border p-4 pt-3">
+            <PantryPanel initialItems={pantryItems} />
+          </div>
+        </details>
       </div>
       <OnboardingWizard initialProfile={initialProfile} />
       <div className="mx-auto w-full min-w-0 max-w-lg px-6 pb-16">

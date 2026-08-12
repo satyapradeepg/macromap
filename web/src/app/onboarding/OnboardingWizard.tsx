@@ -26,6 +26,7 @@ import {
 import type { DietaryStyle } from "@/lib/mealplan/dietaryMapping";
 import { saveProfile } from "./actions";
 import { generatePlan } from "@/app/plan/actions";
+import { PantryPanel } from "@/app/plan/PantryPanel";
 
 const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
   { value: "sedentary", label: "Sedentary (little or no exercise)" },
@@ -96,7 +97,13 @@ export function OnboardingWizard({
 }: {
   initialProfile?: OnboardingInitialProfile;
 } = {}) {
-  const [step, setStep] = useState<1 | 2>(1);
+  // Pantry (F5) only gets its own wizard step for a fresh signup -- an
+  // already-onboarded user editing from /account sees Pantry as its own
+  // section there instead (account/page.tsx), so this step would be a
+  // pointless detour back through a form they've already filled in.
+  const isFreshSignup = !initialProfile;
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const totalSteps = isFreshSignup ? 3 : 2;
 
   const initialHeightFtIn = initialProfile
     ? cmToFeetInches(initialProfile.heightCm)
@@ -376,13 +383,20 @@ export function OnboardingWizard({
       <div className="flex gap-1.5">
         <div className={`h-1 flex-1 rounded-full ${step >= 1 ? "bg-accent" : "bg-border"}`} />
         <div className={`h-1 flex-1 rounded-full ${step >= 2 ? "bg-accent" : "bg-border"}`} />
+        {isFreshSignup && (
+          <div className={`h-1 flex-1 rounded-full ${step >= 3 ? "bg-accent" : "bg-border"}`} />
+        )}
       </div>
-      <p className="mt-1.5 text-xs font-semibold tracking-wide text-muted uppercase">Step {step} of 2</p>
+      <p className="mt-1.5 text-xs font-semibold tracking-wide text-muted uppercase">
+        Step {step} of {totalSteps}
+      </p>
 
       <h1 className="font-display mt-2 text-2xl font-bold">
         {step === 1
           ? "Let's calculate your targets"
-          : "Your suggested daily targets"}
+          : step === 2
+            ? "Your suggested daily targets"
+            : "Anything in your pantry?"}
       </h1>
 
       {step === 1 ? (
@@ -556,7 +570,7 @@ export function OnboardingWizard({
             Calculate my macros
           </Button>
         </div>
-      ) : (
+      ) : step === 2 ? (
         <div className="mt-8 flex flex-col gap-5">
           <div className="grid grid-cols-2 gap-3">
             <NumberField
@@ -647,6 +661,45 @@ export function OnboardingWizard({
             />
           </div>
 
+          {!isFreshSignup && (
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={alsoGenerate}
+                onChange={(e) => setAlsoGenerate(e.target.checked)}
+                className="h-4 w-4 rounded border-border"
+              />
+              Also generate a new meal plan with these targets
+            </label>
+          )}
+
+          {!isFreshSignup && saveError && <p className="text-sm text-red-500">{saveError}</p>}
+
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setStep(1)} className="py-3">
+              Back
+            </Button>
+            <Button
+              variant="primary"
+              onClick={isFreshSignup ? () => setStep(3) : handleSave}
+              loading={!isFreshSignup && saving}
+              loadingText="Saving"
+              className="flex-1 py-3"
+            >
+              {isFreshSignup ? "Continue" : "Looks good"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-8 flex flex-col gap-5">
+          <p className="text-sm text-muted">
+            Add ingredients you already have on hand — meal plan generation will be biased toward
+            using them, and the grocery list will subtract what you have. You can always add more
+            (or skip entirely) later from your account page.
+          </p>
+
+          <PantryPanel initialItems={[]} />
+
           <label className="flex items-center gap-2 text-sm text-muted">
             <input
               type="checkbox"
@@ -660,7 +713,7 @@ export function OnboardingWizard({
           {saveError && <p className="text-sm text-red-500">{saveError}</p>}
 
           <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => setStep(1)} className="py-3">
+            <Button variant="secondary" onClick={() => setStep(2)} className="py-3">
               Back
             </Button>
             <Button
@@ -670,7 +723,7 @@ export function OnboardingWizard({
               loadingText="Saving"
               className="flex-1 py-3"
             >
-              Looks good
+              Finish
             </Button>
           </div>
         </div>
