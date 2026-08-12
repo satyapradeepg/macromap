@@ -56,7 +56,7 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Weekl
 | Recipe + nutrition | Spoonacular API ($29/mo) | One call returns recipe + per-serving nutrition; 5,000+ recipes |
 | Pantry & constraints | Custom MCP | Allergies, dislikes; pantry contents read at generation time (quantity-aware, not just present/absent) and again at grocery-list time — matching handles cross-category unit conversion (e.g. ml pantry stock against a gram-denominated recipe line) and an LLM identity classifier for name-matching (not id-matching, since the same ingredient often resolves to several different Spoonacular ids) |
 | Conversational agent layer | Same orchestrator (Claude, Sonnet tier), held as a persistent chat session | Edit pantry, swap a meal, or change a constraint in plain language — no separate infrastructure |
-| Calendar export | `ics` npm package | No OAuth, works with Google/Apple/Outlook |
+| Calendar export | Hand-built `.ics` (RFC 5545) generator, no external library | No OAuth, works with Google/Apple/Outlook |
 | App framework + hosting | Next.js (App Router), deployed on the class Azure platform (Vercel was the original target) | One codebase for frontend + API routes; API keys stay server-side |
 | Database | Supabase (Postgres) | Profiles, pantry, chat history, plan-generation caches |
 | Auth | Auth0 | Sole identity provider (since migration `0034`) — gates every route from the first page, no guest/anonymous tier |
@@ -64,8 +64,7 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Weekl
 ## Tiers
 
 - **Free** — macro-matched meal plan, allergy/dietary filtering (never gated), grocery list, calendar export, manual pantry entry, conversational plan assistant
-- **Pro ($9/mo)** — pantry cloud sync across devices (V2 — local-only pantry storage is Free/MVP)
-- **Coach ($20/mo, post-MVP)** — multi-client profiles, plan sharing, advanced analytics
+- **Pro ($9/mo)** — grocery list line-item price estimates (Spoonacular + Tavily fallback, manual override) and budget-aware meal ranking when a per-meal budget is set. No billing/upgrade flow exists yet — `tier` is a manually-set profile column, not something a user can purchase today.
 
 ## Team
 

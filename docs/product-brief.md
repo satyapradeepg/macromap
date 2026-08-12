@@ -60,14 +60,14 @@ Built as an AI agent orchestrating multiple distinct data sources via the Model 
 | **Recipe + Nutrition MCP** | **Spoonacular API** (paid, $29/month — 1,500 points/day). Single API call returns recipe + per-ingredient nutrition data together via `/recipes/complexSearch`. Accepts macro targets and dietary filters directly, eliminating any custom ingredient parsing layer. 5,000+ recipes. Evaluated against Edamam ($38/month minimum for equivalent functionality) — Spoonacular wins on value. Also backs the AI composition fallback below: when no recipe matches (or ignores pantry ingredients), Claude proposes one, but every ingredient's macros are still pulled from Spoonacular's ingredient-level endpoint, never estimated. |
 | **Pantry MCP** | Custom-authored MCP: pantry inventory, dietary constraints, dislikes, allergies. The personalization layer — now read *before* meal generation from day one (moved up from V2), biasing recipe selection toward what's on hand. **Substantially reworked July 2026:** pantry-to-ingredient matching is now an LLM identity classifier (Claude Haiku, forced tool-call, cached globally) judging name-level identity rather than Spoonacular id or plain string matching — needed because one real ingredient often resolves to several different ids across a plan's recipes. Cross-unit-category conversion (e.g. pantry stated in ml vs. a recipe line in grams) is resolved via a real, ingredient-density-aware Spoonacular API call, not an LLM guess — live-confirmed accurate. A matched item's quantity draws down a pool across every matching line (fixed a real double-counting bug); a line only excludes entirely when no matching pantry item has a usable quantity, not the original all-or-nothing behavior. As of July 25 2026, this same matching also feeds a live depletion tracker inside meal *ranking* itself (not just the grocery list), so pantry credit shrinks as slots consume stock during generation and during the standalone swap action. |
 | **Conversational Agent Layer** | The same orchestrator (Claude, Sonnet tier) held as a persistent chat session across the whole flow, not just a one-shot generation trigger. Lets users edit pantry contents, swap meals, or change constraints in plain language — every chat action calls the same underlying mutation the UI buttons already call. No separate infrastructure; this is a session-state change to the existing orchestrator, not a new agent. |
-| **Calendar Export** | `.ics` file generation via the `ics` npm package. One-tap export of the weekly meal plan to Google Calendar or Apple Calendar — no OAuth, no API quota. |
+| **Calendar Export** | Hand-built `.ics` (RFC 5545) file generation — no external calendar library in use or needed. One-tap export of the weekly meal plan to Google Calendar or Apple Calendar — no OAuth, no API quota. |
 | **App & Auth Layer** | Next.js (App Router, TypeScript), currently deployed on the class Azure platform (Vercel was the original target). One codebase for frontend and the API routes that call Spoonacular, keeping those keys server-side only. Supabase (Postgres) holds user profiles, pantry/constraints, and chat history. **Auth, superseded:** originally Supabase's built-in anonymous auth, converting a guest session into a permanent account once the user needed to save progress across sessions — that mechanism was removed (migration `0034`); **Auth0 is now the sole identity provider**, requiring a real account before onboarding even starts, with no guest tier. Net infra cost pre-revenue: $0 beyond Spoonacular's $29/month. |
 
 ---
 
 ## 06 — Monetisation
 
-Freemium subscription with feature-gated tiers. Free tier validates the core loop and drives top-of-funnel. Paid tiers gate pantry cloud sync and other convenience features.
+Freemium subscription with feature-gated tiers. Free tier validates the core loop and drives top-of-funnel. Paid tiers gate real-price grocery estimates and other convenience features.
 
 | Plan | Price | Target |
 |------|-------|--------|
@@ -77,9 +77,9 @@ Freemium subscription with feature-gated tiers. Free tier validates the core loo
 
 **Free includes:** Weekly meal plan (3 meals/day), allergy + dietary filtering (safety feature — never gated), grocery list, calendar export, manual pantry entry (F5, local — generation-time biasing, grocery-list exclusion), and the conversational plan assistant (F7) — F7's chat parsing, the F3 AI composition fallback, and the post-generation plan critique are all real Sonnet-tier Claude calls now running live against the real Anthropic API (`ANTHROPIC_API_KEY` is configured) whose volume still isn't formally budgeted (see PRD OQ8) — worth measuring now that real usage data can actually be collected. *(Tier placement is a default, not yet user-validated — revisit if this turns out to be a meaningful cost or differentiation lever once usage data comes in.)*
 
-**Pro includes:** Pantry cloud sync across devices (V2 — local-only pantry storage is Free/MVP), shopping list export.
+**Pro includes:** Grocery list line-item price estimates (Spoonacular + Tavily web-search fallback, with manual override) and budget-aware meal ranking when a per-meal budget is set, shopping list export. *(No billing/upgrade flow exists yet — `tier` is a manually-set profile column, not a purchasable state today. The originally-planned "pantry cloud sync" differentiator is moot: pantry storage is already cloud-synced for every tier.)*
 
-**Coach includes:** Multiple client profiles, client-facing meal plan sharing, advanced analytics, priority support.
+**Coach includes:** Multiple client profiles, client-facing meal plan sharing, advanced analytics, priority support. *(Not yet built — Post-MVP, see §08.)*
 
 ---
 

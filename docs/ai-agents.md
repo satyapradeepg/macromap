@@ -117,7 +117,7 @@ User Goal Input
 **What it does:**
 - Triggered when user taps "Export to Calendar"
 - Receives meal plan from Orchestrator: 21 meals × (name, meal type, time slot, macro summary)
-- Uses the `ics` npm package to generate one calendar event per meal: event title = meal name, description = macro summary, time = meal type (breakfast 8am / lunch 12pm / dinner 7pm)
+- Hand-built RFC 5545 (.ics) generator — no external calendar library — produces one calendar event per meal: event title = meal name, description = macro summary, time = meal type (breakfast 8am / lunch 12pm / dinner 7pm)
 - Outputs a downloadable `.ics` file compatible with Google Calendar, Apple Calendar, Outlook
 
 **API:** None — runs entirely client-side
