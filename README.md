@@ -35,7 +35,7 @@ pnpm dev
 
 You'll also need to run every file in `web/supabase/migrations/` (currently `0001` through `0036`, in order) once in your Supabase project's SQL editor. Auth is handled by **Auth0**, not Supabase — every route (including onboarding) requires a real login, there is no guest/anonymous tier. The app reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, and `AUTH0_CLIENT_SECRET` directly (`src/lib/auth0.ts`), plus `AUTH0_SECRET` and `APP_BASE_URL`, which the `@auth0/nextjs-auth0` SDK expects by convention — all five are already templated in `web/.env.local.example`, fill them in from an Auth0 application you control.
 
-Run `pnpm test` to run the Vitest suite (unit tests for ranking, grocery aggregation, pantry matching, and unit conversion).
+Run `pnpm test` to run the Vitest suite (unit tests for ranking, grocery aggregation, pantry matching, unit conversion, the conversational assistant's intent classification, and the AI meal-composition/critic/repair fallbacks).
 
 ## The core workflow
 
@@ -57,7 +57,7 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Weekl
 | Pantry & constraints | Custom MCP | Allergies, dislikes; pantry contents read at generation time (quantity-aware, not just present/absent) and again at grocery-list time — matching handles cross-category unit conversion (e.g. ml pantry stock against a gram-denominated recipe line) and an LLM identity classifier for name-matching (not id-matching, since the same ingredient often resolves to several different Spoonacular ids) |
 | Conversational agent layer | Same orchestrator (Claude, Sonnet tier), held as a persistent chat session | Edit pantry, swap a meal, or change a constraint in plain language — no separate infrastructure |
 | Calendar export | `ics` npm package | No OAuth, works with Google/Apple/Outlook |
-| App framework + hosting | Next.js (App Router) on Vercel | One codebase for frontend + API routes; API keys stay server-side |
+| App framework + hosting | Next.js (App Router), deployed on the class Azure platform (Vercel was the original target) | One codebase for frontend + API routes; API keys stay server-side |
 | Database | Supabase (Postgres) | Profiles, pantry, chat history, plan-generation caches |
 | Auth | Auth0 | Sole identity provider (since migration `0034`) — gates every route from the first page, no guest/anonymous tier |
 
