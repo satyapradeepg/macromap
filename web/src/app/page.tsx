@@ -8,6 +8,15 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 // there instead. Only a visitor with no Auth0 session at all sees the copy
 // below -- there's no self-serve signup, so their only path forward is
 // "Log in" with an account that already exists.
+//
+// Kept dynamic for the same reason as plan/page.tsx and account/page.tsx:
+// without this, the profile lookup below can be served from Next's fetch
+// Data Cache -- a user's very first visit (pre-onboarding, no profile row
+// yet) gets its "no profile" result cached against this route, and every
+// later visit keeps redirecting to /onboarding even after they've onboarded
+// and generated plans.
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const user = await getCurrentUser();
 
