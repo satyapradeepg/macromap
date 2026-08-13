@@ -48,6 +48,13 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} ${fraunces.variable} h-full antialiased`}
+      // THEME_INIT_SCRIPT above sets data-theme on this element before
+      // hydration, straight from localStorage -- the server-rendered HTML
+      // never has that attribute, since the server has no access to the
+      // browser's localStorage. That's an intentional, expected mismatch
+      // (it's what avoids a flash of the wrong theme on load), not a real
+      // bug, so React shouldn't warn about or try to "fix" it.
+      suppressHydrationWarning
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
