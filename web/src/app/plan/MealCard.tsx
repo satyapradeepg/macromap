@@ -190,8 +190,20 @@ export function MealCard({
   const hasPhotoArea = !!slot?.imageUrl || showPlaceholderImage;
   const totalCal = slot ? Math.round(slot.calories + (slot.addon?.caloriesKcal ?? 0)) : 0;
 
+  // An unfilled slot previously shared the exact same solid-border card
+  // chrome as a real, filled meal -- next to 1-2 fully-photographed
+  // neighbors in the same grid row it read as broken rather than
+  // intentionally "nothing matched here" (design review 2026-08-13). Dashed
+  // border + slightly sunken background gives it its own honest, designed
+  // empty-state look instead of looking like a rendering failure.
+  const isEmptySlot = !slot || slot.isUnfilled;
+
   return (
-    <div className="flex flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-[var(--shadow-card)] transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[var(--shadow-lift)] motion-reduce:transition-none motion-reduce:hover:translate-y-0">
+    <div
+      className={`flex flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-card)] transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[var(--shadow-lift)] motion-reduce:transition-none motion-reduce:hover:translate-y-0 ${
+        isEmptySlot ? "border border-dashed border-border bg-paper-sunken" : "border border-border bg-surface"
+      }`}
+    >
       {hasPhotoArea && (
         <div className="relative aspect-4/3 w-full shrink-0 bg-paper-sunken">
           {slot?.imageUrl ? (
@@ -332,9 +344,19 @@ export function MealCard({
           // the ephemeral blockingHint prop, which only exists for the
           // immediate post-generation render before this slot had a real
           // row (both describe the same thing once persisted).
-          <p className="mt-2 text-xs text-muted">
-            {slot?.isUnfilled ? slot.recipeTitle : (blockingHint ?? "No recipe matched this meal yet.")}
-          </p>
+          //
+          // Icon matches ComposedDishPlaceholder's stroke convention below
+          // (viewBox 0 0 24 24, currentColor, strokeWidth 1.5) rather than
+          // introducing a new visual language just for this one state.
+          <div className="mt-3 flex flex-col items-center gap-2 py-4 text-center">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-muted" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M9 9l6 6M15 9l-6 6" />
+            </svg>
+            <p className="text-xs text-muted">
+              {slot?.isUnfilled ? slot.recipeTitle : (blockingHint ?? "No recipe matched this meal yet.")}
+            </p>
+          </div>
         )}
       </div>
       {showRecipe && slot && (
