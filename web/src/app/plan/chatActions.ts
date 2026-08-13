@@ -29,12 +29,13 @@ import {
   composeMealFromEditDetailed,
   isNoOpEdit,
   describeRejectionForChatUser,
+  isPreExistingIngredientName,
   type MealEditProposal,
   type MealRole,
   type PreExistingIngredientRef,
 } from "@/lib/mealplan/aiMealComposition";
 import { lookupIngredientMacrosCached } from "@/lib/mealplan/ingredientMacroCache";
-import type { DietaryContext } from "@/lib/mealplan/openEndedIngredientSafety";
+import { isOpenEndedIngredientUnsafeFor, type DietaryContext } from "@/lib/mealplan/openEndedIngredientSafety";
 
 export type ChatActionTaken =
   | { kind: "swap"; dayIndex: number; mealType: MealType; blocked: boolean }
@@ -530,6 +531,149 @@ async function applyMealEditResult(
   };
 }
 
+// F7 chat meal editing, additive-only fast path (2026-08-13): a real
+// Spoonacular recipe's edit previously ALWAYS routed through
+// composeMealFromEditDetailed, which re-resolves EVERY ingredient in the
+// dish against Spoonacular -- live-confirmed this fails whenever ANY
+// pre-existing ingredient in the dish (not just the one being changed) has
+// a name Spoonacular can't resolve (e.g. "top rump beef"), even for a
+// request as simple as "add pepper." When the proposer's own result is a
+// PURE addition (every OTHER ingredient it returned is flagged
+// isPreExisting, exactly one is genuinely new), this resolves ONLY that
+// new ingredient and adds its macros to the dish's existing totals -- the
+// rest of the dish is never touched or re-validated. Returns null (not a
+// rejection) for anything else -- scaling/removing/renaming an existing
+// ingredient, or multiple changes at once -- so the caller falls back to
+// the existing, more general (but more fragile) full-recompose path
+// unchanged. Deliberately scoped to ONLY this one case for now (2026-08-13
+// design discussion) -- adjusting/removing an existing ingredient needs
+// fuzzy name-matching against the current list plus an old-vs-new macro
+// diff, a distinct enough problem to earn its own careful pass rather than
+// being rushed in alongside this.
+async function tryHandleSimpleIngredientAdd(
+  supabase: SupabaseClient,
+  mealPlanId: string,
+  dayIndex: number,
+  mealType: MealType,
+  edit: MealEditProposal,
+  dietaryCtx: DietaryContext,
+  currentIngredientNames: string[],
+): Promise<IntentHandlerResult | null> {
+  // isPreExisting alone isn't reliable enough (live-confirmed 2026-08-13 --
+  // the very first attempt at this fast path still hit the "top rump beef"
+  // rejection, because the model didn't flag that ingredient even though it
+  // WAS carried over unchanged, so it looked like a second "new" ingredient
+  // here). ORs in the same word-subset backstop composeMealFromEditDetailed
+  // itself relies on for the same reason (see isPreExistingIngredientName).
+  const isPreExisting = (i: MealEditProposal["ingredients"][number]) =>
+    i.isPreExisting === true || isPreExistingIngredientName(i.name, currentIngredientNames);
+  const newOnes = edit.ingredients.filter((i) => !isPreExisting(i));
+  if (newOnes.length !== 1) return null;
+  const restAreAllPreExisting = edit.ingredients.length - 1 === edit.ingredients.filter(isPreExisting).length;
+  if (!restAreAllPreExisting) return null;
+  const newIngredient = newOnes[0];
+
+  // Any allergy/diet-safety rejection, or a Spoonacular resolution miss on
+  // the NEW ingredient specifically, just falls through to the existing
+  // full path below (same rejection message either way, no shortcut
+  // benefit to a request that was never going to succeed).
+  if (isOpenEndedIngredientUnsafeFor(newIngredient.name, dietaryCtx) !== null) return null;
+  const lookup = await lookupIngredientMacrosCached(newIngredient.name, newIngredient.searchTerm ?? null);
+  if (!lookup) return null;
+
+  const scale = newIngredient.amountG / 100;
+  const addedCalories = lookup.caloriesPer100g * scale;
+  const addedProteinG = lookup.proteinGPer100g * scale;
+  const addedCarbsG = lookup.carbsGPer100g * scale;
+  const addedFatG = lookup.fatGPer100g * scale;
+  const addedCostCents = lookup.estimatedCostCentsPer100g !== null ? Math.round(lookup.estimatedCostCentsPer100g * scale) : null;
+
+  const { data: currentRow, error: fetchError } = await supabase
+    .from("meal_plan_slots")
+    .select("id, calories, protein_g, carbs_g, fat_g, price_per_serving_cents, ingredients")
+    .eq("meal_plan_id", mealPlanId)
+    .eq("day_index", dayIndex)
+    .eq("meal_type", mealType)
+    .single();
+  if (fetchError || !currentRow) return null;
+
+  const existingIngredients = (currentRow.ingredients as Array<Record<string, unknown>>) ?? [];
+  const newIngredientEntry = {
+    id: lookup.id,
+    name: lookup.name,
+    amount: newIngredient.amountG,
+    unit: "g",
+    metricAmount: newIngredient.amountG,
+    metricUnit: "g",
+    role: newIngredient.role,
+  };
+  const mergedIngredients = [...existingIngredients, newIngredientEntry];
+
+  const newCalories = currentRow.calories + addedCalories;
+  const newProteinG = currentRow.protein_g + addedProteinG;
+  const newCarbsG = currentRow.carbs_g + addedCarbsG;
+  const newFatG = currentRow.fat_g + addedFatG;
+  const newPricePerServingCents =
+    currentRow.price_per_serving_cents !== null && addedCostCents !== null
+      ? currentRow.price_per_serving_cents + addedCostCents
+      : currentRow.price_per_serving_cents;
+
+  const { error: updateError } = await supabase
+    .from("meal_plan_slots")
+    .update({
+      // Same "an edit becomes ai_composed going forward" convention as the
+      // full-recompose path (applyMealEditResult) -- recipe_id/image_url
+      // stop being accurate the moment the ingredient list diverges from
+      // whatever Spoonacular recipe this originally was.
+      recipe_id: null,
+      recipe_source: "ai_composed",
+      recipe_title: edit.dishName,
+      image_url: null,
+      calories: newCalories,
+      protein_g: newProteinG,
+      carbs_g: newCarbsG,
+      fat_g: newFatG,
+      price_per_serving_cents: newPricePerServingCents,
+      ingredients: mergedIngredients,
+      ai_recipe_instructions: null,
+    })
+    .eq("id", currentRow.id);
+  if (updateError) return null;
+
+  await supabase.from("meal_plan_slot_addons").delete().eq("meal_plan_slot_id", currentRow.id);
+  const weeklyActual = await recomputeWeeklyActual(supabase, mealPlanId);
+
+  const slot: PlanSlotView = {
+    dayIndex,
+    mealType,
+    recipeId: null,
+    recipeTitle: edit.dishName,
+    isComposed: true,
+    aiComposed: true,
+    isUnfilled: false,
+    composedIngredients: mergedIngredients.map((i) => ({ name: String(i.name), amountG: Number(i.amount) })),
+    recipeIngredients: null,
+    imageUrl: null,
+    servings: 1,
+    calories: newCalories,
+    proteinG: newProteinG,
+    carbsG: newCarbsG,
+    fatG: newFatG,
+    pricePerServingCents: newPricePerServingCents,
+    scaleFactor: 1,
+    toleranceTier: "p10",
+    matchLabel: null,
+    addon: null,
+  };
+
+  return {
+    reply: edit.changeSummary,
+    actionTaken: { kind: "meal_edit", dayIndex, mealType, changeSummary: edit.changeSummary },
+    updatedSlot: slot,
+    updatedWeeklyActual: weeklyActual,
+  };
+}
+
 async function handleEditMealRecipe(
   supabase: SupabaseClient,
   userId: string,
@@ -587,6 +731,27 @@ async function handleEditMealRecipe(
     edit = await proposeMealEditViaClaude(editInput);
   }
   if (!edit) return { reply: "I couldn't process that edit right now -- try rephrasing?", actionTaken: { kind: "error" } };
+
+  // Fast, reliable path for a pure addition to a REAL (non-composed)
+  // recipe -- see tryHandleSimpleIngredientAdd's own comment for why. Only
+  // attempted for a real Spoonacular recipe: an already-composed meal has
+  // no "existing dish to protect from re-validation" problem in the first
+  // place (composeMealFromEditDetailed already re-derives it every time),
+  // so there's nothing to gain by branching for it here. Returns null for
+  // anything that isn't a clean single-addition, falling through to the
+  // existing general-purpose path below unchanged.
+  if (!slot.isComposed && slot.recipeId !== null) {
+    const fastResult = await tryHandleSimpleIngredientAdd(
+      supabase,
+      plan.id,
+      dayIndex,
+      mealType,
+      edit,
+      dietaryCtx,
+      currentIngredients.map((i) => i.name),
+    );
+    if (fastResult) return fastResult;
+  }
 
   const currentComposedInGrams = slot.composedIngredients ? slot.composedIngredients.map((i) => ({ name: i.name, amountG: i.amountG })) : null;
   // amountG is null (not "0" or some guessed conversion) when the current

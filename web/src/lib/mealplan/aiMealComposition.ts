@@ -1334,6 +1334,22 @@ function isWordSubsetEitherWay(a: string[], b: string[]): boolean {
   return isSubset(a, b) || isSubset(b, a);
 }
 
+// Exported for chatActions.ts's tryHandleSimpleIngredientAdd (2026-08-13):
+// same word-subset backstop as composeMealFromEditDetailed's own
+// isPreExistingIngredient below, factored out so a caller classifying
+// "is this a pure single-ingredient addition" (before ever calling
+// composeMealFromEditDetailed) doesn't need its own, potentially
+// inconsistent copy of this matching logic -- the model's own isPreExisting
+// flag alone isn't reliable enough on its own (see EditedIngredient's
+// comment), so anything checking "is this ingredient really new" needs the
+// same string-match backstop this file already relies on.
+export function isPreExistingIngredientName(name: string, currentNames: string[]): boolean {
+  const words = nameWords(name);
+  if (words.length === 0) return false;
+  const currentWordSets = currentNames.map((n) => nameWords(normalizeForPreExistingMatch(n))).filter((w) => w.length > 0);
+  return currentWordSets.some((existing) => isWordSubsetEitherWay(words, existing));
+}
+
 // preExistingIngredientNames (live bug found 2026-08-09, real-user chat
 // testing against production): the proposer always returns the COMPLETE
 // ingredient list, re-listing untouched ingredients alongside whatever
