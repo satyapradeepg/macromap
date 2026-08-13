@@ -40,14 +40,13 @@ Run `pnpm test` to run the Vitest suite (unit tests for ranking, grocery aggrega
 ## The core workflow
 
 ```
-Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Weekly Cycle (repeat)
+Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List
 ```
 
 1. **Onboarding** — weight, height, age, activity level, goal (cut/bulk/maintain). TDEE calculated via Mifflin-St Jeor, macro targets suggested.
 2. **Set Weekly Goal** — confirm macro targets and optional pantry contents (moved up from V2 — see below).
 3. **Generate Meal Plan** — 21 macro-matched, allergy-safe, pantry-aware meals a week. An automatic tolerance-widening fallback means a plan is never a dead end; when that's still not enough, an AI composition/edit fallback (or a small grounded snack add-on) closes the gap, and a persistent conversational assistant lets you adjust the pantry, swap a meal, or change a constraint in plain language throughout.
 4. **Grocery List** — deduplicated, consolidated quantities across the whole week.
-5. **Weekly Cycle** — next week pre-fills from the saved profile.
 
 ## Tech stack
 
@@ -57,14 +56,9 @@ Onboarding → Set Weekly Goal → Generate Meal Plan → Grocery List → Weekl
 | Pantry & constraints | Custom MCP | Allergies, dislikes; pantry contents read at generation time (quantity-aware, not just present/absent) and again at grocery-list time — matching handles cross-category unit conversion (e.g. ml pantry stock against a gram-denominated recipe line) and an LLM identity classifier for name-matching (not id-matching, since the same ingredient often resolves to several different Spoonacular ids) |
 | Conversational agent layer | Same orchestrator (Claude, Sonnet tier), held as a persistent chat session | Edit pantry, swap a meal, or change a constraint in plain language — no separate infrastructure |
 | Calendar export | Hand-built `.ics` (RFC 5545) generator, no external library | No OAuth, works with Google/Apple/Outlook |
-| App framework + hosting | Next.js (App Router), deployed on the class Azure platform (Vercel was the original target) | One codebase for frontend + API routes; API keys stay server-side |
+| App framework + hosting | Next.js (App Router) | One codebase for frontend + API routes; API keys stay server-side |
 | Database | Supabase (Postgres) | Profiles, pantry, chat history, plan-generation caches |
 | Auth | Auth0 | Sole identity provider (since migration `0034`) — gates every route from the first page, no guest/anonymous tier |
-
-## Tiers
-
-- **Free** — macro-matched meal plan, allergy/dietary filtering (never gated), grocery list, calendar export, manual pantry entry, conversational plan assistant
-- **Pro ($9/mo)** — grocery list line-item price estimates (Spoonacular + Tavily fallback, manual override) and budget-aware meal ranking when a per-meal budget is set. No billing/upgrade flow exists yet — `tier` is a manually-set profile column, not something a user can purchase today.
 
 ## Team
 
