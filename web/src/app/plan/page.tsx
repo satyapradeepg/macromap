@@ -38,8 +38,16 @@ export default async function PlanPage() {
   }
 
   const tier: "free" | "pro" = profile.tier ?? "free";
-  const initialPlan = await getMostRecentPlan(supabase, user.id);
-  const initialPantryItems = await getPantryItems(supabase, user.id);
+  // getMostRecentPlan and getPantryItems don't depend on each other -- they
+  // were previously awaited one after the other for no reason, adding a
+  // full extra round-trip to every /plan navigation (live-confirmed
+  // 2026-08-13, reported as this page feeling slow to reach from /account).
+  // getGroceryList genuinely can't join this Promise.all: it needs
+  // initialPlan.id, which doesn't exist until the plan lookup resolves.
+  const [initialPlan, initialPantryItems] = await Promise.all([
+    getMostRecentPlan(supabase, user.id),
+    getPantryItems(supabase, user.id),
+  ]);
   const initialGroceryList = initialPlan ? await getGroceryList(supabase, initialPlan.id, user.id, tier) : [];
 
   return (
