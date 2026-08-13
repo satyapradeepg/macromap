@@ -30,6 +30,7 @@ import {
   isNoOpEdit,
   describeRejectionForChatUser,
   isPreExistingIngredientName,
+  PORTION_BOUNDS_G,
   type MealEditProposal,
   type MealRole,
   type PreExistingIngredientRef,
@@ -577,6 +578,20 @@ async function tryHandleSimpleIngredientAdd(
   // the NEW ingredient specifically, just falls through to the existing
   // full path below (same rejection message either way, no shortcut
   // benefit to a request that was never going to succeed).
+  // Defers to the existing full path (which already handles both
+  // correctly -- clamp-suggestion flow for the amount case, the real
+  // rejection message for a role conflict) for anything past the truly
+  // simple case, rather than re-implementing that handling here. Found
+  // missing in review 2026-08-13: this fast path had neither check at
+  // all -- it would have silently added whatever amount/role the model
+  // proposed with zero sanity check, unlike the old path's isRealisticAmount
+  // bounds check and duplicate_role validation.
+  for (const role of ["protein", "carb", "fat"] as const) {
+    if (edit.ingredients.filter((i) => i.role === role).length > 1) return null;
+  }
+  const bounds = PORTION_BOUNDS_G[newIngredient.role];
+  if (!Number.isFinite(newIngredient.amountG) || newIngredient.amountG < bounds.min || newIngredient.amountG > bounds.max) return null;
+
   if (isOpenEndedIngredientUnsafeFor(newIngredient.name, dietaryCtx) !== null) return null;
   const lookup = await lookupIngredientMacrosCached(newIngredient.name, newIngredient.searchTerm ?? null);
   if (!lookup) return null;
