@@ -74,7 +74,13 @@ export default async function AccountPage() {
   return (
     <>
       <LogoutBar />
-      <div className="mx-auto w-full min-w-0 max-w-lg px-6 py-10">
+      {/* pt-only, not py -- OnboardingWizard's own <main> right below this
+          brings its own py-16 top padding, so a bottom pad here on top of
+          that stacked into a ~104px dead gap before "Step 1 of 2"
+          (live-confirmed 2026-08-13); this section and OnboardingWizard
+          were each built with their own spacing and never designed as
+          directly-adjacent siblings until they were composed here. */}
+      <div className="mx-auto w-full min-w-0 max-w-lg px-6 pt-10">
         <h1 className="font-display text-2xl font-bold">Account</h1>
         <div className="mt-6">
           <AccountIdentity email={user.email} name={user.name} />
