@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -35,11 +35,40 @@ const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string }[] = [
   { value: "very_active", label: "Very active (hard exercise 6-7 days/week)" },
 ];
 
-const GOAL_OPTIONS: { value: Goal; label: string; emoji: string }[] = [
-  { value: "cut", label: "Cut", emoji: "📉" },
-  { value: "bulk", label: "Bulk", emoji: "💪" },
-  { value: "maintain", label: "Maintain", emoji: "⚖️" },
+const GOAL_OPTIONS: { value: Goal; label: string }[] = [
+  { value: "cut", label: "Cut" },
+  { value: "bulk", label: "Bulk" },
+  { value: "maintain", label: "Maintain" },
 ];
+
+// Trend-line glyphs (down/flat/up), not emoji -- matches this app's other
+// monochrome stroke icons (ComposedDishPlaceholder/dishIcon.ts's dish
+// shapes, MealCard's empty-slot icon) instead of introducing a jarring
+// colorful element, and reads as a deliberately designed 3-icon family
+// (same "trend line + arrowhead" shape, differing only by slope) rather
+// than 3 unrelated symbols -- also literally what each goal means for a
+// calorie trend, same visual language as this app's over/under-target
+// reconciliation copy elsewhere.
+const GOAL_ICON_PATHS: Record<Goal, ReactNode> = {
+  cut: (
+    <>
+      <path d="M3 7l6 6 4-4 8 8" />
+      <path d="M21 12v7h-7" />
+    </>
+  ),
+  bulk: (
+    <>
+      <path d="M3 17l6-6 4 4 8-8" />
+      <path d="M14 7h7v7" />
+    </>
+  ),
+  maintain: (
+    <>
+      <path d="M3 12h15" />
+      <path d="M14 7l6 5-6 5" />
+    </>
+  ),
+};
 
 // `satisfies readonly DietaryStyle[]` (audit round 3, finding 12): a new
 // entry added here without a matching dietaryMapping.ts DIETARY_STYLE_MAP
@@ -539,24 +568,27 @@ export function OnboardingWizard({
             <label className="text-sm font-semibold text-muted">
               Activity level
             </label>
-            <select
-              value={activityLevel ?? ""}
-              onChange={(e) =>
-                setActivityLevel(
-                  (e.target.value || null) as ActivityLevel | null,
-                )
-              }
-              className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
-            >
-              <option value="" disabled>
-                Select…
-              </option>
+            {/* Was a native <select> -- the only "choose one of N" control in
+                this form that wasn't a Pill, alongside Biological sex/Goal's
+                Pill grids just below (design review 2026-08-13). A 2-4 col
+                grid like those doesn't fit here though: these labels are
+                full descriptive sentences ("Very active (hard exercise 6-7
+                days/week)"), not single words, so this stays full-width and
+                stacks vertically instead of forcing a horizontal squeeze --
+                same Pill component/active-state language, laid out for what
+                this content actually is. */}
+            <div className="mt-1 flex flex-col gap-2">
               {ACTIVITY_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
+                <Pill
+                  key={o.value}
+                  active={activityLevel === o.value}
+                  onClick={() => setActivityLevel(o.value)}
+                  className="w-full text-left"
+                >
                   {o.label}
-                </option>
+                </Pill>
               ))}
-            </select>
+            </div>
           </div>
 
           <div>
@@ -567,9 +599,12 @@ export function OnboardingWizard({
                   key={o.value}
                   active={goal === o.value}
                   onClick={() => setGoal(o.value)}
-                  className="text-center"
+                  className="flex flex-col items-center gap-1 text-center"
                 >
-                  {o.emoji} {o.label}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    {GOAL_ICON_PATHS[o.value]}
+                  </svg>
+                  {o.label}
                 </Pill>
               ))}
             </div>
