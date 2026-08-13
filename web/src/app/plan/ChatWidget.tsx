@@ -39,7 +39,12 @@ interface ChatMessage {
 // duplicate-role candidate, so it's virtually guaranteed to succeed
 // smoothly regardless of the viewer's own profile -- a bad first
 // impression here (an edge-case rejection) would undersell the feature.
-const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "Add extra black pepper to today's lunch", "What's left in my week?"];
+// "What's left in my week?" (2026-08-13, replaced) was genuinely ambiguous
+// -- left of what: macros, meals, or groceries? Now showcases a distinct
+// real capability instead (intentClassifier's pantry_contents QA topic),
+// diversifying the 3 suggestions to swap / edit / pantry rather than
+// swap / edit / macros.
+const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "Add extra black pepper to today's lunch", "What's in my pantry?"];
 
 // A profile/constraint edit triggers a real plan regeneration
 // (OnboardingWizard.tsx's own GENERATING_STATUS_MESSAGES documents this
