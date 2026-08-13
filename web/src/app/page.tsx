@@ -66,9 +66,8 @@ export default async function Home() {
         </h1>
 
         <p className="mt-4 max-w-md text-lg leading-relaxed text-muted">
-          Tell MacroMap your macro target. It builds a week of matching meals
-          around what&apos;s already in your pantry, then hands you a
-          ready-to-shop grocery list.
+          Set your targets once — MacroMap handles the rest, from what&apos;s
+          already in your kitchen to what you still need to buy.
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -92,15 +91,15 @@ export default async function Home() {
         <div className="mt-16 grid grid-cols-1 gap-7 border-t border-border pt-8 sm:grid-cols-2 lg:grid-cols-4">
           <ValueItem
             label="01 · Targets"
-            text="Every meal matched to your calorie, protein, carb, and fat targets — set once at onboarding."
+            text="Real calorie, protein, carb, and fat targets built from your own numbers — not a generic guess."
           />
           <ValueItem
-            label="02 · Pantry"
-            text="Add what's already in your kitchen, with quantities — meal planning uses it up first, so you're not buying food you already own."
+            label="02 · Diet & allergies"
+            text="Every meal filtered around your diet style and allergies, set once at onboarding."
           />
           <ValueItem
-            label="03 · Grocery"
-            text="Whatever's left after your pantry gets deduped, combined, and grouped by aisle into one ready-to-shop list."
+            label="03 · Pantry & grocery"
+            text="What's already in your kitchen skips your grocery list — the list only has what you're actually missing."
           />
           <ValueItem
             label="04 · Recipes"
