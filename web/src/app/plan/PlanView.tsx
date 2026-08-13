@@ -324,7 +324,20 @@ export function PlanBoard({
         </div>
       )}
 
-      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
+      {/* Severity now has a genuinely distinct visual tier per box, not just
+          "gray box" x5 -- live design review 2026-08-13 flagged that a real
+          failure (error, below) had LESS visual weight than routine notices
+          (bare red text vs. a full bordered box), backwards from what
+          severity should communicate. Error = red (matches ChatWidget's own
+          border-red-600/30 bg-red-600/5 convention for "this is a real
+          problem"); dietary/allergen-adjacent caveats = warn/amber (matches
+          unresolvedDietaryConcerns above); routine status notices = neutral
+          gray, unchanged. */}
+      {error && (
+        <p className="mt-4 rounded-lg border border-red-600/30 bg-red-600/5 px-4 py-3 text-sm font-medium text-red-600">
+          {error}
+        </p>
+      )}
 
       {usingCachedFallback && (
         <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
@@ -333,7 +346,7 @@ export function PlanBoard({
       )}
 
       {unsupportedStyles.length > 0 && (
-        <p className="mt-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-muted">
+        <p className="mt-4 rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
           {/* A single template literal, not JSX text wrapped across lines --
               line-wrapped JSX text immediately after an expression silently
               drops the leading space on compile (see MealCard's addon note
