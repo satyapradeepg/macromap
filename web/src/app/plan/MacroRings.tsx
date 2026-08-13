@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MacroTargets } from "@/lib/mealplan/targets";
 import { weeklyAccuracyTier } from "@/lib/mealplan/reconciliation";
 
@@ -73,6 +73,47 @@ function ring(pct: number, color: string, r = 34) {
   );
 }
 
+// Counts the displayed number up to `value` over the same 900ms/ease-out
+// the ring's own stroke-dashoffset transition uses (see ring() above) --
+// design review 2026-08-13 flagged that the arc filled smoothly while the
+// number beside it just popped in at its final value, unsynced, which read
+// as "correct" rather than "alive." Tweens from whatever's currently
+// displayed (not always 0), so a later change (e.g. a swap) animates from
+// where it visually is, same as the ring's own CSS transition behavior.
+function useCountUp(value: number, durationMs = 900) {
+  const [display, setDisplay] = useState(0);
+  const displayRef = useRef(0);
+
+  useEffect(() => {
+    const prefersReducedMotion =
+      typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const from = displayRef.current;
+    const to = value;
+    if (prefersReducedMotion || from === to) {
+      displayRef.current = to;
+      setDisplay(to);
+      return;
+    }
+    let raf: number;
+    const start = performance.now();
+    function tick(now: number) {
+      const t = Math.min((now - start) / durationMs, 1);
+      // Cubic ease-out, matching the ring's own CSS `ease-out` curve so
+      // the number and the arc read as the same motion, not two unrelated
+      // animations that happen to end around the same time.
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = t < 1 ? from + (to - from) * eased : to;
+      displayRef.current = next;
+      setDisplay(next);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, durationMs]);
+
+  return display;
+}
+
 function MacroRing({ label, unit, actual, target, color }: RingSpec) {
   const pct = target > 0 ? actual / target : 0;
   // Rendered at 0 on mount and flipped to the real value one tick later so
@@ -90,7 +131,13 @@ function MacroRing({ label, unit, actual, target, color }: RingSpec) {
   const over = pct > 1.05;
   const under = pct < 0.95;
   const state = over ? "over" : under ? "under" : "ontarget";
-  const roundedActual = Math.round(actual);
+  // Only the "so far" number counts up -- the target/goal number is static
+  // in Apple's own rings too, it's the progress that should feel like it's
+  // moving. over/under/deltaText below stay derived from the real `actual`,
+  // never the animated display value, so the badge never flickers state
+  // mid-count.
+  const displayedActual = useCountUp(actual);
+  const roundedActual = Math.round(displayedActual);
   const roundedTarget = Math.round(target);
   const deltaAbs = Math.round(Math.abs(actual - target));
   const deltaText = over ? `+${deltaAbs}${unit} over` : under ? `−${deltaAbs}${unit} under` : "on target";
