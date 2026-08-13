@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { getRecipeInstructions, getAiComposedRecipeInstructions } from "./actions";
 import type { PlanSlotView } from "./data";
@@ -36,6 +36,19 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
   // comment); retrying this one recipe shouldn't require regenerating the
   // whole plan.
   const [retryCount, setRetryCount] = useState(0);
+  // Purely local, resets on reopen -- a "did I already add this" checklist
+  // while actually cooking, not a saved preference (nothing here should
+  // survive closing the modal, same lifecycle as the ingredient list itself).
+  const [checkedIngredients, setCheckedIngredients] = useState<Set<number>>(new Set());
+
+  function toggleIngredient(i: number) {
+    setCheckedIngredients((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (slot.recipeId === null && !slot.aiComposed) return;
@@ -109,21 +122,33 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
   // scroll-lock issue above.
   return createPortal(
     <div
-      className="animate-chat-in motion-reduce:animate-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="animate-chat-in motion-reduce:animate-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 sm:p-4"
       onClick={onClose}
     >
+      {/* Fullscreen below sm -- a recipe is a focused, content-heavy task
+          (ingredients + full step list), not a quick glance, so it gets the
+          same treatment as a native app's fullscreen sheet instead of a
+          small card fighting the actual viewport for room (live-confirmed
+          2026-08-13: the old centered-card layout left the hero image
+          eating a third of a 390px-wide screen before the title was even
+          reached). Desktop/tablet keep the original centered-card look. */}
       <div
-        className="flex max-h-[85dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-lift)]"
+        className="flex h-full w-full flex-col overflow-hidden bg-surface sm:h-auto sm:max-h-[85dvh] sm:max-w-lg sm:rounded-2xl sm:shadow-[var(--shadow-lift)]"
         onClick={(e) => e.stopPropagation()}
       >
-        {slot.imageUrl ? (
-          <div className="aspect-16/9 w-full shrink-0 bg-paper-sunken">
-            {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, same as the card thumbnail above */}
-            <img src={slot.imageUrl} alt={slot.recipeTitle} className="h-full w-full object-cover" />
-          </div>
-        ) : (
-          slot.aiComposed && (
-            <div className="aspect-16/9 w-full shrink-0">
+        {/* Close button lives in this shrink-0 (non-scrolling) region so it
+            stays reachable no matter how far the ingredients/instructions
+            below are scrolled -- previously it sat next to the title inside
+            the scrollable area and scrolled out of reach on any recipe with
+            more than a couple of steps. */}
+        <div className="relative shrink-0">
+          {slot.imageUrl ? (
+            <div className="aspect-21/9 w-full bg-paper-sunken sm:aspect-16/9">
+              {/* eslint-disable-next-line @next/next/no-img-element -- external Spoonacular CDN, same as the card thumbnail above */}
+              <img src={slot.imageUrl} alt={slot.recipeTitle} className="h-full w-full object-cover" />
+            </div>
+          ) : slot.aiComposed ? (
+            <div className="aspect-21/9 w-full sm:aspect-16/9">
               <ComposedDishPlaceholder
                 recipeTitle={slot.recipeTitle}
                 proteinG={slot.proteinG}
@@ -131,20 +156,20 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
                 fatG={slot.fatG}
               />
             </div>
-          )
-        )}
+          ) : (
+            <div className="h-12 w-full bg-paper-sunken" />
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute top-3 right-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-base font-semibold text-white backdrop-blur-sm transition-colors hover:bg-black/60"
+          >
+            ✕
+          </button>
+        </div>
         <div className="overflow-y-auto p-4">
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="font-display text-lg font-bold text-foreground">{slot.recipeTitle}</h2>
-            <button
-              type="button"
-              onClick={onClose}
-              className="shrink-0 text-sm font-semibold text-muted"
-              aria-label="Close"
-            >
-              ✕
-            </button>
-          </div>
+          <h2 className="font-display text-lg font-bold text-foreground">{slot.recipeTitle}</h2>
 
           <div className="mt-2 flex flex-wrap gap-1.5">
             <MacroPill>{Math.round(slot.calories)} cal</MacroPill>
@@ -157,11 +182,11 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
           {slot.recipeIngredients && slot.recipeIngredients.length > 0 && (
             <div className="mt-4">
               <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Ingredients</h3>
-              <ul className="mt-2 flex flex-col gap-1 font-mono text-sm text-foreground">
+              <ul className="mt-2 flex flex-col gap-0.5">
                 {slot.recipeIngredients.map((ing, i) => (
-                  <li key={i}>
+                  <IngredientRow key={i} checked={checkedIngredients.has(i)} onToggle={() => toggleIngredient(i)}>
                     {formatIngredientAmount(ing.amount, ing.unit)} {ing.name}
-                  </li>
+                  </IngredientRow>
                 ))}
               </ul>
             </div>
@@ -175,11 +200,11 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
           {slot.aiComposed && slot.composedIngredients && slot.composedIngredients.length > 0 && (
             <div className="mt-4">
               <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Ingredients</h3>
-              <ul className="mt-2 flex flex-col gap-1 font-mono text-sm text-foreground">
+              <ul className="mt-2 flex flex-col gap-0.5">
                 {slot.composedIngredients.map((ing, i) => (
-                  <li key={i}>
+                  <IngredientRow key={i} checked={checkedIngredients.has(i)} onToggle={() => toggleIngredient(i)}>
                     {Math.round(ing.amountG)}g {ing.name}
-                  </li>
+                  </IngredientRow>
                 ))}
               </ul>
             </div>
@@ -211,10 +236,15 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
               </div>
             )}
             {!loading && !loadError && instructions && instructions.steps.length > 0 && (
-              <ol className="mt-2 flex flex-col gap-2 text-sm text-foreground">
+              <ol className="mt-2 flex flex-col text-[15px] leading-relaxed text-foreground">
                 {instructions.steps.map((step, i) => (
-                  <li key={i} className="flex gap-2">
-                    <span className="text-muted">{i + 1}.</span>
+                  <li
+                    key={i}
+                    className={`flex gap-3 py-3 ${i > 0 ? "border-t border-border" : ""}`}
+                  >
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 font-mono text-xs font-bold text-accent">
+                      {i + 1}
+                    </span>
                     <span>{step}</span>
                   </li>
                 ))}
@@ -240,5 +270,26 @@ export function RecipeModal({ slot, mealPlanId, onClose }: { slot: PlanSlotView;
       </div>
     </div>,
     document.body,
+  );
+}
+
+// Tappable/clickable while actually cooking -- crossing an ingredient off as
+// you measure it out is the standard pattern real recipe apps use; a flat
+// unstyled list gave no way to track progress partway through a recipe.
+function IngredientRow({ checked, onToggle, children }: { checked: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <li>
+      <label className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 -mx-1 hover:bg-paper-sunken">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+        />
+        <span className={`font-mono text-sm ${checked ? "text-muted line-through" : "text-foreground"}`}>
+          {children}
+        </span>
+      </label>
+    </li>
   );
 }
