@@ -381,7 +381,18 @@ export function PlanBoard({
           <DayRibbon
             dayLabels={DAY_LABELS}
             selectedDay={selectedDay}
-            onSelect={(dayIndex) => runWithViewTransition(() => setSelectedDay(dayIndex))}
+            onSelect={(dayIndex) => {
+              // Direction feeds globals.css's directional slide on the view
+              // transition below -- read before the transition starts (not
+              // inside it), since by the time the transition callback runs
+              // selectedDay may already be stale for this purpose. Plain
+              // dataset write, not React state: it only matters to CSS
+              // while a transition is actually in flight, and doesn't need
+              // to trigger a render of its own.
+              document.documentElement.dataset.planTransitionDirection =
+                dayIndex > selectedDay ? "forward" : "backward";
+              runWithViewTransition(() => setSelectedDay(dayIndex));
+            }}
             statusFor={(dayIndex) => dayStatus(plan, dayIndex)}
           />
 

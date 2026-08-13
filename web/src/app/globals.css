@@ -188,6 +188,40 @@
   }
 }
 
+/* /plan's day-switch view transition (PlanView.tsx's DayRibbon onSelect,
+   via runWithViewTransition/viewTransition.ts) -- without these rules the
+   View Transitions API still fires, it just uses the browser's plain
+   default crossfade. viewTransition.ts already feature-detects support
+   and skips the whole API under prefers-reduced-motion (falling back to a
+   direct, un-animated state update), so nothing extra is needed here to
+   respect that -- these rules only ever run when a real transition is
+   already in flight. Direction comes from data-plan-transition-direction,
+   set right before the transition starts (see PlanView.tsx's onSelect). */
+@keyframes plan-day-slide-out-forward {
+  to { transform: translateX(-16px); opacity: 0; }
+}
+@keyframes plan-day-slide-in-forward {
+  from { transform: translateX(16px); opacity: 0; }
+}
+@keyframes plan-day-slide-out-backward {
+  to { transform: translateX(16px); opacity: 0; }
+}
+@keyframes plan-day-slide-in-backward {
+  from { transform: translateX(-16px); opacity: 0; }
+}
+:root[data-plan-transition-direction="forward"]::view-transition-old(root) {
+  animation: 220ms ease-out both plan-day-slide-out-forward;
+}
+:root[data-plan-transition-direction="forward"]::view-transition-new(root) {
+  animation: 220ms ease-out both plan-day-slide-in-forward;
+}
+:root[data-plan-transition-direction="backward"]::view-transition-old(root) {
+  animation: 220ms ease-out both plan-day-slide-out-backward;
+}
+:root[data-plan-transition-direction="backward"]::view-transition-new(root) {
+  animation: 220ms ease-out both plan-day-slide-in-backward;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
