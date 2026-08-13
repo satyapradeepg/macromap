@@ -569,6 +569,23 @@ async function tryHandleSimpleIngredientAdd(
   const isPreExisting = (i: MealEditProposal["ingredients"][number]) =>
     i.isPreExisting === true || isPreExistingIngredientName(i.name, currentIngredientNames);
   const newOnes = edit.ingredients.filter((i) => !isPreExisting(i));
+
+  // A genuine no-op -- EVERY returned ingredient is pre-existing, nothing
+  // new at all. Live-confirmed 2026-08-13: this happens when the proposer
+  // itself self-censors a request for a real dietary/allergy reason (e.g.
+  // "add crushed peanuts" against a nut allergy) and correctly returns the
+  // dish unchanged -- its own changeSummary already explains why. Without
+  // this branch, that response fell through to the full recompose path,
+  // which then tried to re-resolve the WHOLE (unchanged) ingredient list
+  // and could fail on some unrelated pre-existing ingredient before ever
+  // reaching its own no-op detection -- surfacing a confusing, unrelated
+  // rejection instead of the correct "didn't add that, here's why" reply.
+  // Nothing to resolve or persist here at all: the dish is provably
+  // identical to what's already saved.
+  if (newOnes.length === 0 && edit.ingredients.length > 0) {
+    return { reply: edit.changeSummary, actionTaken: { kind: "meal_edit_noop", dayIndex, mealType } };
+  }
+
   if (newOnes.length !== 1) return null;
   const restAreAllPreExisting = edit.ingredients.length - 1 === edit.ingredients.filter(isPreExisting).length;
   if (!restAreAllPreExisting) return null;
