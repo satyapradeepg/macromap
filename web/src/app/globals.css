@@ -188,39 +188,16 @@
   }
 }
 
-/* /plan's day-switch view transition (PlanView.tsx's DayRibbon onSelect,
-   via runWithViewTransition/viewTransition.ts) -- without these rules the
-   View Transitions API still fires, it just uses the browser's plain
-   default crossfade. viewTransition.ts already feature-detects support
-   and skips the whole API under prefers-reduced-motion (falling back to a
-   direct, un-animated state update), so nothing extra is needed here to
-   respect that -- these rules only ever run when a real transition is
-   already in flight. Direction comes from data-plan-transition-direction,
-   set right before the transition starts (see PlanView.tsx's onSelect). */
-@keyframes plan-day-slide-out-forward {
-  to { transform: translateX(-16px); opacity: 0; }
-}
-@keyframes plan-day-slide-in-forward {
-  from { transform: translateX(16px); opacity: 0; }
-}
-@keyframes plan-day-slide-out-backward {
-  to { transform: translateX(16px); opacity: 0; }
-}
-@keyframes plan-day-slide-in-backward {
-  from { transform: translateX(-16px); opacity: 0; }
-}
-:root[data-plan-transition-direction="forward"]::view-transition-old(root) {
-  animation: 220ms ease-out both plan-day-slide-out-forward;
-}
-:root[data-plan-transition-direction="forward"]::view-transition-new(root) {
-  animation: 220ms ease-out both plan-day-slide-in-forward;
-}
-:root[data-plan-transition-direction="backward"]::view-transition-old(root) {
-  animation: 220ms ease-out both plan-day-slide-out-backward;
-}
-:root[data-plan-transition-direction="backward"]::view-transition-new(root) {
-  animation: 220ms ease-out both plan-day-slide-in-backward;
-}
+/* Deliberately NOT customizing /plan's day-switch view transition (see
+   PlanView.tsx's onSelect/runWithViewTransition) -- tried a directional
+   slide here (2026-08-13) and hit two separate real bugs live: fading
+   opacity on both old/new while offset produced a double-exposure ghost
+   of two different meal photos, and naming the whole multi-card grid as
+   one transition group made the browser's automatic size interpolation
+   visibly stretch the photos to bridge each day's slightly different
+   card heights. A photo grid whose row heights vary day to day is a bad
+   fit for either fix without much more work than this is worth -- the
+   plain default crossfade (no rules needed here at all) is what's live. */
 
 body {
   background: var(--background);
