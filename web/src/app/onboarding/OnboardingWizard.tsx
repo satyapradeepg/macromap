@@ -309,11 +309,11 @@ export function OnboardingWizard({
         setSaved(true);
         return;
       }
-      setGenerating(false);
       if (genResult.error) {
         // Profile itself did save -- just surface the generation failure
         // and fall back to the manual "Continue" link below, rather than
         // losing the save.
+        setGenerating(false);
         setGenerateError(genResult.error);
         setSaved(true);
         return;
@@ -323,11 +323,22 @@ export function OnboardingWizard({
         // built from the targets just saved -- an auto-redirect to /plan
         // here would look identical to a real regeneration succeeding.
         // Stop and say so instead, same as the genResult.error branch above.
+        setGenerating(false);
         setUsingCachedFallback(true);
         setSaved(true);
         return;
       }
-      router.push("/plan");
+      // Deliberately NOT calling setGenerating(false) here -- this component
+      // sits between generating=true (GeneratingProgress overlay) and the
+      // route actually swapping to /plan, which takes a few seconds
+      // (plan/page.tsx runs three sequential DB queries with no loading.tsx
+      // to cover the gap). Clearing `generating` before router.push resolves
+      // let this component fall through to the step 2/3 form JSX for that
+      // whole window, flashing the account page before /plan finally
+      // appeared (live-confirmed 2026-08-13). Keeping GeneratingProgress
+      // mounted through the transition, same as the "saved" screen's
+      // Continue button below, closes that gap.
+      startContinuing(() => router.push("/plan"));
       return;
     }
 
