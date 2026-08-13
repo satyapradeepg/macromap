@@ -348,23 +348,7 @@ export function ChatWidget({
 
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {historyLoaded && messages.length === 0 && (
-          <div className="space-y-2">
-            <p className="text-sm text-muted">Try one of these, or ask anything about your plan:</p>
-            <div className="flex flex-wrap gap-1.5">
-              {QUICK_SUGGESTIONS.map((suggestion) => (
-                <Pill
-                  key={suggestion}
-                  size="sm"
-                  onClick={() => {
-                    setInput(suggestion);
-                    textareaRef.current?.focus();
-                  }}
-                >
-                  {suggestion}
-                </Pill>
-              ))}
-            </div>
-          </div>
+          <p className="text-sm text-muted">Try one of these, or ask anything about your plan:</p>
         )}
         {messages.map((m, i) => (
           <div
@@ -388,6 +372,30 @@ export function ChatWidget({
         {sending && <TypingIndicator slowRequest={slowRequest} />}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Persistent, not gated on messages.length === 0 -- previously these
+          only ever rendered inside the scrolling message list (see above),
+          so once a conversation had ANY history at all (this account's
+          real, live state -- confirmed 2026-08-13) the suggestions were
+          gone permanently, not just scrolled past. Living just above the
+          input instead means they're reachable on every open, regardless
+          of how long the conversation is. */}
+      {historyLoaded && (
+        <div className="flex flex-wrap gap-1.5 border-t border-border p-2 pb-0">
+          {QUICK_SUGGESTIONS.map((suggestion) => (
+            <Pill
+              key={suggestion}
+              size="sm"
+              onClick={() => {
+                setInput(suggestion);
+                textareaRef.current?.focus();
+              }}
+            >
+              {suggestion}
+            </Pill>
+          ))}
+        </div>
+      )}
 
       <form onSubmit={handleSend} className="flex items-end gap-2 border-t border-border p-2">
         <Textarea
