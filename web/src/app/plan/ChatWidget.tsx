@@ -29,22 +29,29 @@ interface ChatMessage {
 // themselves. Deliberately not auto-sent on click: fills the box so the
 // user can still edit ("swap tomorrow's dinner" -> "swap Friday's
 // dinner") before committing.
-// "I have chicken and rice" (the prior third suggestion) demonstrated the
-// pantry feature but was vague about what it'd do to a first-time user and
-// didn't showcase this app's actual flagship differentiator -- F7 chat
-// meal EDITING (add/remove/adjust a real ingredient), which none of the
-// three previously touched at all. Live-tested 2026-08-10 for reliability
-// before picking this specific wording: a plain seasoning add/increase
-// never conflicts with any dietary style or allergy and is never a
-// duplicate-role candidate, so it's virtually guaranteed to succeed
-// smoothly regardless of the viewer's own profile -- a bad first
-// impression here (an edge-case rejection) would undersell the feature.
+// "I have chicken and rice" (the ORIGINAL third suggestion) got replaced
+// 2026-08-10 with "Add extra black pepper to today's lunch" specifically
+// to showcase F7 chat meal EDITING and because it tested as reliable that
+// day -- a plain seasoning add never conflicts with diet/allergy rules or
+// duplicates a role. But edit_meal_recipe routes through full AI dish
+// recomposition, which re-validates EVERY ingredient in the dish, not just
+// the one being added -- live-confirmed 2026-08-13 this fails whenever
+// today's actual assigned lunch happens to contain an ingredient
+// Spoonacular can't resolve (e.g. "top rump beef"), which is data-
+// dependent on whatever plan is currently generated, not something a
+// one-time test on 2026-08-10 could catch for all future days. Reverted
+// to a pantry-add prompt (deterministic -- just persists a row, never
+// touches an existing dish's ingredients at all), this time with an
+// explicit quantity+unit to fix the original "vague" complaint against
+// "I have chicken and rice". Live-tested 2026-08-13: sent via chat,
+// confirmed both the item name and the amount/unit persisted correctly
+// in the pantry, not just that the assistant replied politely.
 // "What's left in my week?" (2026-08-13, replaced) was genuinely ambiguous
 // -- left of what: macros, meals, or groceries? Now showcases a distinct
 // real capability instead (intentClassifier's pantry_contents QA topic),
-// diversifying the 3 suggestions to swap / edit / pantry rather than
-// swap / edit / macros.
-const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "Add extra black pepper to today's lunch", "What's in my pantry?"];
+// diversifying the 3 suggestions to swap / pantry-add / pantry-QA, all
+// three deterministic and clear of the edit_meal_recipe fragility above.
+const QUICK_SUGGESTIONS = ["Swap tonight's dinner", "I have 2 lbs of chicken breast", "What's in my pantry?"];
 
 // A profile/constraint edit triggers a real plan regeneration
 // (OnboardingWizard.tsx's own GENERATING_STATUS_MESSAGES documents this
