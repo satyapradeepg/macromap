@@ -1,20 +1,12 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/Button";
 import type { MealType } from "@/lib/mealplan/targets";
 import { prepNoteFor } from "@/lib/mealplan/staticIngredientMacros";
 import type { PlanSlotView } from "./data";
 import { pickDishIcon, type DishIconKind } from "./dishIcon";
-
-// Code-split out of the initial /plan bundle, same reasoning as PlanView's
-// ChatWidget -- already only ever mounted behind `showRecipe && slot` below,
-// so unlike ChatWidget this one's dynamic import doesn't even fire until a
-// user actually clicks "Recipe" on some card, not just "shortly after
-// mount." ssr:false since it does createPortal(..., document.body) directly
-// in its render return -- there's no server-side document to portal into.
-const RecipeModal = dynamic(() => import("./RecipeModal").then((m) => m.RecipeModal), { ssr: false });
+import { RecipeModal } from "./RecipeModal";
 
 // Extracted from PlanView.tsx's inline MealCard/ComposedDishPlaceholder/
 // MacroPill (2026-08-10 redesign). All slot-shaping logic (hasRecipeDetail,

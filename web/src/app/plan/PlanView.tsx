@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/Button";
 import { MacroRings } from "./MacroRings";
 import { DayRibbon } from "./DayRibbon";
@@ -27,16 +26,7 @@ import { runWithViewTransition } from "@/lib/viewTransition";
 import { MealCard, MEAL_TYPE_LABELS } from "./MealCard";
 import { GeneratingProgress } from "@/components/ui/GeneratingProgress";
 import { notify } from "@/lib/toast";
-
-// Code-split out of the initial /plan bundle -- live-confirmed 2026-08-13
-// the page's script payload was 567KB across 9 chunks on a fresh load, and
-// ChatWidget (409 lines) ships in full even though it starts collapsed and
-// most visits never open it. ssr:false since it's a floating, client-only
-// widget (no above-the-fold content depends on it) -- the launcher button
-// appears a moment after initial paint instead of being in the very first
-// server-rendered HTML, a standard, accepted tradeoff for widgets like this
-// (Intercom/Crisp load the same way).
-const ChatWidget = dynamic(() => import("./ChatWidget").then((m) => m.ChatWidget), { ssr: false });
+import { ChatWidget } from "./ChatWidget";
 
 // day_index (0-6) was never actually tied to a real Monday-Sunday week --
 // a plan can be generated/regenerated any day, so labeling it with real
