@@ -89,17 +89,21 @@ export default async function Home() {
           </a>
         </div>
 
-        <div className="mt-16 grid gap-7 border-t border-border pt-8 sm:grid-cols-3">
+        <div className="mt-16 grid grid-cols-1 gap-7 border-t border-border pt-8 sm:grid-cols-2 lg:grid-cols-4">
           <ValueItem
             label="01 · Targets"
             text="Every meal matched to your calorie, protein, carb, and fat targets — set once at onboarding."
           />
           <ValueItem
             label="02 · Pantry"
-            text="Log what you've already got — it's used first, and subtracted from the grocery list."
+            text="Add what's already in your kitchen, with quantities — meal planning uses it up first, so you're not buying food you already own."
           />
           <ValueItem
-            label="03 · Recipes"
+            label="03 · Grocery"
+            text="Whatever's left after your pantry gets deduped, combined, and grouped by aisle into one ready-to-shop list."
+          />
+          <ValueItem
+            label="04 · Recipes"
             text="Every meal opens into real ingredients and cooking steps — not just a calorie count."
           />
         </div>
